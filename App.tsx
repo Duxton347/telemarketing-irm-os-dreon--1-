@@ -5,7 +5,7 @@ import Layout from './components/Layout';
 import Login from './views/Login';
 import Dashboard from './views/Dashboard';
 import Queue from './views/Queue';
-import Sales from './views/SalesView';
+import Sales from './views/Sales';
 import Clients from './views/Clients';
 import Admin from './views/Admin';
 import Protocols from './views/Protocols';

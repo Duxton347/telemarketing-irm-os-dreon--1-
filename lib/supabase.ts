@@ -1,16 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 
-const getEnv = (key: string): string => {
-  // @ts-ignore
-  const envValue = (typeof process !== 'undefined' && process.env?.[key]) ||
-    // @ts-ignore
-    (typeof import.meta !== 'undefined' && import.meta.env?.[key]);
-
-  return (envValue || '').trim();
-};
-
-const supabaseUrl = getEnv('VITE_SUPABASE_URL');
-const supabaseAnonKey = getEnv('VITE_SUPABASE_ANON_KEY');
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
 if (!supabaseUrl || !supabaseAnonKey) {
   console.error('CRITICAL ERROR: Supabase environment variables are missing!');

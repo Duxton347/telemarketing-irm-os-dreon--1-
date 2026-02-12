@@ -9,7 +9,7 @@ import {
 import { dataService } from '../services/dataService';
 import { Sale, SaleCategory, SaleChannel, SaleStatus, User as UserType, UserRole } from '../types';
 
-const Sales: React.FC<{ user: UserType }> = ({ user }) => {
+const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
   const [sales, setSales] = React.useState<Sale[]>([]);
   const [operators, setOperators] = React.useState<UserType[]>([]);
   const [clients, setClients] = React.useState<any[]>([]); // Store all clients for search
@@ -593,4 +593,4 @@ const Sales: React.FC<{ user: UserType }> = ({ user }) => {
   );
 };
 
-export default Sales;
+export default SalesView;

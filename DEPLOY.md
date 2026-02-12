@@ -87,5 +87,5 @@ npm run build
 - ✅ O projeto é um **SPA (Single Page Application)**
 - ✅ A pasta `dist` contém TODOS os arquivos necessários
 - ⚠️ **Importante**: Para o deploy funcionar, configure as VARIÁVEIS DE AMBIENTE no painel da Hostinger (veja seção Passo 3 acima).
-- ⚠️ **Supabase**: Você DEVE pegar a `ANON_KEY` correta (começa com `eyJ...`) no painel do Supabase. A chave antiga estava inválida.
+- ⚠️ **Supabase**: Certifique-se de que a `VITE_SUPABASE_ANON_KEY` configurada na Hostinger é EXATAMENTE a mesma do seu painel Supabase.
 - 🔧 **Build Fix**: O arquivo `Sales.tsx` foi renomeado para `SalesView.tsx` para evitar erros de deploy no Linux.
