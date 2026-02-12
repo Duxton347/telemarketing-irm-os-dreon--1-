@@ -35,7 +35,7 @@ export const dataService = {
   saveSale: async (sale: Partial<Sale> & { externalSalesperson?: string }): Promise<void> => {
     const { error } = await supabase.from('sales').insert({
       sale_number: sale.saleNumber,
-      client_id: sale.clientId, // New field
+      client_id: sale.clientId || null, // Convert empty string to null
       client_name: sale.clientName,
       address: sale.address,
       category: sale.category,
@@ -61,13 +61,16 @@ export const dataService = {
   },
 
   checkSaleExists: async (saleNumber: string): Promise<boolean> => {
-    const { data, error } = await supabase.from('sales').select('id').eq('sale_number', saleNumber).maybeSingle();
-    if (error) return false;
-    return !!data;
+    const { count, error } = await supabase.from('sales').select('*', { count: 'exact', head: true }).eq('sale_number', saleNumber);
+    if (error) {
+      console.error("Error checking sale existence:", error);
+      return false; // Fail open (allow saving) if check errors, or true to be safe? False lets them try.
+    }
+    return (count || 0) > 0;
   },
 
   deleteSale: async (saleId: string): Promise<void> => {
-    const { error, count } = await supabase.from('sales').delete().eq('id', saleId).select('', { count: 'exact' });
+    const { error, count } = await supabase.from('sales').delete({ count: 'exact' }).eq('id', saleId);
     if (error) throw error;
     if (count === 0) {
       throw new Error("Nenhuma venda foi excluída. Verifique se o ID está correto ou se você tem permissão (RLS).");
@@ -83,6 +86,7 @@ export const dataService = {
     if (updates.channel) payload.channel = updates.channel;
     if (updates.address) payload.address = updates.address;
     if (updates.operatorId) payload.operator_id = updates.operatorId;
+    if (updates.clientId !== undefined) payload.client_id = updates.clientId || null;
 
     const { error } = await supabase.from('sales').update(payload).eq('id', saleId);
     if (error) throw error;

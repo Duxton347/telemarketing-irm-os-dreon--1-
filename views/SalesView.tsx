@@ -112,8 +112,9 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
                 value: ''
             });
             await loadData();
-        } catch (e) {
-            alert("Erro ao salvar venda no sistema.");
+        } catch (e: any) {
+            console.error("Erro detalhado:", e);
+            alert(`Erro ao salvar venda: ${e.message || JSON.stringify(e)}`);
         } finally {
             setIsProcessing(false);
         }
