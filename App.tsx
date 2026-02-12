@@ -12,6 +12,7 @@ import Protocols from './views/Protocols';
 import Reports from './views/Reports';
 import Calendar from './views/Calendar';
 import RoutesView from './views/Routes';
+// Import updated views
 import { UserRole } from './types';
 
 const App: React.FC = () => {
