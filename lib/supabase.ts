@@ -7,6 +7,9 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.error('CRITICAL ERROR: Supabase environment variables are missing!');
   console.error('Please check your .env file or deployment settings.');
   console.error('Required: VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY');
+} else {
+  console.log('✅ Supabase URL loaded:', supabaseUrl);
+  console.log('✅ Supabase Key loaded (first 10 chars):', supabaseAnonKey.substring(0, 10) + '...');
 }
 
 export const supabase = createClient(
