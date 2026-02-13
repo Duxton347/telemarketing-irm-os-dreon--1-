@@ -13,7 +13,10 @@ import {
   FileBarChart,
   ShoppingBag,
   Calendar,
-  Map
+
+  Map,
+  MessageCircle,
+  Globe
 } from 'lucide-react';
 import { UserRole } from '../types';
 
@@ -35,7 +38,10 @@ const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
     { label: 'Clientes', icon: Users, path: '/clients', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },
     { label: 'Protocolos', icon: ClipboardList, path: '/protocols', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },
     { label: 'Agenda', icon: Calendar, path: '/calendar', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },
+    { label: 'Captação', icon: Globe, path: '/scraper', roles: [UserRole.ADMIN, UserRole.SUPERVISOR, UserRole.OPERATOR] },
+
     { label: 'Roteiros', icon: Map, path: '/routes', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },
+    { label: 'WhatsApp', icon: MessageCircle, path: '/whatsapp', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },
     { label: 'Gestão', icon: Settings, path: '/admin', roles: [UserRole.ADMIN] },
     { label: 'Relatórios', icon: FileBarChart, path: '/reports', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
   ];
@@ -60,8 +66,8 @@ const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
                 key={item.path}
                 to={item.path}
                 className={`flex items-center space-x-3 px-3 py-3 rounded-lg transition-colors ${isActive
-                    ? 'bg-blue-600 text-white'
-                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                  ? 'bg-blue-600 text-white'
+                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
                   }`}
               >
                 <Icon size={20} />

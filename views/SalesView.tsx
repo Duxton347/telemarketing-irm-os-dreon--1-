@@ -86,8 +86,19 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
             }
 
             const saleValue = parseFloat(newSale.value.replace(',', '.'));
+
+            // Auto-link Client if name matches existing record
+            let finalClientId = newSale.clientId;
+            if (!finalClientId) {
+                const foundClient = clients.find(c => c.name.toLowerCase().trim() === newSale.clientName.toLowerCase().trim());
+                if (foundClient) {
+                    finalClientId = foundClient.id;
+                }
+            }
+
             const saleData = {
                 ...newSale,
+                clientId: finalClientId,
                 value: isNaN(saleValue) ? 0 : saleValue,
                 operatorId: editingSaleId ? undefined : user.id // Maintain original operator on edit
             };

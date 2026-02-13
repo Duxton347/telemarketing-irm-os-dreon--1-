@@ -1,0 +1,2 @@
+﻿views/Calendar.tsx(58,10): error TS1472: 'catch' or 'finally' expected.
+views/Calendar.tsx(58,14): error TS1005: ';' expected.

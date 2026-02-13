@@ -19,7 +19,7 @@ export enum CallType {
   PROSPECCAO = 'PROSPECÇÃO',
   VENDA = 'VENDA',
   CONFIRMACAO_PROTOCOLO = 'CONFIRMAÇÃO PROTOCOLO',
-  WHATSAPP = 'WHATSAPP'
+  WHATSAPP = 'WHATSAPP' // Kept for internal logic/channel identification
 }
 
 export enum SaleCategory {
@@ -74,7 +74,13 @@ export enum ProtocolStatus {
 export enum OperatorEventType {
   INICIAR_PROXIMO_ATENDIMENTO = 'INICIAR_PROXIMO_ATENDIMENTO',
   FINALIZAR_ATENDIMENTO = 'FINALIZAR_ATENDIMENTO',
-  PULAR_ATENDIMENTO = 'PULAR_ATENDIMENTO'
+  PULAR_ATENDIMENTO = 'PULAR_ATENDIMENTO',
+  ADMIN_AGENDAR = 'ADMIN_AGENDAR',
+  ADMIN_APROVAR = 'ADMIN_APROVAR',
+  ADMIN_REJEITAR = 'ADMIN_REJEITAR',
+  WHATSAPP_START = 'WHATSAPP_START',
+  WHATSAPP_SKIP = 'WHATSAPP_SKIP',
+  WHATSAPP_COMPLETE = 'WHATSAPP_COMPLETE'
 }
 
 export interface OperatorEvent {
@@ -96,6 +102,70 @@ export interface Client {
   items: string[];
   lastInteraction?: string;
   invalid?: boolean;
+}
+
+export type ScheduleStatus = 'PENDENTE_APROVACAO' | 'APROVADO' | 'REJEITADO' | 'REPROGRAMADO' | 'CONCLUIDO' | 'CANCELADO';
+
+export interface CallSchedule {
+  id: string;
+  customerId?: string; // FK to Client
+  originCallId?: string; // Optional link to original task
+  requestedByOperatorId: string;
+  assignedOperatorId: string;
+  approvedByAdminId?: string;
+  scheduledFor: string; // ISO String
+  callType: CallType;
+  status: ScheduleStatus;
+  scheduleReason?: string;
+  approvalReason?: string;
+  resolutionChannel?: string;
+
+  // New fields for Repique
+  skipReason?: string;
+  whatsappSent?: boolean;
+  whatsappNote?: string;
+  hasRepick?: boolean;
+  rescheduledBy?: string;
+  rescheduledAt?: string;
+  rescheduleReason?: string;
+  deletedBy?: string;
+  deletedAt?: string;
+  deleteReason?: string;
+  queuedAt?: string;
+  completedAt?: string;
+
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AuditLog {
+  id: string;
+  tableName: string;
+  recordId: string;
+  action: string;
+  changes?: any;
+  userId: string;
+  reason?: string;
+  createdAt: string;
+}
+
+export interface ProductivityMetrics {
+  totalCalls: number;
+  totalWhatsApp: number;
+  salesCount: number;
+  conversionRate: number;
+  operatorStats: {
+    id: string;
+    name: string;
+    calls: number;
+    whatsapp: number;
+    sales: number;
+  }[];
+}
+
+export interface CallScheduleWithClient extends CallSchedule {
+  clientName?: string;
+  clientPhone?: string;
 }
 
 export interface Task {
@@ -201,4 +271,27 @@ export interface ExternalSalesperson {
   id: string;
   name: string;
   active: boolean;
+}
+
+export type WhatsAppStatus = 'pending' | 'started' | 'completed' | 'skipped';
+
+export interface WhatsAppTask {
+  id: string;
+  clientId: string;
+  assignedTo?: string; // Operator ID
+  status: WhatsAppStatus;
+  type: CallType;
+  source: 'manual' | 'call_skip_whatsapp';
+  sourceId?: string;
+  skipReason?: string;
+  skipNote?: string;
+  startedAt?: string;
+  completedAt?: string;
+  responses?: Record<string, any>;
+  createdAt: string;
+  updatedAt: string;
+
+  // Joined fields
+  clientName?: string;
+  clientPhone?: string;
 }

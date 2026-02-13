@@ -3,7 +3,8 @@ import { supabase, normalizePhone, getInternalEmail, slugify } from '../lib/supa
 import {
   User, Client, Task, CallRecord, Protocol, Question,
   UserRole, CallType, ProtocolStatus, ProtocolEvent,
-  OperatorEventType, OperatorEvent, Sale, SaleStatus, Visit
+  OperatorEventType, OperatorEvent, Sale, SaleStatus, Visit,
+  CallSchedule, CallScheduleWithClient, ScheduleStatus, WhatsAppTask, ProductivityMetrics
 } from '../types';
 import { SCORE_MAP, STAGE_CONFIG } from '../constants';
 
@@ -11,6 +12,121 @@ const normalize = (str: string) =>
   str ? str.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, "") : "";
 
 export const dataService = {
+  // --- AUDIT LOGS ---
+  logAudit: async (tableName: string, recordId: string, action: string, userId: string, changes?: any, reason?: string) => {
+    // Note: Most auditing is done via DB triggers, but this is for manual/app-level logging if needed
+    const { error } = await supabase.from('audit_logs').insert({
+      table_name: tableName,
+      record_id: recordId,
+      action,
+      user_id: userId,
+      changes,
+      reason
+    });
+    if (error) console.error("Error logging audit:", error);
+  },
+
+  // --- CALL SCHEDULES (Agendamentos) ---
+  createScheduleRequest: async (schedule: Partial<CallSchedule>): Promise<void> => {
+    const { error } = await supabase.from('call_schedules').insert({
+      customer_id: schedule.customerId || null,
+      origin_call_id: schedule.originCallId || null,
+      requested_by_operator_id: schedule.requestedByOperatorId,
+      assigned_operator_id: schedule.assignedOperatorId,
+      scheduled_for: schedule.scheduledFor,
+      call_type: schedule.callType,
+      status: schedule.status || 'PENDENTE_APROVACAO',
+      schedule_reason: schedule.scheduleReason,
+      resolution_channel: schedule.resolutionChannel || 'telefone',
+
+      // New fields
+      skip_reason: schedule.skipReason,
+      whatsapp_sent: schedule.whatsappSent,
+      whatsapp_note: schedule.whatsappNote,
+      has_repick: schedule.hasRepick
+    });
+    if (error) throw error;
+  },
+
+  bulkCreateScheduleRequest: async (schedules: Partial<CallSchedule>[]): Promise<void> => {
+    const { error } = await supabase.from('call_schedules').insert(
+      schedules.map(s => ({
+        customer_id: s.customerId || null,
+        origin_call_id: s.originCallId || null,
+        requested_by_operator_id: s.requestedByOperatorId,
+        assigned_operator_id: s.assignedOperatorId,
+        scheduled_for: s.scheduledFor,
+        call_type: s.callType,
+        status: s.status || 'PENDENTE_APROVACAO',
+        schedule_reason: s.scheduleReason,
+        resolution_channel: s.resolutionChannel || 'telefone',
+        skip_reason: s.skipReason,
+        whatsapp_sent: s.whatsappSent,
+        whatsapp_note: s.whatsappNote,
+        has_repick: s.hasRepick
+      }))
+    );
+    if (error) throw error;
+  },
+
+  getSchedules: async (filters?: { status?: string, assignedTo?: string }): Promise<CallScheduleWithClient[]> => {
+    let query = supabase.from('call_schedules').select('*, clients(name, phone)');
+
+    if (filters?.status) query = query.eq('status', filters.status);
+    if (filters?.assignedTo) query = query.eq('assigned_operator_id', filters.assignedTo);
+
+    const { data, error } = await query.order('scheduled_for', { ascending: true });
+    if (error) throw error;
+
+    return (data || []).map(s => ({
+      id: s.id,
+      customerId: s.customer_id,
+      originCallId: s.origin_call_id,
+      requestedByOperatorId: s.requested_by_operator_id,
+      assignedOperatorId: s.assigned_operator_id,
+      approvedByAdminId: s.approved_by_admin_id,
+      scheduledFor: s.scheduled_for,
+      callType: s.call_type as CallType,
+      status: s.status as ScheduleStatus,
+      scheduleReason: s.schedule_reason,
+      approvalReason: s.approval_reason,
+      resolutionChannel: s.resolution_channel,
+      createdAt: s.created_at,
+      updatedAt: s.updated_at,
+      clientName: s.clients?.name,
+      clientPhone: s.clients?.phone,
+
+      // New fields mapping
+      skipReason: s.skip_reason,
+      whatsappSent: s.whatsapp_sent,
+      whatsappNote: s.whatsapp_note,
+      hasRepick: s.has_repick,
+      rescheduledBy: s.rescheduled_by,
+      rescheduledAt: s.rescheduled_at,
+      rescheduleReason: s.reschedule_reason,
+      deletedBy: s.deleted_by,
+      deletedAt: s.deleted_at,
+      deleteReason: s.delete_reason,
+      queuedAt: s.queued_at,
+      completedAt: s.completed_at
+    }));
+  },
+
+  updateSchedule: async (id: string, updates: Partial<CallSchedule>, userId: string): Promise<void> => {
+    // Explicitly map camelCase to snake_case only for fields we allow updating
+    const payload: any = {};
+    if (updates.status) payload.status = updates.status;
+    if (updates.approvedByAdminId) payload.approved_by_admin_id = updates.approvedByAdminId;
+    if (updates.approvalReason) payload.approval_reason = updates.approvalReason;
+    if (updates.scheduledFor) payload.scheduled_for = updates.scheduledFor;
+    if (updates.assignedOperatorId) payload.assigned_operator_id = updates.assignedOperatorId;
+
+    payload.updated_at = new Date().toISOString();
+
+    const { error } = await supabase.from('call_schedules').update(payload).eq('id', id);
+    if (error) throw error;
+  },
+
   // --- MÓDULO DE VENDAS ---
   getSales: async (): Promise<Sale[]> => {
     const { data, error } = await supabase.from('sales').select('*').order('registered_at', { ascending: false });
@@ -18,7 +134,7 @@ export const dataService = {
     return (data || []).map(s => ({
       id: s.id,
       saleNumber: s.sale_number,
-      clientId: s.client_id,
+      clientId: s.customer_id,
       clientName: s.client_name,
       address: s.address,
       category: s.category,
@@ -35,7 +151,7 @@ export const dataService = {
   saveSale: async (sale: Partial<Sale> & { externalSalesperson?: string }): Promise<void> => {
     const { error } = await supabase.from('sales').insert({
       sale_number: sale.saleNumber,
-      client_id: sale.clientId || null, // Convert empty string to null
+      customer_id: sale.clientId || null, // Convert empty string to null
       client_name: sale.clientName,
       address: sale.address,
       category: sale.category,
@@ -86,7 +202,7 @@ export const dataService = {
     if (updates.channel) payload.channel = updates.channel;
     if (updates.address) payload.address = updates.address;
     if (updates.operatorId) payload.operator_id = updates.operatorId;
-    if (updates.clientId !== undefined) payload.client_id = updates.clientId || null;
+    if (updates.clientId !== undefined) payload.customer_id = updates.clientId || null;
 
     const { error } = await supabase.from('sales').update(payload).eq('id', saleId);
     if (error) throw error;
@@ -110,6 +226,27 @@ export const dataService = {
     const legacyKey = `pv${question.order}`;
     if (responses[legacyKey] !== undefined) return responses[legacyKey];
     return undefined;
+  },
+
+  getSystemSetting: async (key: string): Promise<string> => {
+    const { data, error } = await supabase
+      .from('system_settings')
+      .select('value')
+      .eq('key', key)
+      .maybeSingle();
+
+    if (error) return '';
+    return data?.value || '';
+  },
+
+  updateSystemSetting: async (key: string, value: string, description?: string): Promise<void> => {
+    const { error } = await supabase.from('system_settings').upsert({
+      key,
+      value,
+      description,
+      updated_at: new Date().toISOString()
+    });
+    if (error) throw error;
   },
 
   getUsers: async (): Promise<User[]> => {
@@ -186,19 +323,62 @@ export const dataService = {
     await supabase.from('questions').delete().eq('id', id);
   },
 
-  getTasks: async (): Promise<Task[]> => {
-    const { data, error } = await supabase.from('tasks').select('*').order('created_at', { ascending: true });
-    if (error) throw error;
-    return (data || []).map(t => ({
-      id: t.id,
-      clientId: t.client_id,
-      type: t.type as CallType,
-      deadline: t.created_at,
-      assignedTo: t.assigned_to,
-      status: t.status as any,
-      skipReason: t.skip_reason
+  getTasks: async (operatorId?: string): Promise<Task[]> => {
+    // 1. Fetch Legacy Tasks (standard queue)
+    let tasksQuery = supabase.from('tasks').select('*, clients(*), profiles:assigned_to(*)').in('status', ['pending', 'skipped']);
+    if (operatorId) {
+      tasksQuery = tasksQuery.eq('assigned_to', operatorId);
+    }
+    const { data: tasksData, error: tasksError } = await tasksQuery.order('created_at', { ascending: true });
+    if (tasksError) throw tasksError;
+
+    const legacyTasks: Task[] = (tasksData || [])
+      .filter(t => t.clients) // Filter ghost tasks
+      .map(t => ({
+        id: t.id,
+        clientId: t.client_id,
+        type: t.type as CallType,
+        deadline: t.created_at,
+        assignedTo: t.assigned_to,
+        status: t.status as any,
+        skipReason: t.skip_reason,
+        clientName: t.clients?.name,
+        approvalStatus: t.approval_status as any,
+        scheduledFor: t.scheduled_for,
+        scheduleReason: t.schedule_reason
+      }));
+
+    // 2. Fetch Approved Schedules (where scheduled_for <= NOW)
+    let schedQuery = supabase.from('call_schedules')
+      .select('*, clients(name, phone)')
+      .eq('status', 'APROVADO')
+      .lte('scheduled_for', new Date().toISOString());
+
+    if (operatorId) {
+      schedQuery = schedQuery.eq('assigned_operator_id', operatorId);
+    }
+    const { data: schedData, error: schedError } = await schedQuery.order('scheduled_for', { ascending: true });
+    if (schedError) throw schedError;
+
+    const scheduledTasks: Task[] = (schedData || []).map(s => ({
+      id: s.id,
+      clientId: s.customer_id || '', // Task expects string
+      clientName: s.clients?.name || 'Cliente Agendado',
+      clients: s.clients, // Pass full client object just in case
+      type: s.call_type as CallType,
+      deadline: s.scheduled_for, // Use scheduled time as deadline/display time
+      assignedTo: s.assigned_operator_id,
+      status: 'pending', // Active in queue
+      scheduleReason: s.schedule_reason,
+      // Map fields to preserve context
+      originCallId: s.origin_call_id,
+      approvalStatus: 'APPROVED'
     }));
+
+    // 3. Merge: Prioritize Schedules
+    return [...scheduledTasks, ...legacyTasks];
   },
+
 
   createTask: async (task: Partial<Task>): Promise<void> => {
     await supabase.from('tasks').insert({
@@ -218,13 +398,15 @@ export const dataService = {
     if (updates.scheduledFor) payload.scheduled_for = updates.scheduledFor;
     if (updates.scheduleReason) payload.schedule_reason = updates.scheduleReason;
     if (updates.deadline) payload.deadline = updates.deadline;
-    await supabase.from('tasks').update(payload).eq('id', taskId);
+    const { error } = await supabase.from('tasks').update(payload).eq('id', taskId);
+    if (error) throw error;
   },
 
   deleteTask: async (taskId: string): Promise<void> => {
     const { error } = await supabase.from('tasks').delete().eq('id', taskId);
     if (error) throw error;
   },
+
 
   deleteTasksByOperator: async (operatorId: string): Promise<void> => {
     const { error } = await supabase
@@ -234,6 +416,9 @@ export const dataService = {
       .in('status', ['pending', 'skipped']);
     if (error) throw error;
   },
+
+
+
 
   deleteDuplicateTasks: async (): Promise<number> => {
     const { data: tasks, error } = await supabase
@@ -353,7 +538,9 @@ export const dataService = {
       .or('approval_status.eq.APPROVED,approval_status.is.null')
       .order('created_at', { ascending: true });
     if (error) throw error;
-    return (data || []).map(t => ({ ...t, duration: 0 }));
+    // Filter out tasks where client relationship is missing (Ghost Tasks)
+    const validTasks = (data || []).filter(t => t.clients);
+    return validTasks.map(t => ({ ...t, duration: 0 }));
   },
 
   logOperatorEvent: async (operatorId: string, type: OperatorEventType, taskId?: string, note?: string) => {
@@ -740,5 +927,180 @@ export const dataService = {
   removeExternalSalesperson: async (id: string): Promise<void> => {
     const { error } = await supabase.from('external_salespeople').update({ active: false }).eq('id', id);
     if (error) throw error;
+  },
+
+  // --- WHATSAPP MODULE ---
+  createWhatsAppTask: async (task: Partial<WhatsAppTask>): Promise<void> => {
+    const { error } = await supabase.from('whatsapp_tasks').insert({
+      client_id: task.clientId,
+      assigned_to: task.assignedTo,
+      type: task.type,
+      status: task.status || 'pending',
+      source: task.source || 'manual',
+    });
+    if (error) throw error;
+  },
+
+  getWhatsAppTasks: async (operatorId?: string): Promise<WhatsAppTask[]> => {
+    let query = supabase.from('whatsapp_tasks').select('*, clients(name, phone)');
+    if (operatorId) {
+      query = query.eq('assigned_to', operatorId);
+    }
+    const { data, error } = await query.order('created_at', { ascending: true });
+    if (error) throw error;
+
+    return (data || []).map(t => ({
+      id: t.id,
+      clientId: t.client_id,
+      assignedTo: t.assigned_to,
+      status: t.status,
+      type: t.type,
+      source: t.source,
+      sourceId: t.source_id,
+      skipReason: t.skip_reason,
+      skipNote: t.skip_note,
+      startedAt: t.started_at,
+      completedAt: t.completed_at,
+      responses: t.responses,
+      createdAt: t.created_at,
+      updatedAt: t.updated_at,
+      clientName: t.clients?.name || 'Cliente Desconhecido',
+      clientPhone: t.clients?.phone || ''
+    }));
+  },
+
+  startWhatsAppTask: async (id: string, operatorId: string): Promise<void> => {
+    const { error } = await supabase.from('whatsapp_tasks').update({
+      status: 'started',
+      started_at: new Date().toISOString()
+    }).eq('id', id);
+    if (error) throw error;
+
+    // Log Analytics
+    await dataService.logOperatorEvent(operatorId, OperatorEventType.WHATSAPP_START, id);
+  },
+
+  skipWhatsAppTask: async (id: string, operatorId: string, reason: string, note?: string): Promise<void> => {
+    const { error } = await supabase.from('whatsapp_tasks').update({
+      status: 'skipped',
+      skip_reason: reason,
+      skip_note: note,
+      completed_at: new Date().toISOString() // Considered "done" when skipped
+    }).eq('id', id);
+    if (error) throw error;
+
+    // Log Analytics
+    await dataService.logOperatorEvent(operatorId, OperatorEventType.WHATSAPP_SKIP, id, `${reason} - ${note || ''}`);
+  },
+
+  completeWhatsAppTask: async (id: string, operatorId: string, responses: any): Promise<void> => {
+    const { error } = await supabase.from('whatsapp_tasks').update({
+      status: 'completed',
+      responses: responses,
+      completed_at: new Date().toISOString()
+    }).eq('id', id);
+    if (error) throw error;
+
+    // Log Analytics
+    await dataService.logOperatorEvent(operatorId, OperatorEventType.WHATSAPP_COMPLETE, id);
+  },
+
+  moveCallToWhatsApp: async (taskId: string, operatorId: string): Promise<void> => {
+    // 1. Get original task to copy details
+    const { data: task, error: getError } = await supabase.from('tasks').select('*').eq('id', taskId).single();
+    if (getError) throw getError;
+
+    // 2. Create WhatsApp Task
+    const { error: createError } = await supabase.from('whatsapp_tasks').insert({
+      client_id: task.client_id,
+      assigned_to: operatorId, // Keep operator or reassign? Requirement says "integrated", usually same operator handling
+      status: 'pending',
+      type: task.type,
+      source: 'call_skip_whatsapp',
+      source_id: taskId
+    });
+    if (createError) throw createError;
+
+    // 3. Skip original Task
+    // We use a specific skip reason to indicate it moved to WhatsApp, this helps in Reports to not count as "Lost"
+    const { error: skipError } = await supabase.from('tasks').update({
+      status: 'skipped',
+      skip_reason: 'moved_to_whatsapp'
+    }).eq('id', taskId);
+    if (skipError) throw skipError;
+
+    // Log event
+    await dataService.logOperatorEvent(operatorId, OperatorEventType.PULAR_ATENDIMENTO, taskId, 'Movido para WhatsApp');
+  },
+
+  deleteWhatsAppTask: async (taskId: string): Promise<void> => {
+    const { error } = await supabase.from('whatsapp_tasks').delete().eq('id', taskId);
+    if (error) throw error;
+  },
+
+  deleteWhatsAppTasksByOperator: async (operatorId: string): Promise<void> => {
+    const { error } = await supabase
+      .from('whatsapp_tasks')
+      .delete()
+      .eq('assigned_to', operatorId)
+      .in('status', ['pending', 'started']);
+    if (error) throw error;
+  },
+
+  updateWhatsAppTask: async (taskId: string, updates: any): Promise<void> => {
+    const { error } = await supabase.from('whatsapp_tasks').update(updates).eq('id', taskId);
+    if (error) throw error;
+  },
+
+  getProductivityMetrics: async (startDate: string, endDate: string): Promise<ProductivityMetrics> => {
+    const users = await dataService.getUsers();
+    const operators = users.filter(u => u.role === UserRole.OPERATOR || u.role === UserRole.SUPERVISOR);
+
+    const [events, sales] = await Promise.all([
+      dataService.getOperatorEvents(startDate, endDate),
+      dataService.getSales() // getSales fetches all, might need date filter. update getSales?
+    ]);
+
+    // getSales doesn't support date filter in current implementation, it fetches all.
+    // We should filter client-side or add filter to getSales. 
+    // Given the current implementation of getSales (lines 130-149), it fetches all 1000 rows.
+    // Better to do a direct query for sales here to avoid over-fetching and for correctness.
+
+    const { data: rawSales, error: salesError } = await supabase
+      .from('sales')
+      .select('*')
+      .gte('registered_at', startDate)
+      .lte('registered_at', endDate);
+
+    if (salesError) throw salesError;
+
+    const totalCalls = events.filter(e => e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO).length;
+    const totalWhatsApp = events.filter(e => e.eventType === OperatorEventType.WHATSAPP_COMPLETE).length;
+    const salesCount = rawSales?.length || 0;
+    const conversionRate = totalCalls > 0 ? (salesCount / totalCalls) * 100 : 0;
+
+    const operatorStats = operators.map(op => {
+      const opEvents = events.filter(e => e.operatorId === op.id);
+      const opSales = rawSales?.filter(s => s.operator_id === op.id) || [];
+
+      const opCalls = opEvents.filter(e => e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO).length;
+      const opWhatsapp = opEvents.filter(e => e.eventType === OperatorEventType.WHATSAPP_COMPLETE).length;
+
+      return {
+        id: op.id,
+        name: op.name,
+        calls: opCalls,
+        whatsapp: opWhatsapp,
+        sales: opSales.length
+      };
+    }).sort((a, b) => b.sales - a.sales);
+
+    return {
+      totalCalls,
+      totalWhatsApp,
+      salesCount,
+      conversionRate,
+      operatorStats
+    };
   }
 };

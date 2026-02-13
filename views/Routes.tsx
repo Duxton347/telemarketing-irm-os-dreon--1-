@@ -438,7 +438,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                             <input type="date" className="p-3 bg-slate-50 rounded-xl font-bold text-sm outline-none" value={builderFilters.date} onChange={e => setBuilderFilters({ ...builderFilters, date: e.target.value })} />
                             <select className="p-3 bg-slate-50 rounded-xl font-bold text-sm outline-none" value={builderFilters.type} onChange={e => setBuilderFilters({ ...builderFilters, type: e.target.value })}>
                                 <option value="ALL">Todos Tipos</option>
-                                {Object.values(CallType).map(t => <option key={t} value={t}>{t}</option>)}
+                                {Object.values(CallType).filter(t => t !== CallType.WHATSAPP).map(t => <option key={t} value={t}>{t}</option>)}
                             </select>
                             <button onClick={handleSearchCandidates} className="p-3 bg-blue-600 text-white rounded-xl hover:bg-blue-500 transition-colors"><Search size={20} /></button>
 

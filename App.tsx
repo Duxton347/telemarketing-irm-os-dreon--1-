@@ -12,6 +12,8 @@ import Protocols from './views/Protocols';
 import Reports from './views/Reports';
 import Calendar from './views/Calendar';
 import RoutesView from './views/Routes';
+import WhatsAppDashboard from './views/WhatsAppDashboard';
+import { ScraperView } from './views/Scraper/ScraperView';
 // Import updated views
 import { UserRole } from './types';
 
@@ -51,6 +53,8 @@ const App: React.FC = () => {
           } />
           <Route path="/calendar" element={<Calendar user={user} />} />
           <Route path="/routes" element={<RoutesView user={user} />} />
+          <Route path="/whatsapp" element={<WhatsAppDashboard user={user} />} />
+          <Route path="/scraper" element={<ScraperView user={user} />} />
           <Route path="/reports" element={<Reports user={user} />} />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>

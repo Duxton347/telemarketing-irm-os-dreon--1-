@@ -1,51 +1,53 @@
-import React from 'react';
+
+import React, { useMemo } from 'react';
 import {
     Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, MapPin, Phone, User, CheckCircle2,
-    Plus, X, Save, Trash2, Edit2, Loader2, FileText
+    Plus, X, Save, Trash2, Edit2, Loader2, FileText, AlertCircle, MessageCircle, Filter, Search
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
-import { Task, Visit, User as UserType, CallRecord, Client, Question, CallType, UserRole } from '../types';
+import { Task, Visit, User as UserType, CallRecord, Client, Question, CallType, UserRole, CallScheduleWithClient, OperatorEventType } from '../types';
 import { QuestionnaireForm } from '../components/QuestionnaireForm';
+import { ManualScheduleModal } from '../components/ManualScheduleModal';
 
-const Calendar: React.FC<{ user: UserType }> = ({ user }) => {
+const Calendar: React.FC<{ user: UserType }> = ({ user }: { user: UserType }) => {
     const [date, setDate] = React.useState(new Date());
     const [tasks, setTasks] = React.useState<Task[]>([]);
+    const [schedules, setSchedules] = React.useState<CallScheduleWithClient[]>([]);
     const [visits, setVisits] = React.useState<Visit[]>([]);
     const [calls, setCalls] = React.useState<CallRecord[]>([]);
     const [clients, setClients] = React.useState<Client[]>([]);
     const [questions, setQuestions] = React.useState<Question[]>([]);
+    const [operators, setOperators] = React.useState<UserType[]>([]); // New state for operators
 
     const [isLoading, setIsLoading] = React.useState(true);
     const [isProcessing, setIsProcessing] = React.useState(false);
     const [selectedDate, setSelectedDate] = React.useState<string | null>(new Date().toISOString().split('T')[0]);
+    const [activeTab, setActiveTab] = React.useState<'pending' | 'scheduled' | 'visits'>('pending');
 
-    // Modal State
-    const [isModalOpen, setIsModalOpen] = React.useState(false);
-    const [editingCallId, setEditingCallId] = React.useState<string | null>(null);
-    const [formData, setFormData] = React.useState({
-        clientId: '',
-        date: '',
-        time: '',
-        type: CallType.POS_VENDA,
-        responses: {} as Record<string, any>
-    });
+    // Manual Schedule Modal State
+    const [isManualScheduleModalOpen, setIsManualScheduleModalOpen] = React.useState(false);
 
+    // --- Data Loading ---
     const loadData = React.useCallback(async () => {
         setIsLoading(true);
         try {
-            const [allTasks, allVisits, allCalls, allClients, allQuestions] = await Promise.all([
+            const [allTasks, allSchedules, allVisits, allCalls, allClients, allQuestions, allUsers] = await Promise.all([
                 dataService.getTasks(),
+                dataService.getSchedules(),
                 dataService.getVisits(),
                 dataService.getCalls(),
                 dataService.getClients(),
-                dataService.getQuestions()
+                dataService.getQuestions(),
+                dataService.getUsers() // Fetch users
             ]);
 
-            setTasks(allTasks.filter(t => t.scheduledFor));
+            setTasks(allTasks);
+            setSchedules(allSchedules);
             setVisits(allVisits);
             setCalls(allCalls);
             setClients(allClients);
             setQuestions(allQuestions);
+            setOperators(allUsers.filter(u => u.role === UserRole.OPERATOR || u.role === UserRole.SUPERVISOR)); // Filter operators
         } catch (e) {
             console.error(e);
         } finally {
@@ -55,138 +57,110 @@ const Calendar: React.FC<{ user: UserType }> = ({ user }) => {
 
     React.useEffect(() => { loadData(); }, [loadData]);
 
-    const getDaysInMonth = (year: number, month: number) => {
-        return new Date(year, month + 1, 0).getDate();
-    };
 
+    // --- Derived State ---
+    const daySchedules = useMemo(() => {
+        if (!selectedDate) return [];
+        return schedules.filter(s => s.scheduledFor.startsWith(selectedDate));
+    }, [schedules, selectedDate]);
+
+    const pendingSchedules = useMemo(() => {
+        return schedules.filter(s => s.status === 'PENDENTE_APROVACAO').sort((a, b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime());
+    }, [schedules]);
+
+    const scheduledTasks = useMemo(() => {
+        if (!selectedDate) return [];
+        return tasks.filter(t => t.scheduledFor && t.scheduledFor.startsWith(selectedDate));
+    }, [tasks, selectedDate]);
+
+    const scheduledVisits = useMemo(() => {
+        if (!selectedDate) return [];
+        return visits.filter(v => v.scheduledDate && v.scheduledDate.startsWith(selectedDate));
+    }, [visits, selectedDate]);
+
+
+    // --- Calendar helpers ---
+    const getDaysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate();
     const daysInMonth = getDaysInMonth(date.getFullYear(), date.getMonth());
     const firstDayOfMonth = new Date(date.getFullYear(), date.getMonth(), 1).getDay();
+    const days = Array(firstDayOfMonth).fill(null).concat(Array.from({ length: daysInMonth }, (_, i) => new Date(date.getFullYear(), date.getMonth(), i + 1)));
 
     const prevMonth = () => setDate(new Date(date.getFullYear(), date.getMonth() - 1, 1));
     const nextMonth = () => setDate(new Date(date.getFullYear(), date.getMonth() + 1, 1));
 
-    const days = [];
-    for (let i = 0; i < firstDayOfMonth; i++) {
-        days.push(null);
-    }
-    for (let i = 1; i <= daysInMonth; i++) {
-        days.push(new Date(date.getFullYear(), date.getMonth(), i));
-    }
+    // --- Handlers ---
 
-    const getEventsForDate = (d: Date) => {
-        const dateStr = d.toISOString().split('T')[0];
-        const dayTasks = tasks.filter(t => t.scheduledFor && t.scheduledFor.startsWith(dateStr));
-        const dayVisits = visits.filter(v => v.scheduledDate && v.scheduledDate.startsWith(dateStr));
-        const dayCalls = calls.filter(c => c.startTime && c.startTime.startsWith(dateStr));
-        return { tasks: dayTasks, visits: dayVisits, calls: dayCalls };
+    // Approval Modal
+    const [isApproveModalOpen, setIsApproveModalOpen] = React.useState(false);
+    const [approvingItem, setApprovingItem] = React.useState<CallScheduleWithClient | null>(null);
+    const [approveForm, setApproveForm] = React.useState<{ date: string, time: string, operatorId: string, type: CallType }>({
+        date: '', time: '', operatorId: '', type: CallType.POS_VENDA
+    });
+
+    const openApproveModal = (item: CallScheduleWithClient) => {
+        const d = new Date(item.scheduledFor);
+        setApprovingItem(item);
+        setApproveForm({
+            date: d.toISOString().split('T')[0],
+            time: d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            operatorId: item.assignedOperatorId,
+            type: item.callType // Pre-fill with existing type
+        });
+        setIsApproveModalOpen(true);
     };
 
-    const selectedEvents = selectedDate ? {
-        tasks: tasks.filter(t => t.scheduledFor && t.scheduledFor.startsWith(selectedDate)),
-        visits: visits.filter(v => v.scheduledDate && v.scheduledDate.startsWith(selectedDate)),
-        calls: calls.filter(c => c.startTime && c.startTime.startsWith(selectedDate))
-    } : { tasks: [], visits: [], calls: [] };
-
-    const handleOpenModal = (call?: CallRecord) => {
-        if (call) {
-            setEditingCallId(call.id);
-            const d = new Date(call.startTime);
-            setFormData({
-                clientId: call.clientId,
-                date: d.toISOString().split('T')[0],
-                time: d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                type: call.type,
-                responses: call.responses || {}
-            });
-        } else {
-            setEditingCallId(null);
-            setFormData({
-                clientId: '',
-                date: selectedDate || new Date().toISOString().split('T')[0],
-                time: '09:00',
-                type: CallType.POS_VENDA,
-                responses: {}
-            });
-        }
-        setIsModalOpen(true);
-    };
-
-    const handleSaveCall = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!formData.clientId || !formData.date || !formData.time) return;
-
+    const handleConfirmApprove = async () => {
+        if (!approvingItem || !approveForm.date || !approveForm.time || !approveForm.operatorId) return;
         setIsProcessing(true);
         try {
-            const startTime = `${formData.date}T${formData.time}:00`;
-            const endTime = startTime; // Mock end time
+            const newDateTime = `${approveForm.date}T${approveForm.time}:00`;
+            const operatorName = operators.find(o => o.id === approveForm.operatorId)?.name || 'Operador';
 
-            const callData: Partial<CallRecord> = {
-                clientId: formData.clientId,
-                type: formData.type,
-                startTime: startTime,
-                endTime: endTime,
-                responses: formData.responses,
-                duration: 0,
-                reportTime: 0
-            };
+            // 1. Update Schedule Status to CONCLUIDO
+            await dataService.updateSchedule(approvingItem.id, {
+                status: 'CONCLUIDO',
+                scheduledFor: new Date(newDateTime).toISOString(),
+                assignedOperatorId: approveForm.operatorId,
+                callType: approveForm.type, // Update type if changed
+                approvedByAdminId: user.id,
+                approvalReason: 'Aprovado pelo Gestor'
+            }, user.id);
 
-            if (editingCallId) {
-                await dataService.updateCall(editingCallId, callData);
-            } else {
-                await dataService.saveCall({
-                    ...callData,
-                    operatorId: user.id,
-                    id: '',
-                    taskId: undefined
-                } as CallRecord);
-            }
+            // 2. Create Task in Queue (TARGET: WORK QUEUE)
+            await dataService.createTask({
+                clientId: approvingItem.customerId || '',
+                type: approveForm.type, // Use selected type
+                assignedTo: approveForm.operatorId, // Use selected operator
+                status: 'pending', // This puts it in the queue
+                scheduledFor: new Date(newDateTime).toISOString(),
+                scheduleReason: `Repique Aprovado: ${approvingItem.scheduleReason}`
+            });
+
+            await dataService.logOperatorEvent(user.id, OperatorEventType.ADMIN_APROVAR, undefined, `Aprovou repique para ${approvingItem.clientName} -> ${operatorName} (${approveForm.type})`);
+
             await loadData();
-            setIsModalOpen(false);
-            alert("Registro salvo com sucesso!");
+            setIsApproveModalOpen(false);
+            setApprovingItem(null);
+            alert("Agendamento aprovado e enviado para a fila de trabalho!");
         } catch (e) {
-            alert("Erro ao salvar registro.");
             console.error(e);
+            alert("Erro ao aprovar.");
         } finally {
             setIsProcessing(false);
         }
     };
 
-    // Admin Approval Actions
-    const handleApproveTask = async (taskId: string) => {
-        if (!confirm("Aprovar este agendamento?")) return;
+    const handleReject = async (id: string) => {
+        if (!confirm("Tem certeza que deseja EXCLUIR este agendamento?")) return;
         setIsProcessing(true);
         try {
-            await dataService.updateTask(taskId, { approvalStatus: 'APPROVED' });
-            await loadData();
-            alert("Agendamento aprovado!");
-        } catch (e) { alert("Erro ao aprovar."); }
-        finally { setIsProcessing(false); }
-    };
+            await dataService.updateSchedule(id, {
+                status: 'CANCELADO',
+            }, user.id);
 
-    const handleRejectTask = async (taskId: string) => {
-        const reason = prompt("Motivo da rejeição/resolução:");
-        if (!reason) return;
+            await dataService.logOperatorEvent(user.id, OperatorEventType.ADMIN_REJEITAR, undefined, `Rejeitou agendamento ${id}`);
 
-        setIsProcessing(true);
-        try {
-            await dataService.updateTask(taskId, {
-                status: 'skipped',
-                approvalStatus: 'RESOLVED',
-                skipReason: `Rejeitado pelo ADM: ${reason}`
-            });
             await loadData();
-            alert("Agendamento resolvido/removido.");
-        } catch (e) { alert("Erro ao rejeitar."); }
-        finally { setIsProcessing(false); }
-    };
-
-    const handleDeleteCall = async (id: string) => {
-        if (!confirm("Tem certeza que deseja excluir este registro?")) return;
-        setIsProcessing(true);
-        try {
-            await dataService.deleteCall(id);
-            await loadData();
-            alert("Registro excluído.");
         } catch (e) {
             alert("Erro ao excluir.");
         } finally {
@@ -195,253 +169,325 @@ const Calendar: React.FC<{ user: UserType }> = ({ user }) => {
     };
 
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-in fade-in duration-500 pb-20">
-            {/* PENDING APPROVALS SECTION (ADMIN ONLY) */}
-            {user.role === UserRole.ADMIN && tasks.some(t => t.approvalStatus === 'PENDING') && (
-                <div className="lg:col-span-12 bg-orange-50 rounded-[48px] p-8 border border-orange-200 shadow-sm animate-in slide-in-from-top-10">
-                    <div className="flex items-center gap-4 mb-6">
-                        <div className="bg-orange-600 p-3 rounded-2xl text-white shadow-lg shadow-orange-500/30">
-                            <Clock size={24} />
-                        </div>
-                        <div>
-                            <h2 className="text-xl font-black uppercase tracking-tighter text-orange-900">Aprovações Pendentes</h2>
-                            <p className="text-orange-700 font-bold text-xs uppercase tracking-widest">Agendamentos solicitados por operadores</p>
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {tasks.filter(t => t.approvalStatus === 'PENDING').map(t => {
-                            const client = clients.find(c => c.id === t.clientId);
-                            return (
-                                <div key={t.id} className="bg-white p-6 rounded-[32px] border border-orange-100 shadow-sm relative overflow-hidden group">
-                                    <div className="absolute top-0 left-0 w-1 h-full bg-orange-500"></div>
-                                    <h4 className="font-black text-slate-800 uppercase tracking-tighter">{client?.name || 'Cliente Desconhecido'}</h4>
-                                    <div className="mt-2 space-y-1">
-                                        <p className="text-xs font-bold text-slate-500 flex items-center gap-2">
-                                            <CalendarIcon size={12} /> {new Date(t.scheduledFor!).toLocaleDateString()} às {new Date(t.scheduledFor!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                        </p>
-                                        <p className="text-xs font-bold text-slate-500 flex items-center gap-2">
-                                            <User size={12} /> Solicitado por: {t.assignedTo}
-                                        </p>
-                                        {t.scheduleReason && (
-                                            <p className="text-[10px] font-bold text-orange-600 bg-orange-50 p-2 rounded-lg mt-2 border border-orange-100">
-                                                "{t.scheduleReason}"
-                                            </p>
-                                        )}
-                                    </div>
-                                    <div className="flex gap-2 mt-4 pt-4 border-t border-slate-50">
-                                        <button onClick={() => handleApproveTask(t.id)} className="flex-1 py-3 bg-emerald-500 text-white rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-emerald-600 transition-colors shadow-lg shadow-emerald-500/20 max-w-[100px]">
-                                            Aprovar
-                                        </button>
-                                        <button onClick={() => handleRejectTask(t.id)} className="flex-1 py-3 bg-slate-100 text-slate-500 rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-red-50 hover:text-red-500 transition-all">
-                                            Rejeitar
-                                        </button>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
+        <div className="flex h-screen bg-slate-50 overflow-hidden">
+            {/* Left Sidebar - Calendar */}
+            <div className="w-80 bg-white border-r border-slate-200 flex flex-col">
+                <div className="p-6 border-b border-slate-100">
+                    <h1 className="text-2xl font-black text-slate-800 tracking-tight flex items-center gap-2">
+                        <CalendarIcon className="text-orange-500" /> Agenda
+                    </h1>
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">Gestão de Retornos</p>
                 </div>
-            )}
 
-            <div className="lg:col-span-8 space-y-6">
-                <div className="bg-white rounded-[48px] p-8 shadow-sm border border-slate-100">
-                    <header className="flex items-center justify-between mb-8">
-                        <h2 className="text-2xl font-black uppercase tracking-tighter flex items-center gap-4 text-slate-800">
-                            <CalendarIcon className="text-blue-600" />
+                <div className="p-4">
+                    <div className="flex items-center justify-between mb-4 px-2">
+                        <button onClick={prevMonth} className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-orange-600 transition-colors">
+                            <ChevronLeft size={20} />
+                        </button>
+                        <span className="font-black text-slate-700 uppercase tracking-widest text-sm">
                             {date.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
-                        </h2>
-                        <div className="flex gap-2">
-                            <button onClick={prevMonth} className="p-3 rounded-full hover:bg-slate-100"><ChevronLeft /></button>
-                            <button onClick={nextMonth} className="p-3 rounded-full hover:bg-slate-100"><ChevronRight /></button>
-                        </div>
-                    </header>
-
-                    <div className="grid grid-cols-7 gap-4 mb-4 text-center">
+                        </span>
+                        <button onClick={nextMonth} className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-orange-600 transition-colors">
+                            <ChevronRight size={20} />
+                        </button>
+                    </div>
+                    <div className="grid grid-cols-7 gap-1 mb-2">
                         {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map(d => (
-                            <span key={d} className="font-black text-slate-400 text-[10px] uppercase">{d}</span>
+                            <div key={d} className="h-8 flex items-center justify-center text-[10px] font-black text-slate-300">
+                                {d}
+                            </div>
                         ))}
                     </div>
-
-                    <div className="grid grid-cols-7 gap-4">
+                    <div className="grid grid-cols-7 gap-1">
                         {days.map((d, i) => {
-                            if (!d) return <div key={i} className="aspect-square"></div>;
+                            if (!d) return <div key={i} />;
+                            const dStr = d.toISOString().split('T')[0];
+                            const isSelected = selectedDate === dStr;
+                            const isToday = dStr === new Date().toISOString().split('T')[0];
 
-                            const dateStr = d.toISOString().split('T')[0];
-                            const isSelected = selectedDate === dateStr;
-                            const isToday = dateStr === new Date().toISOString().split('T')[0];
-                            const { tasks, visits, calls } = getEventsForDate(d);
-                            const hasEvents = tasks.length > 0 || visits.length > 0 || calls.length > 0;
+                            const hasPending = schedules.some(s => s.scheduledFor.startsWith(dStr) && s.status === 'PENDENTE_APROVACAO');
+                            const hasTask = tasks.some(t => t.scheduledFor && t.scheduledFor.startsWith(dStr));
 
                             return (
                                 <button
                                     key={i}
-                                    onClick={() => setSelectedDate(dateStr)}
-                                    className={`aspect-square rounded-[24px] flex flex-col items-center justify-center relative transition-all ${isSelected ? 'bg-slate-900 text-white shadow-xl scale-110 z-10' : 'hover:bg-slate-50 text-slate-600'} ${isToday && !isSelected ? 'bg-blue-50 text-blue-600 font-bold' : ''}`}
+                                    onClick={() => setSelectedDate(dStr)}
+                                    className={`
+                                        h-10 rounded-xl flex flex-col items-center justify-center relative transition-all
+                                        ${isSelected ? 'bg-orange-500 text-white shadow-lg shadow-orange-200 scale-105' : 'hover:bg-slate-50 text-slate-600'}
+                                        ${isToday && !isSelected ? 'ring-2 ring-orange-100' : ''}
+                                    `}
                                 >
-                                    <span className="text-sm font-bold">{d.getDate()}</span>
-                                    {hasEvents && (
-                                        <div className="mt-1 flex gap-1 flex-wrap justify-center w-full px-2">
-                                            {tasks.length > 0 && <div className="w-1.5 h-1.5 rounded-full bg-orange-400"></div>}
-                                            {visits.length > 0 && <div className="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>}
-                                            {calls.length > 0 && <div className="w-1.5 h-1.5 rounded-full bg-blue-400"></div>}
-                                        </div>
-                                    )}
+                                    <span className="text-xs font-bold">{d.getDate()}</span>
+                                    <div className="flex gap-0.5 mt-0.5">
+                                        {hasPending && <div className={`w-1 h-1 rounded-full ${isSelected ? 'bg-white' : 'bg-red-500'}`} />}
+                                        {hasTask && <div className={`w-1 h-1 rounded-full ${isSelected ? 'bg-white/50' : 'bg-emerald-500'}`} />}
+                                    </div>
                                 </button>
                             );
                         })}
                     </div>
                 </div>
-            </div>
 
-            <div className="lg:col-span-4 space-y-6">
-                <div className="bg-slate-900 rounded-[48px] p-10 text-white shadow-2xl min-h-[600px] flex flex-col">
-                    <div className="flex justify-between items-start mb-8">
-                        <div>
-                            <h3 className="text-xl font-black uppercase tracking-tighter mb-1">Agenda do Dia</h3>
-                            <p className="text-slate-400 font-bold text-sm">
-                                {selectedDate ? new Date(selectedDate).toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' }) : 'Selecione uma data'}
-                            </p>
+                <div className="mt-auto p-4 bg-slate-50 border-t border-slate-100">
+                    <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
+                            <div className="w-2 h-2 rounded-full bg-red-500" /> Pendentes
                         </div>
-                        <button
-                            onClick={() => handleOpenModal()}
-                            className="w-12 h-12 flex items-center justify-center bg-blue-600 rounded-full hover:bg-blue-500 transition-all shadow-lg active:scale-95"
-                            title="Novo Registro Manual"
-                        >
-                            <Plus size={24} />
-                        </button>
-                    </div>
-
-                    <div className="space-y-4 flex-1 overflow-y-auto custom-scrollbar pr-2">
-                        {selectedEvents.tasks.length === 0 && selectedEvents.visits.length === 0 && selectedEvents.calls.length === 0 && (
-                            <p className="text-center text-slate-500 font-bold text-sm py-10 opacity-50">Nenhum evento agendado.</p>
-                        )}
-
-                        {selectedEvents.visits.map(v => (
-                            <div key={v.id} className="p-4 bg-emerald-600/20 border border-emerald-500/30 rounded-2xl space-y-2">
-                                <div className="flex justify-between items-start">
-                                    <span className="px-2 py-0.5 bg-emerald-500 text-white text-[9px] font-black uppercase rounded">Visita</span>
-                                    <span className="text-[10px] font-bold text-emerald-300 flex items-center gap-1"><Clock size={10} /> {new Date(v.scheduledDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                </div>
-                                <p className="font-bold text-sm">{v.clientName}</p>
-                                <p className="text-[10px] text-emerald-200 flex items-center gap-1"><MapPin size={10} /> {v.address}</p>
-                                <p className="text-[10px] text-emerald-200 flex items-center gap-1"><User size={10} /> {v.salespersonName}</p>
-                            </div>
-                        ))}
-
-                        {selectedEvents.calls.map(c => {
-                            const client = clients.find(cl => cl.id === c.clientId);
-                            return (
-                                <div key={c.id} className="p-4 bg-blue-600/20 border border-blue-500/30 rounded-2xl space-y-2 group relative">
-                                    <div className="flex justify-between items-start">
-                                        <span className="px-2 py-0.5 bg-blue-500 text-white text-[9px] font-black uppercase rounded">{c.type}</span>
-                                        <span className="text-[10px] font-bold text-blue-300 flex items-center gap-1"><Clock size={10} /> {new Date(c.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                    </div>
-                                    <p className="font-bold text-sm">{client?.name || 'Cliente Desconhecido'}</p>
-                                    <div className="flex items-center gap-2 text-[10px] text-blue-200">
-                                        <span className="italic">Registro Manual / Histórico</span>
-                                    </div>
-
-                                    {user.role === UserRole.ADMIN && (
-                                        <div className="absolute top-4 right-4 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                            <button onClick={() => handleOpenModal(c)} className="p-1.5 bg-blue-100 text-blue-600 rounded hover:bg-blue-200"><Edit2 size={12} /></button>
-                                            <button onClick={() => handleDeleteCall(c.id)} className="p-1.5 bg-red-100 text-red-600 rounded hover:bg-red-200"><Trash2 size={12} /></button>
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })}
-
-                        {selectedEvents.tasks.map(t => (
-                            <div key={t.id} className="p-4 bg-orange-500/10 border border-orange-500/30 rounded-2xl space-y-2">
-                                <div className="flex justify-between items-start">
-                                    <span className="px-2 py-0.5 bg-orange-500 text-white text-[9px] font-black uppercase rounded">Retorno Telefone</span>
-                                    <span className="text-[10px] font-bold text-orange-300 flex items-center gap-1"><Clock size={10} /> {new Date(t.scheduledFor!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                                </div>
-                                <p className="font-bold text-sm">Tarefa de {t.type}</p>
-                                {t.scheduleReason && <p className="text-[10px] text-orange-200 italic">"{t.scheduleReason}"</p>}
-                            </div>
-                        ))}
+                        <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
+                            <div className="w-2 h-2 rounded-full bg-emerald-500" /> Agendados
+                        </div>
                     </div>
                 </div>
             </div>
 
-            {isModalOpen && (
-                <div className="fixed inset-0 z-[150] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
-                    <div className="bg-white w-full max-w-2xl rounded-[40px] shadow-2xl overflow-hidden animate-in zoom-in duration-200 flex flex-col max-h-[90vh]">
-                        <div className="bg-slate-900 p-8 text-white flex justify-between items-center shrink-0">
-                            <h3 className="text-xl font-black uppercase tracking-tighter flex items-center gap-3">
-                                <FileText size={24} className="text-blue-400" />
-                                {editingCallId ? 'Editar Registro' : 'Novo Registro Manual'}
-                            </h3>
-                            <button onClick={() => setIsModalOpen(false)}><X size={24} /></button>
-                        </div>
+            {/* Right Content */}
+            <div className="flex-1 flex flex-col overflow-hidden">
+                <div className="h-20 bg-white border-b border-slate-200 flex items-center px-8 justify-between shrink-0">
+                    <div className="flex gap-2 p-1 bg-slate-100 rounded-2xl">
+                        <button
+                            onClick={() => setActiveTab('pending')}
+                            className={`px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'pending'
+                                ? 'bg-white text-orange-600 shadow-sm'
+                                : 'text-slate-400 hover:text-slate-600'
+                                }`}
+                        >
+                            <div className="flex items-center gap-2">
+                                <AlertCircle size={14} />
+                                Pendentes ({pendingSchedules.length})
+                            </div>
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('scheduled')}
+                            className={`px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'scheduled'
+                                ? 'bg-white text-emerald-600 shadow-sm'
+                                : 'text-slate-400 hover:text-slate-600'
+                                }`}
+                        >
+                            <div className="flex items-center gap-2">
+                                <CheckCircle2 size={14} />
+                                Agendados ({selectedDate ? scheduledTasks.length : tasks.length})
+                            </div>
+                        </button>
+                    </div>
 
-                        <form onSubmit={handleSaveCall} className="p-8 overflow-y-auto custom-scrollbar flex-1 space-y-6">
+                    <div className="flex items-center gap-4">
+                        <button
+                            onClick={() => setIsManualScheduleModalOpen(true)}
+                            className="px-4 py-2 bg-orange-600 text-white rounded-xl font-bold text-xs uppercase tracking-wider shadow-lg shadow-orange-600/20 active:scale-95 transition-all flex items-center gap-2 hover:bg-orange-500"
+                        >
+                            <Plus size={16} /> Novo Agendamento
+                        </button>
+                        <div className="text-right">
+                            <h2 className="text-lg font-black text-slate-800 tracking-tight">
+                                {selectedDate ? new Date(selectedDate).toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', weekday: 'long' }) : 'Todos os dias'}
+                            </h2>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="flex-1 overflow-auto p-8">
+                    {activeTab === 'pending' && (
+                        <div className="space-y-4 max-w-4xl mx-auto">
+                            {pendingSchedules.length === 0 ? (
+                                <div className="text-center py-20 opacity-50">
+                                    <CheckCircle2 size={64} className="mx-auto mb-4 text-slate-300" />
+                                    <h3 className="text-xl font-black text-slate-400 uppercase tracking-widest">Tudo limpo!</h3>
+                                    <p className="text-slate-400 font-medium">Nenhum repique pendente de aprovação.</p>
+                                </div>
+                            ) : (
+                                pendingSchedules.map(item => (
+                                    <div key={item.id} className="bg-white rounded-[24px] p-6 shadow-sm border border-slate-100 hover:shadow-md transition-all flex items-start gap-6 group">
+                                        {/* Date Box */}
+                                        <div className="bg-orange-50 rounded-2xl p-4 text-center min-w-[100px] shrink-0">
+                                            <span className="block text-2xl font-black text-orange-600">
+                                                {new Date(item.scheduledFor).getDate()}
+                                            </span>
+                                            <span className="block text-xs font-bold text-orange-400 uppercase tracking-wider">
+                                                {new Date(item.scheduledFor).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '')}
+                                            </span>
+                                            <div className="mt-2 text-[10px] font-bold text-orange-300 bg-orange-100/50 py-1 px-2 rounded-lg inline-block">
+                                                {new Date(item.scheduledFor).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            </div>
+                                        </div>
+
+                                        {/* Details */}
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-start justify-between mb-2">
+                                                <div>
+                                                    <h3 className="text-lg font-black text-slate-800 truncate">{item.clientName || 'Cliente Desconhecido'}</h3>
+                                                    <div className="flex items-center gap-2 text-xs font-bold text-slate-400 mt-1">
+                                                        <Phone size={12} /> {item.clientPhone || 'Sem telefone'}
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    {item.whatsappSent && (
+                                                        <div className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest flex items-center gap-1">
+                                                            <MessageCircle size={12} fill="currentColor" /> WhatsApp
+                                                        </div>
+                                                    )}
+                                                    <div className="bg-slate-100 text-slate-500 px-2 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest">
+                                                        {item.callType}
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div className="bg-slate-50 rounded-xl p-4 mb-4">
+                                                <p className="text-sm font-medium text-slate-600 leading-relaxed">
+                                                    <span className="text-slate-400 text-xs font-bold uppercase tracking-wider block mb-1">Motivo do Pulo/Repique:</span>
+                                                    {item.skipReason || item.scheduleReason || "Sem motivo especificado"}
+                                                </p>
+                                                {item.whatsappNote && (
+                                                    <div className="mt-2 pt-2 border-t border-slate-200">
+                                                        <span className="text-emerald-500 text-xs font-bold uppercase tracking-wider block mb-1">Nota WhatsApp:</span>
+                                                        <span className="text-slate-600 text-sm">{item.whatsappNote}</span>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            <div className="flex items-center justify-between">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-xs uppercase">
+                                                        {user.username?.substring(0, 2) || 'OP'}
+                                                    </div>
+                                                    <span className="text-xs font-bold text-slate-400">Solicitado por {item.requestedByOperatorId.substring(0, 8)}...</span>
+                                                </div>
+
+                                                <div className="flex gap-2">
+                                                    <button
+                                                        onClick={() => handleReject(item.id)}
+                                                        className="px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider text-red-500 hover:bg-red-50 transition-colors"
+                                                    >
+                                                        Excluir
+                                                    </button>
+                                                    <button
+                                                        onClick={() => openApproveModal(item)}
+                                                        className="px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-slate-900 text-white hover:bg-orange-600 hover:shadow-lg hover:-translate-y-0.5 transition-all shadow-md"
+                                                    >
+                                                        Review & Aprovar
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    )}
+
+                    {activeTab === 'scheduled' && (
+                        <div className="space-y-4 max-w-4xl mx-auto">
+                            {scheduledTasks.length === 0 ? (
+                                <div className="text-center py-20 opacity-50">
+                                    <Clock size={64} className="mx-auto mb-4 text-slate-300" />
+                                    <p className="text-slate-400 font-medium">Nenhum agendamento para este dia.</p>
+                                </div>
+                            ) : (
+                                scheduledTasks.map(task => (
+                                    <div key={task.id} className="bg-white rounded-[24px] p-6 shadow-sm border border-slate-100 flex items-center justify-between">
+                                        <div>
+                                            <span className="text-[10px] font-bold uppercase text-emerald-500 tracking-widest mb-1 block">
+                                                {new Date(task.scheduledFor!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            </span>
+                                            <h3 className="text-lg font-black text-slate-800">{task.clientId}</h3>
+                                            <div className="flex gap-2 mt-1">
+                                                <span className="text-xs font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-lg">{task.type}</span>
+                                                <span className="text-xs font-bold text-slate-400 bg-indigo-50 text-indigo-500 px-2 py-0.5 rounded-lg">
+                                                    {operators.find(u => u.id === task.assignedTo)?.name || 'Operador'}
+                                                </span>
+                                            </div>
+                                            <p className="text-sm text-slate-500 mt-2">{task.scheduleReason}</p>
+                                        </div>
+                                        <div className="px-4 py-2 bg-emerald-50 text-emerald-600 rounded-xl text-xs font-bold uppercase tracking-widest">
+                                            Na Fila
+                                        </div>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Manual Schedule Modal */}
+            {isManualScheduleModalOpen && (
+                <ManualScheduleModal
+                    onClose={() => setIsManualScheduleModalOpen(false)}
+                    onSuccess={loadData}
+                    user={user}
+                />
+            )}
+
+            {/* Approval Modal */}
+            {isApproveModalOpen && approvingItem && (
+                <div className="fixed inset-0 z-[200] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-in zoom-in duration-200">
+                        <h3 className="text-2xl font-black text-slate-800 text-center mb-6 uppercase tracking-tight">Confirmar e Enviar para Fila</h3>
+
+                        <div className="space-y-4 mb-8">
                             <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">Cliente</label>
-                                    <select
-                                        required
-                                        value={formData.clientId}
-                                        onChange={e => setFormData({ ...formData, clientId: e.target.value })}
-                                        className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:ring-2 focus:ring-blue-500/20"
-                                    >
-                                        <option value="">Selecione...</option>
-                                        {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                    </select>
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">Tipo</label>
-                                    <select
-                                        required
-                                        value={formData.type}
-                                        onChange={e => setFormData({ ...formData, type: e.target.value as any })}
-                                        className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:ring-2 focus:ring-blue-500/20"
-                                    >
-                                        {Object.values(CallType).map(t => <option key={t} value={t}>{t}</option>)}
-                                    </select>
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">Data</label>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Data</label>
                                     <input
                                         type="date"
-                                        required
-                                        value={formData.date}
-                                        onChange={e => setFormData({ ...formData, date: e.target.value })}
-                                        className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:ring-2 focus:ring-blue-500/20"
+                                        value={approveForm.date}
+                                        onChange={e => setApproveForm({ ...approveForm, date: e.target.value })}
+                                        className="w-full h-12 rounded-xl border-2 border-slate-100 px-4 font-bold text-slate-700 focus:border-orange-500 outline-none transition-colors"
                                     />
                                 </div>
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">Horário</label>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Horário</label>
                                     <input
                                         type="time"
-                                        required
-                                        value={formData.time}
-                                        onChange={e => setFormData({ ...formData, time: e.target.value })}
-                                        className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:ring-2 focus:ring-blue-500/20"
+                                        value={approveForm.time}
+                                        onChange={e => setApproveForm({ ...approveForm, time: e.target.value })}
+                                        className="w-full h-12 rounded-xl border-2 border-slate-100 px-4 font-bold text-slate-700 focus:border-orange-500 outline-none transition-colors"
                                     />
                                 </div>
                             </div>
 
-                            <div className="pt-4 border-t border-slate-100">
-                                <QuestionnaireForm
-                                    questions={questions}
-                                    responses={formData.responses}
-                                    onResponseChange={(qId, val) => setFormData(prev => ({ ...prev, responses: { ...prev.responses, [qId]: val } }))}
-                                    type={formData.type}
-                                />
+                            <div>
+                                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Tipo de Chamada</label>
+                                <select
+                                    value={approveForm.type}
+                                    onChange={e => setApproveForm({ ...approveForm, type: e.target.value as CallType })}
+                                    className="w-full h-12 rounded-xl border-2 border-slate-100 px-4 font-bold text-slate-700 focus:border-orange-500 outline-none transition-colors appearance-none bg-white"
+                                >
+                                    {Object.values(CallType).filter(t => t !== CallType.WHATSAPP).map(t => (
+                                        <option key={t} value={t}>{t}</option>
+                                    ))}
+                                </select>
                             </div>
 
+                            <div>
+                                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Atribuir para Operador</label>
+                                <select
+                                    value={approveForm.operatorId}
+                                    onChange={e => setApproveForm({ ...approveForm, operatorId: e.target.value })}
+                                    className="w-full h-12 rounded-xl border-2 border-slate-100 px-4 font-bold text-slate-700 focus:border-orange-500 outline-none transition-colors appearance-none bg-white"
+                                >
+                                    {operators.map(op => (
+                                        <option key={op.id} value={op.id}>{op.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="flex gap-4">
                             <button
-                                type="submit"
-                                disabled={isProcessing}
-                                className="w-full py-5 bg-blue-600 text-white rounded-[28px] font-black uppercase tracking-widest text-[11px] shadow-lg flex items-center justify-center gap-3 active:scale-95 transition-all disabled:opacity-50"
+                                onClick={() => setIsApproveModalOpen(false)}
+                                className="flex-1 py-4 rounded-xl font-bold text-slate-400 hover:bg-slate-50 uppercase text-xs tracking-widest transition-colors"
                             >
-                                {isProcessing ? <Loader2 className="animate-spin" /> : <Save size={18} />}
-                                {editingCallId ? 'Salvar Alterações' : 'Salvar Registro'}
+                                Cancelar
                             </button>
-                        </form>
+                            <button
+                                onClick={handleConfirmApprove}
+                                disabled={isProcessing}
+                                className="flex-1 py-4 rounded-xl font-black text-white bg-orange-600 hover:bg-orange-500 shadow-lg shadow-orange-200 uppercase text-xs tracking-widest transition-all active:scale-95 disabled:opacity-50"
+                            >
+                                {isProcessing ? 'Confirmando...' : 'Aprovar e Agendar'}
+                            </button>
+                        </div>
                     </div>
                 </div>
             )}
