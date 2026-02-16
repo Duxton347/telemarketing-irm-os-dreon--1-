@@ -312,10 +312,12 @@ const Admin: React.FC = () => {
         const nameIdx = headers.findIndex(h => ['nome', 'cliente', 'name', 'razao'].some(t => h.includes(t)));
         const phoneIdx = headers.findIndex(h => ['telefone', 'celular', 'phone', 'contato', 'tel'].some(t => h.includes(t)));
         const equipIdx = headers.findIndex(h => ['equipamento', 'item', 'equipment', 'modelo', 'produto'].some(t => h.includes(t)));
+        const offerIdx = headers.findIndex(h => ['oferta', 'offer', 'promocao'].some(t => h.includes(t)));
 
         const finalNameIdx = nameIdx !== -1 ? nameIdx : 0;
         const finalPhoneIdx = phoneIdx !== -1 ? phoneIdx : 1;
         const finalEquipIdx = equipIdx !== -1 ? equipIdx : 2;
+        const finalOfferIdx = offerIdx !== -1 ? offerIdx : -1;
 
         const rows = lines.slice(1).map(line => {
           let values: string[] = [];
@@ -330,7 +332,8 @@ const Admin: React.FC = () => {
             name: values[finalNameIdx] || '',
             phone: values[finalPhoneIdx] || '',
             address: values[3] || '',
-            equipment: values[finalEquipIdx] || ''
+            equipment: values[finalEquipIdx] || '',
+            offer: finalOfferIdx !== -1 ? values[finalOfferIdx] : ''
           };
         }).filter(r => r.name && r.phone);
 
@@ -379,7 +382,8 @@ const Admin: React.FC = () => {
           name: row.name,
           phone: row.phone,
           address: row.address,
-          items: row.equipment ? [row.equipment] : []
+          items: row.equipment ? [row.equipment] : [],
+          offers: row.offer ? [row.offer] : []
         });
 
         // Check duplicate
@@ -796,6 +800,7 @@ const Admin: React.FC = () => {
                       <tr>
                         <th className="pb-3 text-slate-400 uppercase tracking-widest">Cliente</th>
                         <th className="pb-3 text-slate-400 uppercase tracking-widest">Equipamento</th>
+                        <th className="pb-3 text-slate-400 uppercase tracking-widest">Oferta</th>
                         <th className="pb-3 text-slate-400 uppercase tracking-widest text-right">Telefone</th>
                       </tr>
                     </thead>

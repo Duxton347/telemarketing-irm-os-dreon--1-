@@ -1,0 +1,279 @@
+{
+  "calculator": {
+    "name": "AstralPool Top+ Full Inverter - Dimensionamento",
+    "inputs": {
+      "manualTotalsEnabled": { "cell": "INICIO!O15", "type": "boolean", "default": false },
+
+      "length_m": { "cell": "INICIO!J15", "type": "number" },
+      "width_m": { "cell": "INICIO!J16", "type": "number" },
+      "minDepth_m": { "cell": "INICIO!J17", "type": "number" },
+      "maxDepth_m": { "cell": "INICIO!J18", "type": "number" },
+
+      "manualArea_m2": { "cell": "INICIO!R15", "type": "number" },
+      "manualVolume_m3": { "cell": "INICIO!R16", "type": "number" },
+
+      "poolType": {
+        "cell": "INICIO!J19",
+        "type": "enum",
+        "optionsFrom": "TABELAS!D4:D5",
+        "examples": ["PRIVATIVA", "COLETIVA"]
+      },
+
+      "targetWaterTemp_c": { "cell": "INICIO!J21", "type": "number", "min": 20, "max": 40 },
+
+      "utilizationPrimary": {
+        "cell": "INICIO!J22",
+        "type": "enum",
+        "optionsFrom": "TABELAS!A4:A5",
+        "examples": ["ANO TODO", "FORA INVERNO"]
+      },
+      "utilizationSecondary": {
+        "cell": "INICIO!J23",
+        "type": "enum",
+        "optionsFrom": "TABELAS!A8:A9",
+        "examples": ["MES TODO", "SOMENTE FIM DE SEMANA"]
+      },
+
+      "constructionType": {
+        "cell": "INICIO!J24",
+        "type": "enum",
+        "optionsFrom": "TABELAS!A12:A13",
+        "examples": ["ABERTA", "COBERTA E FECHADA"]
+      },
+
+      "hasThermalCover": {
+        "cell": "INICIO!J25",
+        "type": "enum",
+        "optionsFrom": "TABELAS!G30:G31",
+        "examples": ["SIM", "NAO"]
+      },
+
+      "windSpeed": {
+        "cell": "INICIO!J26",
+        "type": "enum",
+        "optionsFrom": "TABELAS!A26:A29",
+        "examples": ["FORTE", "FRACO", "MODERADO", "NULO"]
+      },
+
+      "ambientTemp_c": { "cell": "INICIO!J27", "type": "number" },
+
+      "hydroJets_qty": { "cell": "INICIO!J28", "type": "number" },
+      "waterfall_width_cm": { "cell": "INICIO!J29", "type": "number" },
+      "infinityEdge_length_m": { "cell": "INICIO!J30", "type": "number" },
+
+      "equipmentCodeAdjustment": {
+        "cell": "INICIO!M39",
+        "type": "number",
+        "note": "Se =0, não ajusta. Se !=0, soma ao código base retornado pelo lookup."
+      },
+
+      "energyPrice_R_per_kWh": { "cell": "INICIO!R35", "type": "number" },
+      "glpPrice_R_per_kg": { "cell": "INICIO!R36", "type": "number" },
+      "gnPrice_R_per_m3": { "cell": "INICIO!R37", "type": "number" }
+    },
+
+    "lookupTables": {
+      "factor_targetTemp": {
+        "source": "TABELAS!G4:H25",
+        "lookup": "approx",
+        "key": "targetWaterTemp_c",
+        "value": "factor"
+      },
+      "factor_utilizationPrimary": {
+        "source": "TABELAS!A4:B5",
+        "lookup": "exact",
+        "key": "utilizationPrimary",
+        "value": "factor"
+      },
+      "factor_utilizationSecondary": {
+        "source": "TABELAS!A8:B9",
+        "lookup": "exact",
+        "key": "utilizationSecondary",
+        "value": "factor"
+      },
+      "factor_constructionType": {
+        "source": "TABELAS!A12:B13",
+        "lookup": "exact",
+        "key": "constructionType",
+        "value": "factor"
+      },
+      "factor_windSpeed": {
+        "source": "TABELAS!A26:B29",
+        "lookup": "exact",
+        "key": "windSpeed",
+        "value": "factor"
+      },
+      "factor_ambientTemp": {
+        "source": "TABELAS!J4:K40",
+        "lookup": "approx",
+        "key": "ambientTemp_c",
+        "value": "factor"
+      },
+      "factor_poolType": {
+        "source": "TABELAS!D4:E5",
+        "lookup": "exact",
+        "key": "poolType",
+        "value": "factor"
+      },
+      "factor_thermalCover": {
+        "source": "TABELAS!G30:H31",
+        "lookup": "exact",
+        "key": "hasThermalCover",
+        "value": "factor"
+      },
+      "factor_volumeCorrection": {
+        "source": "TABELAS!M4:O24",
+        "lookup": "approx",
+        "key": "volume_m3",
+        "value": "corr"
+      },
+
+      "equipmentSizingRanges": {
+        "source": "DADOS_EQUIP!B6:D36",
+        "lookup": "approx_by_minRange",
+        "key": "requiredHeat_kcal_h",
+        "returns": "equipmentCodeBase",
+        "note": "É o VLOOKUP aproximado na coluna de mínimo (B)."
+      }
+    },
+
+    "coreCalcs": {
+      "area_m2": {
+        "excel": "CALCULOS!B2",
+        "formula": "manualTotalsEnabled ? manualArea_m2 : (length_m * width_m)"
+      },
+      "avgDepth_m": {
+        "excel": "CALCULOS!B3",
+        "formula": "manualTotalsEnabled ? (volume_m3 / area_m2) : ((minDepth_m + maxDepth_m) / 2)"
+      },
+      "volume_m3": {
+        "excel": "CALCULOS!B4",
+        "formula": "manualTotalsEnabled ? manualVolume_m3 : (area_m2 * avgDepth_m)"
+      },
+
+      "requiredHeat_kcal_h": {
+        "excel": "CALCULOS!D7",
+        "formula": "volume_m3 * 249.4 * f_targetTemp * f_util1 * f_util2 * f_construction * f_wind * f_ambient * f_poolType * f_cover * 1.2 / f_volumeCorr + (hydroJets_qty*150) + (waterfall_width_cm*50) + (infinityEdge_length_m*1000)",
+        "where": {
+          "f_targetTemp": "VLOOKUP(targetWaterTemp_c, TABELAS!G4:H25, 2, TRUE)",
+          "f_util1": "VLOOKUP(utilizationPrimary, TABELAS!A4:B5, 2, FALSE)",
+          "f_util2": "VLOOKUP(utilizationSecondary, TABELAS!A8:B9, 2, FALSE)",
+          "f_construction": "VLOOKUP(constructionType, TABELAS!A12:B13, 2, FALSE)",
+          "f_wind": "VLOOKUP(windSpeed, TABELAS!A26:B29, 2, FALSE)",
+          "f_ambient": "VLOOKUP(ambientTemp_c, TABELAS!J4:K40, 2, TRUE)",
+          "f_poolType": "VLOOKUP(poolType, TABELAS!D4:E5, 2, FALSE)",
+          "f_cover": "VLOOKUP(hasThermalCover, TABELAS!G30:H31, 2, FALSE)",
+          "f_volumeCorr": "VLOOKUP(volume_m3, TABELAS!M4:O24, 3, TRUE)"
+        }
+      },
+
+      "requiredHeat_btu_h": {
+        "excel": "CALCULOS!D8",
+        "formula": "requiredHeat_kcal_h * 3.9683"
+      },
+      "requiredHeat_kW": {
+        "excel": "CALCULOS!D9",
+        "formula": "requiredHeat_kcal_h / 0.8598 / 1000"
+      }
+    },
+
+    "equipmentSelection": {
+      "equipmentCodeBase": {
+        "excel": "DADOS_EQUIP!VLOOKUP(INICIO!H35, DADOS_EQUIP!B6:D36, 3, TRUE)",
+        "formula": "VLOOKUP(requiredHeat_kcal_h, equipmentSizingRanges, returns=equipmentCodeBase, approximate=true)"
+      },
+      "equipmentCodeFinal": {
+        "excel": "DADOS_EQUIP!B37",
+        "formula": "equipmentCodeAdjustment == 0 ? equipmentCodeBase : (equipmentCodeBase + equipmentCodeAdjustment)"
+      },
+      "equipmentName": {
+        "excel": "INICIO!F39",
+        "formula": "VLOOKUP(equipmentCodeFinal, DADOS_EQUIP!D6:E36, 2, FALSE)"
+      },
+      "equipmentCapacity_kcal_h": {
+        "excel": "INICIO!G41",
+        "formula": "VLOOKUP(equipmentCodeFinal, DADOS_EQUIP!D6:H36, 3, FALSE)"
+      },
+      "equipmentPowerAvg_kW": {
+        "excel": "INICIO!G47",
+        "formula": "VLOOKUP(equipmentCodeFinal, DADOS_EQUIP!L6:O36, 4, FALSE) / 1000"
+      },
+      "equipmentCOP_avg": {
+        "excel": "INICIO!G49",
+        "formula": "(equipmentCapacity_kcal_h / 0.8598 / 1000) / equipmentPowerAvg_kW"
+      },
+      "hoursToRaise1C": {
+        "excel": "INICIO!G44",
+        "formula": "(requiredHeat_kcal_h / equipmentCapacity_kcal_h) * 4",
+        "note": "O '*4' é fixo na planilha."
+      },
+      "hoursToRaiseFromAmbientToTarget": {
+        "excel": "INICIO!G45",
+        "formula": "(targetWaterTemp_c - ambientTemp_c) * hoursToRaise1C"
+      }
+    },
+
+    "monthlyMaintenanceConsumption": {
+      "lossTable": {
+        "source": "TABELAS!AI4:AI15",
+        "meaning": "perda de temperatura (°C/dia) por mês"
+      },
+      "kWhPerMonth_TopFullInverter": {
+        "excel": "INICIO!Q55:Q66",
+        "formulaByMonth": "daysInMonth * loss_degC_per_day * equipmentPowerAvg_kW * hoursToRaise1C",
+        "utilizationRule": "if utilizationPrimary != 'ANO TODO' then divide result by 3"
+      },
+      "costPerMonth_R$": {
+        "excel": "INICIO!R55:R66",
+        "formula": "kWhPerMonth * energyPrice_R_per_kWh"
+      },
+      "averageMonth": {
+        "excel": "INICIO!Q67",
+        "formula": "if utilizationPrimary == 'ANO TODO' then avg(12 months) else avg(only non-winter months used in sheet)"
+      }
+    },
+
+    "comparisonOtherHeaters": {
+      "table": "TABELAS!Q3:AB14",
+      "costPer10000kcal": {
+        "gasGN": "=(10000/gn_poderCalorifico_kcal)*(gn_custoUnitario/gn_eficiencia)",
+        "glp": "=(10000/glp_poderCalorifico_kcal)*(glp_custoUnitario/glp_eficiencia)",
+        "diesel": "=(10000/diesel_poderCalorifico_kcal)*(diesel_custoUnitario/diesel_eficiencia)",
+        "pellet": "=(10000/pellet_poderCalorifico_kcal)*(pellet_custoUnitario/pellet_eficiencia)",
+        "electric": "=(10000/elec_kcalPorkW)*(elec_custoUnitario/elec_eficiencia)",
+        "topFullInverter": "10000/(kcalPorkW * COP_avg) * energiaPrice_R_per_kWh"
+      },
+      "relativeCostIndex": {
+        "excel": "TABELAS!R12:T14",
+        "meaning": "Custo relativo comparado ao TOP+ Full Inverter (normaliza pelo custo/10000kcal do TOP)."
+      }
+    },
+
+    "equipmentCatalog": {
+      "items": [
+        {
+          "code": 1,
+          "name": "TOP+7 FULL INVERTER",
+          "capacity_kcal_h": 6190.56,
+          "power_w_avg": 840.0,
+          "power_w_max": 1200.0
+        },
+        {
+          "code": 2,
+          "name": "TOP+9 FULL INVERTER",
+          "capacity_kcal_h": 8082.12,
+          "power_w_avg": 1120.0,
+          "power_w_max": 1600.0
+        },
+        {
+          "code": 3,
+          "name": "TOP+14 FULL INVERTER",
+          "capacity_kcal_h": 11349.36,
+          "power_w_avg": 1442.0,
+          "power_w_max": 2060.0
+        }
+      ],
+      "note": "A planilha tem códigos 1..29; os últimos viram combinações e, no final, 'CONSULTAR FLUIDRA'."
+    }
+  }
+}

@@ -100,6 +100,7 @@ export interface Client {
   acceptance: 'low' | 'medium' | 'high';
   satisfaction: 'low' | 'medium' | 'high';
   items: string[];
+  offers?: string[];
   lastInteraction?: string;
   invalid?: boolean;
 }

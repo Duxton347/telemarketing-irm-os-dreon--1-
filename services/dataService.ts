@@ -579,6 +579,7 @@ export const dataService = {
       phone: c.phone || '',
       address: c.address || '',
       items: c.items || [],
+      offers: c.offers || [],
       acceptance: (c.acceptance as any) || 'medium',
       satisfaction: (c.satisfaction as any) || 'medium'
     }));
@@ -595,6 +596,7 @@ export const dataService = {
       phone,
       address: client.address || existing?.address || '',
       items: Array.from(new Set([...(existing?.items || []), ...(client.items || [])])),
+      offers: Array.from(new Set([...(existing?.offers || []), ...(client.offers || [])])),
       last_interaction: existing?.last_interaction || new Date().toISOString()
     };
 
