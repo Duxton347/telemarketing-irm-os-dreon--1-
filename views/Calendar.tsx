@@ -65,8 +65,12 @@ const Calendar: React.FC<{ user: UserType }> = ({ user }: { user: UserType }) =>
     }, [schedules, selectedDate]);
 
     const pendingSchedules = useMemo(() => {
-        return schedules.filter(s => s.status === 'PENDENTE_APROVACAO').sort((a, b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime());
-    }, [schedules]);
+        let pending = schedules.filter(s => s.status === 'PENDENTE_APROVACAO');
+        if (selectedDate) {
+            pending = pending.filter(s => s.scheduledFor.startsWith(selectedDate));
+        }
+        return pending.sort((a, b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime());
+    }, [schedules, selectedDate]);
 
     const scheduledTasks = useMemo(() => {
         if (!selectedDate) return [];
@@ -95,6 +99,13 @@ const Calendar: React.FC<{ user: UserType }> = ({ user }: { user: UserType }) =>
     const [approvingItem, setApprovingItem] = React.useState<CallScheduleWithClient | null>(null);
     const [approveForm, setApproveForm] = React.useState<{ date: string, time: string, operatorId: string, type: CallType }>({
         date: '', time: '', operatorId: '', type: CallType.POS_VENDA
+    });
+
+    // Reschedule Modal
+    const [isRescheduleModalOpen, setIsRescheduleModalOpen] = React.useState(false);
+    const [reschedulingItem, setReschedulingItem] = React.useState<CallScheduleWithClient | null>(null);
+    const [rescheduleForm, setRescheduleForm] = React.useState<{ date: string, time: string }>({
+        date: '', time: ''
     });
 
     const openApproveModal = (item: CallScheduleWithClient) => {
@@ -126,9 +137,14 @@ const Calendar: React.FC<{ user: UserType }> = ({ user }: { user: UserType }) =>
                 approvalReason: 'Aprovado pelo Gestor'
             }, user.id);
 
+            if (!approvingItem.customerId) {
+                alert("Erro: Este agendamento não possui um cliente vinculado. Não é possível gerar a tarefa.");
+                return;
+            }
+
             // 2. Create Task in Queue (TARGET: WORK QUEUE)
             await dataService.createTask({
-                clientId: approvingItem.customerId || '',
+                clientId: approvingItem.customerId,
                 type: approveForm.type, // Use selected type
                 assignedTo: approveForm.operatorId, // Use selected operator
                 status: 'pending', // This puts it in the queue
@@ -145,6 +161,40 @@ const Calendar: React.FC<{ user: UserType }> = ({ user }: { user: UserType }) =>
         } catch (e) {
             console.error(e);
             alert("Erro ao aprovar.");
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const openRescheduleModal = (item: CallScheduleWithClient) => {
+        const d = new Date(item.scheduledFor);
+        setReschedulingItem(item);
+        setRescheduleForm({
+            date: d.toISOString().split('T')[0],
+            time: d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        });
+        setIsRescheduleModalOpen(true);
+    };
+
+    const handleConfirmReschedule = async () => {
+        if (!reschedulingItem || !rescheduleForm.date || !rescheduleForm.time) return;
+        setIsProcessing(true);
+        try {
+            const newDateTime = `${rescheduleForm.date}T${rescheduleForm.time}:00`;
+
+            await dataService.updateSchedule(reschedulingItem.id, {
+                scheduledFor: new Date(newDateTime).toISOString(),
+            }, user.id);
+
+            await dataService.logOperatorEvent(user.id, OperatorEventType.ADMIN_REAGENDAR, undefined, `Reagendou retorno para ${reschedulingItem.clientName}`);
+
+            await loadData();
+            setIsRescheduleModalOpen(false);
+            setReschedulingItem(null);
+            alert("Agendamento reprogramado com sucesso!");
+        } catch (e) {
+            console.error(e);
+            alert("Erro ao reagendar.");
         } finally {
             setIsProcessing(false);
         }
@@ -280,7 +330,7 @@ const Calendar: React.FC<{ user: UserType }> = ({ user }: { user: UserType }) =>
                         </button>
                         <div className="text-right">
                             <h2 className="text-lg font-black text-slate-800 tracking-tight">
-                                {selectedDate ? new Date(selectedDate).toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', weekday: 'long' }) : 'Todos os dias'}
+                                {selectedDate ? new Date(selectedDate + 'T12:00:00').toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', weekday: 'long' }) : 'Todos os dias'}
                             </h2>
                         </div>
                     </div>
@@ -350,7 +400,7 @@ const Calendar: React.FC<{ user: UserType }> = ({ user }: { user: UserType }) =>
                                                     <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-xs uppercase">
                                                         {user.username?.substring(0, 2) || 'OP'}
                                                     </div>
-                                                    <span className="text-xs font-bold text-slate-400">Solicitado por {item.requestedByOperatorId.substring(0, 8)}...</span>
+                                                    <span className="text-xs font-bold text-slate-400">Solicitado por {operators.find(o => o.id === item.requestedByOperatorId)?.name || item.requestedByOperatorId.substring(0, 8) + '...'}</span>
                                                 </div>
 
                                                 <div className="flex gap-2">
@@ -359,6 +409,12 @@ const Calendar: React.FC<{ user: UserType }> = ({ user }: { user: UserType }) =>
                                                         className="px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider text-red-500 hover:bg-red-50 transition-colors"
                                                     >
                                                         Excluir
+                                                    </button>
+                                                    <button
+                                                        onClick={() => openRescheduleModal(item)}
+                                                        className="px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider text-slate-500 hover:bg-slate-100 transition-colors"
+                                                    >
+                                                        Reagendar
                                                     </button>
                                                     <button
                                                         onClick={() => openApproveModal(item)}
@@ -486,6 +542,52 @@ const Calendar: React.FC<{ user: UserType }> = ({ user }: { user: UserType }) =>
                                 className="flex-1 py-4 rounded-xl font-black text-white bg-orange-600 hover:bg-orange-500 shadow-lg shadow-orange-200 uppercase text-xs tracking-widest transition-all active:scale-95 disabled:opacity-50"
                             >
                                 {isProcessing ? 'Confirmando...' : 'Aprovar e Agendar'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Reschedule Modal */}
+            {isRescheduleModalOpen && reschedulingItem && (
+                <div className="fixed inset-0 z-[200] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div className="bg-white w-full max-w-sm rounded-[32px] p-8 shadow-2xl animate-in zoom-in duration-200">
+                        <h3 className="text-xl font-black text-slate-800 text-center mb-6 uppercase tracking-tight">Reagendar Retorno</h3>
+
+                        <div className="space-y-4 mb-8">
+                            <div>
+                                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Nova Data</label>
+                                <input
+                                    type="date"
+                                    value={rescheduleForm.date}
+                                    onChange={e => setRescheduleForm({ ...rescheduleForm, date: e.target.value })}
+                                    className="w-full h-12 rounded-xl border-2 border-slate-100 px-4 font-bold text-slate-700 focus:border-orange-500 outline-none transition-colors"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Novo Horário</label>
+                                <input
+                                    type="time"
+                                    value={rescheduleForm.time}
+                                    onChange={e => setRescheduleForm({ ...rescheduleForm, time: e.target.value })}
+                                    className="w-full h-12 rounded-xl border-2 border-slate-100 px-4 font-bold text-slate-700 focus:border-orange-500 outline-none transition-colors"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="flex gap-4">
+                            <button
+                                onClick={() => setIsRescheduleModalOpen(false)}
+                                className="flex-1 py-4 rounded-xl font-bold text-slate-400 hover:bg-slate-50 uppercase text-xs tracking-widest transition-colors"
+                            >
+                                Cancelar
+                            </button>
+                            <button
+                                onClick={handleConfirmReschedule}
+                                disabled={isProcessing}
+                                className="flex-1 py-4 rounded-xl font-black text-white bg-orange-600 hover:bg-orange-500 shadow-lg shadow-orange-200 uppercase text-xs tracking-widest transition-all active:scale-95 disabled:opacity-50"
+                            >
+                                {isProcessing ? 'Carregando...' : 'Reagendar'}
                             </button>
                         </div>
                     </div>

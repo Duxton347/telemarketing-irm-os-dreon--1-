@@ -99,19 +99,16 @@ export const ManualScheduleModal: React.FC<ManualScheduleModalProps> = ({ onClos
                 assignedOperatorId: scheduleForm.operatorId,
                 scheduledFor: `${scheduleForm.date}T${scheduleForm.time}:00`,
                 callType: scheduleForm.type,
-                status: 'APROVADO', // Manual schedule by admin/manager goes straight to approved? Or Pending?
-                // Requirement says "Manual scheduling from Agenda". Usually implies manager action -> Approved.
-                // If operator does it, maybe pending. Let's assume Approved for now as it's likely a manager feature or self-scheduling.
-                // Logic Check: If user is Admin/Supervisor -> APPROVED. If Operator -> PENDENTE_APROVACAO.
+                status: 'PENDENTE_APROVACAO', // Force approval workflow
                 scheduleReason: scheduleForm.reason || 'Agendamento Manual'
             });
 
             onSuccess();
             onClose();
             alert("Agendamento criado com sucesso!");
-        } catch (error) {
+        } catch (error: any) {
             console.error(error);
-            alert("Erro ao criar agendamento.");
+            alert(`Erro ao criar agendamento: ${error.message || JSON.stringify(error)}`);
         } finally {
             setLoading(false);
         }

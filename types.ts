@@ -78,6 +78,7 @@ export enum OperatorEventType {
   ADMIN_AGENDAR = 'ADMIN_AGENDAR',
   ADMIN_APROVAR = 'ADMIN_APROVAR',
   ADMIN_REJEITAR = 'ADMIN_REJEITAR',
+  ADMIN_REAGENDAR = 'ADMIN_REAGENDAR',
   WHATSAPP_START = 'WHATSAPP_START',
   WHATSAPP_SKIP = 'WHATSAPP_SKIP',
   WHATSAPP_COMPLETE = 'WHATSAPP_COMPLETE'
@@ -92,6 +93,14 @@ export interface OperatorEvent {
   note?: string;
 }
 
+export interface Interaction {
+  id: string;
+  type: string;
+  date: string;
+  summary: string;
+  operatorId?: string;
+}
+
 export interface Client {
   id: string;
   name: string;
@@ -103,6 +112,17 @@ export interface Client {
   offers?: string[];
   lastInteraction?: string;
   invalid?: boolean;
+  history?: Interaction[];
+  // New Fields for Scraper & Prospects
+  origin?: 'MANUAL' | 'GOOGLE_SEARCH' | 'CSV_IMPORT';
+  email?: string;
+  website?: string;
+  status?: 'CLIENT' | 'LEAD';
+  responsible_phone?: string;
+  buyer_name?: string;
+  interest_product?: string;
+  preferred_channel?: 'PHONE' | 'WHATSAPP' | 'BOTH';
+  funnel_status?: 'NEW' | 'CONTACT_ATTEMPT' | 'CONTACT_MADE' | 'QUALIFIED' | 'PROPOSAL_SENT' | 'PHYSICAL_VISIT';
 }
 
 export type ScheduleStatus = 'PENDENTE_APROVACAO' | 'APROVADO' | 'REJEITADO' | 'REPROGRAMADO' | 'CONCLUIDO' | 'CANCELADO';
@@ -184,6 +204,11 @@ export interface Task {
   approvalStatus?: 'PENDING' | 'APPROVED' | 'RESOLVED';
   originCallId?: string;
   targetCallType?: string;
+
+  // Joined fields
+  clientName?: string;
+  clientPhone?: string;
+  clients?: any; // For full object access if needed
 }
 
 export interface Visit {
@@ -295,4 +320,23 @@ export interface WhatsAppTask {
   // Joined fields
   clientName?: string;
   clientPhone?: string;
+}
+
+export interface UnifiedReportRow {
+  clientId: string;
+  clientName: string;
+  clientPhone: string;
+  clientStatus: string;
+  attemptsCount: number;
+  lastContactAt?: string;
+  lastOutcome?: string;
+  lastOperatorId?: string;
+  lastChannel?: string;
+  lastContactGenre?: string;
+  lastRating?: number; // 1 (Bad) or 5 (Good) based on JSON responses proxy
+  upsellOffer?: string; // Captured from the JSON responses
+  upsellStatus?: 'OPEN' | 'DONE' | 'CANCELLED';
+  responseStatus: string; // 'Não Contatado', 'Sem Resposta', 'Respondeu'
+  conversionStatus: string; // 'Gerou Venda', 'Sem Venda'
+  lastSkipReason?: string;
 }

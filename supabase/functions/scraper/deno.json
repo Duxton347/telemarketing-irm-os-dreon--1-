@@ -1,0 +1,10 @@
+{
+    "tasks": {
+        "start": "deno run --allow-net --allow-env index.ts"
+    },
+    "imports": {
+        "std/": "https://deno.land/std@0.168.0/",
+        "http/": "https://deno.land/std@0.168.0/http/",
+        "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.39.7"
+    }
+}

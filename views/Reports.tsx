@@ -2,743 +2,929 @@
 import React from 'react';
 import {
    BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-   Cell, LineChart, Line, Legend, AreaChart, Area
+   Cell, LineChart, Line, Legend, PieChart, Pie, AreaChart, Area
 } from 'recharts';
 import {
-   X, Loader2, AlertCircle, TrendingUp, Target, Heart, Filter, PhoneOff, Zap, BarChart3, CheckCircle2, ClipboardList, Timer, Phone, Eye, Trophy, Clock, SkipForward, ArrowUpRight, Activity, FileText, MapPin, Download, FileSpreadsheet
+   X, Loader2, AlertCircle, TrendingUp, Target, Filter, PhoneOff, Zap,
+   BarChart3, ClipboardList, Timer, Phone, Trophy, Clock, MapPin,
+   Download, FileSpreadsheet, Send, MessageSquare, DollarSign, Users,
+   Search, Calendar, ArrowUpRight, ArrowDownRight, ChevronDown, ChevronUp
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
-import { CallRecord, User, Client, Protocol, Question, ProtocolStatus, Task, OperatorEvent, OperatorEventType, Visit } from '../types';
+import { CallRecord, User, Client, Protocol, Question, Task, OperatorEvent, OperatorEventType, Visit, Sale, SaleStatus, WhatsAppTask, CallType } from '../types';
+import PostSaleRemarketingReport from './PostSaleRemarketingReport';
+import ProspectHistoryDrawer from '../components/ProspectHistoryDrawer';
 
-const Reports: React.FC<{ user: any }> = ({ user }) => {
-   const [isLoading, setIsLoading] = React.useState(true);
-   const [isExporting, setIsExporting] = React.useState(false);
-   const [activeTab, setActiveTab] = React.useState<'overview' | 'operators' | 'protocols' | 'deep_dive' | 'visits'>('overview');
-   const [startDate, setStartDate] = React.useState(new Date(new Date().setDate(new Date().getDate() - 30)).toISOString().split('T')[0]);
-   const [endDate, setEndDate] = React.useState(new Date().toISOString().split('T')[0]);
+// --- HELPER COMPONENTS ---
 
-   const [calls, setCalls] = React.useState<CallRecord[]>([]);
-   const [protocols, setProtocols] = React.useState<Protocol[]>([]);
-   const [tasks, setTasks] = React.useState<Task[]>([]);
-   const [operators, setOperators] = React.useState<User[]>([]);
-   const [clients, setClients] = React.useState<Client[]>([]);
-   const [questions, setQuestions] = React.useState<Question[]>([]);
-   const [operatorLogs, setOperatorLogs] = React.useState<OperatorEvent[]>([]);
-   const [visits, setVisits] = React.useState<Visit[]>([]);
-
-   const [stageStats, setStageStats] = React.useState<any[]>([]);
-   const [detailedStats, setDetailedStats] = React.useState<any>(null);
-   const [consolidatedIDE, setConsolidatedIDE] = React.useState(0);
-
-   const [selectedAuditCall, setSelectedAuditCall] = React.useState<any>(null);
-   const [drillDownData, setDrillDownData] = React.useState<{
-      isOpen: boolean;
-      title: string;
-      filterLabel: string;
-      data: any[];
-      type: 'question' | 'protocol' | 'skip';
-      selectedCallType?: string;
-   }>({ isOpen: false, title: '', filterLabel: '', data: [], type: 'question' });
-
-   const load = React.useCallback(async () => {
-      setIsLoading(true);
-      try {
-         const [allCalls, allProtocols, allClients, allUsers, allQuestions, allTasks, allEvents, allVisits] = await Promise.all([
-            dataService.getCalls(),
-            dataService.getProtocols(),
-            dataService.getClients(),
-            dataService.getUsers(),
-            dataService.getQuestions(),
-            dataService.getTasks(),
-            dataService.getOperatorEvents(startDate, endDate),
-            dataService.getVisits()
-         ]);
-
-         const fCalls = allCalls.filter(c => {
-            const d = c.startTime?.split('T')[0];
-            return d && d >= startDate && d <= endDate;
-         });
-
-         const fTasks = allTasks.filter(t => {
-            const d = t.deadline?.split('T')[0];
-            return d && d >= startDate && d <= endDate;
-         });
-
-         const fProtos = allProtocols.filter(p => {
-            const d = p.openedAt?.split('T')[0];
-            return d && d >= startDate && d <= endDate;
-         });
-
-         setCalls(fCalls);
-         setProtocols(fProtos);
-         setTasks(fTasks);
-         setOperators(allUsers);
-         setClients(allClients);
-         setQuestions(allQuestions);
-         setOperatorLogs(allEvents);
-
-         const fVisits = allVisits.filter(v => {
-            const d = v.scheduledDate?.split('T')[0];
-            return d && d >= startDate && d <= endDate;
-         });
-         setVisits(fVisits);
-
-         setStageStats(await dataService.getStageAverages(fCalls));
-         setDetailedStats(await dataService.getDetailedStats(fCalls, fProtos, fTasks));
-         setConsolidatedIDE(await dataService.calculateIDE(fCalls));
-      } catch (e) {
-         console.error("Erro Reports:", e);
-      } finally { setIsLoading(false); }
-   }, [startDate, endDate]);
-
-   React.useEffect(() => { load(); }, [load]);
-
-   const handleExportCSV = () => {
-      if (calls.length === 0) return alert("Não há chamadas atendidas no período para exportar.");
-      setIsExporting(true);
-
-      try {
-         // 1. Organizar perguntas cadastradas para garantir colunas fixas
-         const sortedQuestions = [...questions].sort((a, b) => a.order - b.order);
-
-         // 2. Definir Cabeçalhos Tabulares
-         const headers = [
-            "DATA_LIGACAO",
-            "HORA_LIGACAO",
-            "CLIENTE",
-            "TELEFONE",
-            "OPERADOR",
-            "TIPO_SERVICO",
-            "DURACAO_CONVERSA",
-            ...sortedQuestions.map(q => `RESPOSTA: ${q.text.toUpperCase().replace(/[;]/g, '')}`),
-            "RELATORIO_FINAL_DO_OPERADOR"
-         ];
-
-         // 3. Mapear exclusivamente CHAMADAS CONCLUÍDAS (Realizadas)
-         const rows = calls.map(call => {
-            const client = clients.find(c => c.id === call.clientId);
-            const operator = operators.find(o => o.id === call.operatorId);
-            const dateObj = new Date(call.startTime);
-
-            const dataStr = dateObj.toLocaleDateString('pt-BR');
-            const horaStr = dateObj.toLocaleTimeString('pt-BR');
-
-            // Mapear respostas em suas colunas exatas
-            const qResponses = sortedQuestions.map(q => {
-               const resp = dataService.getResponseValue(call.responses, q);
-               // Retorna a resposta ou traço se não houver (ex: pergunta não se aplica ao tipo de chamada)
-               return resp !== undefined ? `${String(resp).replace(/[;"]/g, '').trim()}` : '-';
-            });
-
-            // Higienizar o relatório final do operador
-            const writtenReport = call.responses?.written_report
-               ? String(call.responses.written_report)
-                  .replace(/\n/g, ' ')
-                  .replace(/\r/g, '')
-                  .replace(/[;"]/g, "'")
-                  .trim()
-               : "Nenhum relatório preenchido";
-
-            return [
-               dataStr,
-               horaStr,
-               (client?.name || 'Venda Manual').replace(/[;"]/g, '').trim(),
-               client?.phone || '-',
-               (operator?.name || 'Excluído').replace(/[;"]/g, '').trim(),
-               call.type,
-               `${Math.floor(call.duration / 60)}m ${call.duration % 60}s`,
-               ...qResponses,
-               writtenReport
-            ].map(val => `"${val}"`).join(';'); // Delimitado por aspas e separado por ponto-e-vírgula
-         });
-
-         // 4. Montagem do Arquivo com BOM (Excel BR Friendly)
-         const BOM = "\uFEFF";
-         const csvContent = BOM + headers.join(';') + "\n" + rows.join('\n');
-
-         // 5. Download Automático
-         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-         const url = URL.createObjectURL(blob);
-         const link = document.body.appendChild(document.createElement('a'));
-         link.href = url;
-         link.download = `Dreon_Relatorio_Atendimentos_${startDate}_a_${endDate}.csv`;
-         link.click();
-         document.body.removeChild(link);
-         URL.revokeObjectURL(url);
-
-      } catch (e) {
-         console.error("Erro na exportação:", e);
-         alert("Falha técnica ao gerar CSV.");
-      } finally {
-         setIsExporting(false);
-      }
-   };
-
-   const operatorMetrics = React.useMemo(() => {
-      if (!operators.length) return { ranking: [], tmaTimeline: [] };
-
-      const opData: Record<string, any> = {};
-      const tmaByDay: Record<string, { date: string, totalDur: number, count: number }> = {};
-
-      operators.forEach(op => {
-         if (op.role === 'ADMIN') return;
-
-         const opEvents = operatorLogs.filter(e => e.operatorId === op.id);
-         const opCalls = calls.filter(c => c.operatorId === op.id);
-         const opCompleted = opCalls.length;
-         const opSkips = tasks.filter(t => t.assignedTo === op.id && t.status === 'skipped').length;
-         const totalAttempts = opCompleted + opSkips;
-
-         const totalCallDur = opCalls.reduce((acc, c) => acc + (c.duration || 0), 0);
-         const avgTma = opCompleted > 0 ? totalCallDur / opCompleted : 0;
-
-         opCalls.forEach(c => {
-            const day = c.startTime.split('T')[0];
-            if (!tmaByDay[day]) tmaByDay[day] = { date: day, totalDur: 0, count: 0 };
-            tmaByDay[day].totalDur += (c.duration || 0);
-            tmaByDay[day].count += 1;
-         });
-
-         const gaps: number[] = [];
-         let lastFinalizeTimestamp: number | null = null;
-         const sortedEvents = [...opEvents].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-
-         sortedEvents.forEach(evt => {
-            if (evt.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO) {
-               lastFinalizeTimestamp = new Date(evt.timestamp).getTime();
-            } else if (lastFinalizeTimestamp && (evt.eventType === OperatorEventType.INICIAR_PROXIMO_ATENDIMENTO || evt.eventType === OperatorEventType.PULAR_ATENDIMENTO)) {
-               const gapMs = new Date(evt.timestamp).getTime() - lastFinalizeTimestamp;
-               if (gapMs > 0 && gapMs < 7200000) {
-                  gaps.push(gapMs / 1000);
-               }
-               lastFinalizeTimestamp = null;
-            }
-         });
-
-         const avgGap = gaps.length > 0 ? gaps.reduce((a, b) => a + b, 0) / gaps.length : 0;
-         const score = (opCompleted * 10) - ((avgGap / 60) * 5);
-
-         opData[op.id] = {
-            id: op.id,
-            name: op.name,
-            completed: opCompleted,
-            skips: opSkips,
-            tma: Math.round(avgTma),
-            skipPercentage: totalAttempts > 0 ? Math.round((opSkips / totalAttempts) * 100) : 0,
-            avgGap: Math.round(avgGap),
-            maxGap: gaps.length > 0 ? Math.max(...gaps) : 0,
-            score: Math.max(0, Math.round(score * 10) / 10)
-         };
-      });
-
-      const ranking = Object.values(opData).sort((a, b) => b.score - a.score);
-      const tmaTimeline = Object.values(tmaByDay)
-         .sort((a, b) => a.date.localeCompare(b.date))
-         .map(d => ({
-            name: new Date(d.date + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
-            tma: Math.round(d.totalDur / d.count)
-         }));
-
-      return { ranking, tmaTimeline };
-   }, [operators, operatorLogs, calls, tasks]);
-
-   const deduplicatedAnalysis = React.useMemo(() => {
-      if (!detailedStats?.questionAnalysis) return [];
-      const map = new Map();
-      const normalizeText = (str: string) => str ? str.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, "") : "";
-      detailedStats.questionAnalysis.forEach((q: any) => {
-         const current = map.get(q.order);
-         const textNorm = normalizeText(q.text);
-         if (!current) map.set(q.order, q);
-         else {
-            const isCorrect7 = q.order === 7 && textNorm.includes('insatisfacao');
-            const isCorrect8 = q.order === 8 && textNorm.includes('explorado');
-            if (isCorrect7 || isCorrect8) map.set(q.order, q);
-         }
-      });
-      return Array.from(map.values()).sort((a, b) => a.order - b.order);
-   }, [detailedStats]);
-
-   const openAuditGrid = (question: Question, value?: string) => {
-      const filtered = calls.filter(c => {
-         const resp = dataService.getResponseValue(c.responses, question);
-         if (!value) return resp !== undefined;
-         return String(resp).trim().toLowerCase() === value.trim().toLowerCase();
-      }).map(c => ({
-         ...c,
-         client: clients.find(cl => cl.id === c.clientId),
-         operator: operators.find(op => op.id === c.operatorId),
-      }));
-      setDrillDownData({
-         isOpen: true, title: question.text, filterLabel: value || 'Todos os Registros',
-         data: filtered, type: 'question', selectedCallType: question.type === 'ALL' ? undefined : question.type
-      });
-   };
-
-   const openProtocolDrillDown = (deptId: string, deptName: string) => {
-      const filtered = protocols.filter(p => p.departmentId === deptId).map(p => ({
-         ...p,
-         client: clients.find(cl => cl.id === p.clientId),
-         operator: operators.find(op => op.id === p.ownerOperatorId)
-      }));
-      setDrillDownData({ isOpen: true, title: `Protocolos: ${deptName}`, filterLabel: deptName, data: filtered, type: 'protocol' });
-   };
-
-   const openSkipDrillDown = (reason: string) => {
-      const filtered = tasks.filter(t => t.status === 'skipped' && (t.skipReason || 'Não informado') === reason).map(t => ({
-         ...t,
-         client: clients.find(cl => cl.id === t.clientId),
-         operator: operators.find(op => op.id === t.assignedTo)
-      }));
-      setDrillDownData({ isOpen: true, title: `Pulos Auditados: ${reason}`, filterLabel: reason, data: filtered, type: 'skip' });
-   };
-
-   const formatTime = (seconds: number) => {
-      if (seconds < 60) return `${seconds}s`;
-      return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+const MetricCard: React.FC<{
+   title: string;
+   value: string | number;
+   subtitle?: string;
+   icon: React.ElementType;
+   trend?: { value: number; isUp: boolean };
+   color?: 'blue' | 'emerald' | 'amber' | 'rose' | 'slate';
+}> = ({ title, value, subtitle, icon: Icon, trend, color = 'slate' }) => {
+   const colorMap = {
+      blue: 'bg-blue-50 text-blue-600 border-blue-100',
+      emerald: 'bg-emerald-50 text-emerald-600 border-emerald-100',
+      amber: 'bg-amber-50 text-amber-600 border-amber-100',
+      rose: 'bg-rose-50 text-rose-600 border-rose-100',
+      slate: 'bg-slate-50 text-slate-600 border-slate-100'
    };
 
    return (
-      <div className="space-y-8 pb-20 relative animate-in fade-in duration-500">
-         <header className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-            <div>
-               <h2 className="text-4xl font-black text-slate-800 tracking-tighter uppercase">Relatórios Irmãos Dreon</h2>
-               <p className="text-slate-500 font-bold mt-1">Inteligência operacional em tempo real.</p>
+      <div className={`p-6 rounded-[32px] border ${colorMap[color]} relative overflow-hidden group hover:shadow-md transition-all`}>
+         <div className="flex justify-between items-start mb-4">
+            <div className={`p-3 bg-white rounded-2xl shadow-sm`}>
+               <Icon size={20} className={color === 'slate' ? 'text-slate-900' : `text-${color}-500`} />
             </div>
-            <div className="flex bg-white p-1.5 rounded-[24px] border border-slate-200 shadow-sm overflow-x-auto no-scrollbar shrink-0">
-               {[
-                  { id: 'overview', label: 'Score Global', icon: Target },
-                  { id: 'operators', label: 'Operadores & Ranking', icon: Trophy },
-                  { id: 'protocols', label: 'Setores & Pulos', icon: Timer },
-                  { id: 'visits', label: 'Visitas e Rotas', icon: MapPin },
-                  { id: 'deep_dive', label: 'Métricas Detalhadas', icon: Zap }
-               ].map(tab => (
-                  <button
-                     key={tab.id}
-                     onClick={() => setActiveTab(tab.id as any)}
-                     className={`px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center gap-2 whitespace-nowrap ${activeTab === tab.id ? 'bg-slate-900 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-50'}`}
-                  >
-                     <tab.icon size={14} /> {tab.label}
-                  </button>
-               ))}
-            </div>
-         </header>
+            {trend && (
+               <div className={`flex items-center gap-1 text-[10px] font-black uppercase px-2 py-1 rounded-full ${trend.isUp ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                  {trend.isUp ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
+                  {Math.abs(trend.value)}%
+               </div>
+            )}
+         </div>
+         <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mb-1">{title}</p>
+         <h3 className="text-3xl font-black tracking-tight">{value}</h3>
+         {subtitle && <p className="text-xs font-bold mt-2 opacity-80">{subtitle}</p>}
+      </div>
+   );
+};
 
-         <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
-            <div className="lg:col-span-3 space-y-2">
-               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Filtro Temporal</label>
-               <div className="flex gap-2">
-                  <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold outline-none" />
-                  <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-bold outline-none" />
+// --- MAIN COMPONENT ---
+
+const Reports: React.FC<{ user: any }> = ({ user }) => {
+   const [isLoading, setIsLoading] = React.useState(true);
+   const [activeTab, setActiveTab] = React.useState<'overview' | 'communications' | 'sales' | 'operators' | 'audit' | 'leads' | 'post_sale'>('overview');
+   const [drawerProspectId, setDrawerProspectId] = React.useState<string | null>(null);
+
+   // Custom Date Range
+   const [dateRange, setDateRange] = React.useState({
+      start: new Date(new Date().setDate(new Date().getDate() - 30)).toISOString().split('T')[0],
+      end: new Date().toISOString().split('T')[0]
+   });
+
+   // --- FILTER & MODAL STATE ---
+   const [searchTerm, setSearchTerm] = React.useState('');
+   const [filterOperator, setFilterOperator] = React.useState<string>('all');
+   const [filterType, setFilterType] = React.useState<'all' | 'call' | 'whatsapp'>('all');
+   const [selectedInteraction, setSelectedInteraction] = React.useState<any>(null);
+
+   // Data State
+   const [calls, setCalls] = React.useState<CallRecord[]>([]);
+   const [tasks, setTasks] = React.useState<Task[]>([]);
+   const [whatsappTasks, setWhatsappTasks] = React.useState<WhatsAppTask[]>([]);
+   const [sales, setSales] = React.useState<Sale[]>([]);
+   const [operators, setOperators] = React.useState<User[]>([]);
+   const [clients, setClients] = React.useState<Client[]>([]);
+
+   const [events, setEvents] = React.useState<OperatorEvent[]>([]);
+   const [questions, setQuestions] = React.useState<Question[]>([]);
+   const [visits, setVisits] = React.useState<Visit[]>([]);
+   const [prospects, setProspects] = React.useState<Client[]>([]);
+
+   // Derived Metrics State
+   const [metrics, setMetrics] = React.useState<any>({
+      revenue: 0,
+      conversionRate: 0,
+      ticketAverage: 0,
+      totalContacts: 0,
+      totalSales: 0
+   });
+
+   const loadData = React.useCallback(async () => {
+      setIsLoading(true);
+      try {
+         const [
+            fetchedCalls,
+            fetchedTasks,
+            fetchedWa,
+            fetchedSales,
+            fetchedOps,
+            fetchedClients,
+
+            fetchedEvents,
+            fetchedQuestions,
+            fetchedVisits,
+            fetchedProspects
+         ] = await Promise.all([
+            dataService.getCalls(dateRange.start, dateRange.end),
+            dataService.getTasks(), // Tasks history is tricky, might need filter update in future
+            dataService.getWhatsAppTasks(undefined, dateRange.start, dateRange.end),
+            dataService.getSales(dateRange.start, dateRange.end),
+            dataService.getUsers(),
+            dataService.getClients(),
+
+            dataService.getOperatorEvents(dateRange.start, dateRange.end),
+            dataService.getQuestions(),
+            dataService.getVisits(),
+            dataService.getProspects()
+         ]);
+
+         setCalls(fetchedCalls);
+         setTasks(fetchedTasks); // Note: filter by date if needed for history
+         setWhatsappTasks(fetchedWa);
+         setSales(fetchedSales);
+         setOperators(fetchedOps);
+         setClients(fetchedClients);
+         setOperators(fetchedOps);
+         setClients(fetchedClients);
+         setEvents(fetchedEvents);
+         setQuestions(fetchedQuestions);
+         setVisits(fetchedVisits);
+         setProspects(fetchedProspects);
+
+         // --- CALCULATE BASE METRICS ---
+         // Revenue now counts ALL sales except CANCELADA
+         const validSales = fetchedSales.filter(s => s.status !== ('CANCELADA' as any));
+         const totalRevenue = validSales.reduce((acc, s) => acc + (s.value || 0), 0);
+         const totalSalesCount = validSales.length;
+
+         const uniqueContacts = new Set([
+            ...fetchedCalls.map(c => c.clientId),
+            ...fetchedWa.filter(w => w.status === 'completed').map(w => w.clientId)
+         ]).size;
+
+         const totalInteractions = fetchedCalls.length + fetchedWa.filter(w => w.status === 'completed' || w.status === 'skipped').length;
+
+         setMetrics({
+            revenue: totalRevenue,
+            conversionRate: uniqueContacts > 0 ? (totalSalesCount / uniqueContacts) * 100 : 0,
+            ticketAverage: totalSalesCount > 0 ? totalRevenue / totalSalesCount : 0,
+            totalContacts: totalInteractions,
+            totalSales: totalSalesCount
+         });
+
+      } catch (e) {
+         console.error("Failed to load reports data", e);
+      } finally {
+         setIsLoading(false);
+      }
+   }, [dateRange]);
+
+   React.useEffect(() => { loadData(); }, [loadData]);
+
+   // --- EXPORT FUNCTION ---
+   const handleExport = (type: 'csv' | 'xls') => {
+      // Basic CSV implementation for current audit view or filtered data
+      // For simplicity, exporting CALLS + SALES joined or separate
+      const headers = ["DATA", "TIPO", "OPERADOR", "CLIENTE", "STATUS", "VALOR/DURACAO", "OBS"];
+
+      // Combine calls and sells for export
+      const rows = [
+         ...calls.map(c => [
+            new Date(c.startTime).toLocaleDateString(),
+            'LIGACAO',
+            operators.find(u => u.id === c.operatorId)?.name || 'N/A',
+            clients.find(cl => cl.id === c.clientId)?.name || 'N/A',
+            'CONCLUIDA',
+            c.duration + 's',
+            JSON.stringify(c.responses)
+         ]),
+         ...sales.map(s => [
+            new Date(s.registeredAt).toLocaleDateString(),
+            'VENDA',
+            operators.find(u => u.id === s.operatorId)?.name || 'N/A',
+            s.clientName,
+            s.status,
+            s.value,
+            s.category
+         ])
+      ];
+
+      const csvContent = "\uFEFF" + [headers.join(';'), ...rows.map(r => r.join(';'))].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `relatorio_dreon_${dateRange.start}_${dateRange.end}.csv`;
+      link.click();
+   };
+
+   // --- FILTERED AUDIT DATA ---
+   const getFilteredAuditData = () => {
+      let data = [
+         ...calls.map(c => ({ ...c, _type: 'call', date: c.startTime })),
+         ...whatsappTasks.map(w => ({ ...w, _type: 'whatsapp', date: w.createdAt }))
+      ];
+
+      if (filterType !== 'all') {
+         data = data.filter(d => d._type === filterType);
+      }
+
+      if (filterOperator !== 'all') {
+         data = data.filter(d => (d._type === 'call' ? (d as any).operatorId : (d as any).assignedTo) === filterOperator);
+      }
+
+      if (searchTerm) {
+         const lower = searchTerm.toLowerCase();
+         data = data.filter(d => {
+            const client = clients.find(c => c.id === d.clientId);
+            const clientName = client?.name || (d as any).clientName || '';
+            const clientPhone = client?.phone || (d as any).clientPhone || '';
+            return clientName.toLowerCase().includes(lower) || clientPhone.includes(lower);
+         });
+      }
+
+      return data.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+   };
+
+   // --- MODAL RENDERER ---
+   const renderInteractionDetails = () => {
+      if (!selectedInteraction) return null;
+
+      const isCall = selectedInteraction._type === 'call';
+      const client = clients.find(c => c.id === selectedInteraction.clientId);
+      const op = operators.find(o => o.id === (isCall ? selectedInteraction.operatorId : selectedInteraction.assignedTo));
+      const date = new Date(selectedInteraction.date);
+
+      // Find related sale (registered equal or after interaction date)
+      const relatedSale = sales.find(s => {
+         if (s.clientId !== selectedInteraction.clientId) return false;
+         return new Date(s.registeredAt) >= new Date(isCall ? selectedInteraction.startTime : selectedInteraction.createdAt);
+      });
+
+      // Find related visit (registered equal or after interaction date)
+      const relatedVisit = visits.find(v => {
+         if (v.clientId !== selectedInteraction.clientId) return false;
+         return new Date((v as any).date || v.createdAt) >= new Date(isCall ? (selectedInteraction as any).startTime : (selectedInteraction as any).createdAt);
+      });
+
+      return (
+         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md" onClick={() => setSelectedInteraction(null)}>
+            <div className="bg-white rounded-[32px] w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl animate-in zoom-in-95 duration-200" onClick={e => e.stopPropagation()}>
+
+               {/* Header */}
+               <div className="p-8 border-b border-slate-100 flex justify-between items-start bg-slate-50/80 sticky top-0 backdrop-blur-sm z-10">
+                  <div>
+                     <div className="flex items-center gap-3 mb-2">
+                        <div className={`p-3 rounded-2xl ${isCall ? 'bg-blue-100 text-blue-600' : 'bg-emerald-100 text-emerald-600'}`}>
+                           {isCall ? <Phone size={24} /> : <MessageSquare size={24} />}
+                        </div>
+                        <div>
+                           <h3 className="text-xl font-black text-slate-800 tracking-tight">Detalhes da Interação</h3>
+                           <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">ID: {selectedInteraction.id.slice(0, 8)}</p>
+                        </div>
+                     </div>
+                  </div>
+                  <button onClick={() => setSelectedInteraction(null)} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
+                     <X size={24} className="text-slate-400" />
+                  </button>
+               </div>
+
+               <div className="p-8 space-y-8">
+                  {/* Tempo e Operador */}
+                  <div className="flex flex-wrap gap-4">
+                     <div className="flex items-center gap-3 px-4 py-2 bg-slate-100 rounded-full">
+                        <Clock size={16} className="text-slate-500" />
+                        <span className="text-xs font-bold text-slate-600 uppercase">{date.toLocaleString()}</span>
+                     </div>
+                     <div className="flex items-center gap-3 px-4 py-2 bg-slate-100 rounded-full">
+                        <Users size={16} className="text-slate-500" />
+                        <span className="text-xs font-bold text-slate-600 uppercase">{op?.name || 'Operador Desconhecido'}</span>
+                     </div>
+                  </div>
+
+                  {/* Cliente Card */}
+                  <div className="bg-gradient-to-br from-slate-50 to-white p-6 rounded-3xl border border-slate-100 shadow-sm relative overflow-hidden">
+                     <div className="absolute top-0 right-0 p-4 opacity-5">
+                        <Users size={120} />
+                     </div>
+                     <h4 className="text-[10px] font-black uppercase text-slate-400 tracking-widest mb-4">Cliente</h4>
+                     <div className="relative z-10">
+                        <p className="text-2xl font-black text-slate-800 mb-1">{client?.name || selectedInteraction.clientName || 'Cliente Indefinido'}</p>
+                        <p className="text-lg font-medium text-slate-500">{client?.phone || selectedInteraction.clientPhone || 'Sem telefone'}</p>
+                     </div>
+                  </div>
+
+                  {/* Metrics Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                     <div className="bg-blue-50 p-6 rounded-3xl border border-blue-100 flex flex-col justify-center items-center text-center">
+                        <h4 className="text-[10px] font-black uppercase text-blue-400 tracking-widest mb-2">Duração</h4>
+                        <p className="text-3xl font-black text-blue-600">{isCall ? selectedInteraction.duration + 's' : '-'}</p>
+                     </div>
+
+                     <div className={`p-6 rounded-3xl border flex flex-col justify-center items-center text-center ${relatedSale ? 'bg-emerald-50 border-emerald-100' : 'bg-slate-50 border-slate-100'}`}>
+                        <h4 className={`text-[10px] font-black uppercase tracking-widest mb-2 ${relatedSale ? 'text-emerald-500' : 'text-slate-400'}`}>Venda Gerada?</h4>
+                        <p className={`text-xl font-black ${relatedSale ? 'text-emerald-600' : 'text-slate-400'}`}>
+                           {relatedSale ? 'SIM' : 'NÃO'}
+                        </p>
+                        {relatedSale && <p className="text-sm text-emerald-600 font-bold mt-1 bg-emerald-100 px-3 py-1 rounded-full">{relatedSale.value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>}
+                     </div>
+
+                     <div className={`p-6 rounded-3xl border flex flex-col justify-center items-center text-center ${relatedVisit ? 'bg-amber-50 border-amber-100' : 'bg-slate-50 border-slate-100'}`}>
+                        <h4 className={`text-[10px] font-black uppercase tracking-widest mb-2 ${relatedVisit ? 'text-amber-500' : 'text-slate-400'}`}>Visita Gerada?</h4>
+                        <p className={`text-xl font-black ${relatedVisit ? 'text-amber-600' : 'text-slate-400'}`}>
+                           {relatedVisit ? 'SIM' : 'NÃO'}
+                        </p>
+                        {relatedVisit && <p className="text-xs text-amber-600 font-bold mt-1 uppercase">{new Date(relatedVisit.date).toLocaleDateString()}</p>}
+                     </div>
+                  </div>
+
+                  {/* Content / Responses */}
+                  <div>
+                     <h4 className="text-xs font-black uppercase text-slate-400 tracking-widest mb-6 flex items-center gap-2">
+                        {isCall ? <ClipboardList size={16} /> : <MessageSquare size={16} />}
+                        {isCall ? 'Questionário & Respostas' : 'Histórico da Mensagem'}
+                     </h4>
+
+                     {isCall ? (
+                        <div className="grid grid-cols-1 gap-4">
+                           {Object.entries(selectedInteraction.responses || {}).map(([key, val]: any) => {
+                              // Find question text
+                              const question = questions.find(q => q.id === key);
+                              const label = question ? question.text : key;
+
+                              return (
+                                 <div key={key} className="p-5 rounded-2xl bg-white border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+                                    <p className="text-xs font-bold text-slate-500 uppercase mb-2 leading-relaxed">{label}</p>
+                                    <p className="text-base font-medium text-slate-800 bg-slate-50 p-3 rounded-xl border border-slate-100">{String(val)}</p>
+                                 </div>
+                              );
+                           })}
+                           {Object.keys(selectedInteraction.responses || {}).length === 0 && (
+                              <div className="text-center p-8 bg-slate-50 rounded-3xl border border-slate-100 border-dashed">
+                                 <p className="text-sm text-slate-400 font-bold italic">Nenhuma resposta registrada para esta chamada.</p>
+                              </div>
+                           )}
+                        </div>
+                     ) : (
+                        <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 space-y-4">
+                           <div className="flex justify-between items-center border-b border-slate-200 pb-4">
+                              <span className="text-sm font-bold text-slate-500">Status da Mensagem</span>
+                              <span className={`px-3 py-1 rounded-full text-xs font-black uppercase ${selectedInteraction.status === 'completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
+                                 {selectedInteraction.status}
+                              </span>
+                           </div>
+                           {selectedInteraction.skipReason && (
+                              <div className="flex justify-between items-center text-red-500 bg-red-50 p-4 rounded-2xl">
+                                 <span className="text-sm font-bold">Motivo do Pulo</span>
+                                 <span className="text-sm font-black uppercase">{selectedInteraction.skipReason}</span>
+                              </div>
+                           )}
+                           {selectedInteraction.whatsappNote && (
+                              <div className="pt-2">
+                                 <span className="text-xs font-black uppercase text-slate-400 tracking-widest">Observação</span>
+                                 <p className="mt-2 text-sm text-slate-700 bg-white p-3 rounded-xl border border-slate-200">{selectedInteraction.whatsappNote}</p>
+                              </div>
+                           )}
+                        </div>
+                     )}
+                  </div>
                </div>
             </div>
-            <div className="lg:col-span-6 grid grid-cols-1 md:grid-cols-3 gap-6">
-               <div className="bg-blue-50 p-6 rounded-[32px] text-center border border-blue-100">
-                  <p className="text-[9px] font-black uppercase text-blue-400 tracking-widest mb-1">IDE Global</p>
-                  <p className="text-3xl font-black text-blue-600">{consolidatedIDE}%</p>
-               </div>
-               <div className="bg-slate-900 p-6 rounded-[32px] text-center">
-                  <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest mb-1">Chamadas</p>
-                  <p className="text-3xl font-black text-white">{calls.length}</p>
-               </div>
-               <div className="bg-red-50 p-6 rounded-[32px] text-center border border-red-100">
-                  <p className="text-[9px] font-black uppercase text-red-400 tracking-widest mb-1">Fugas</p>
-                  <p className="text-3xl font-black text-red-600">{tasks.filter(t => t.status === 'skipped').length}</p>
-               </div>
+         </div>
+      );
+   };
+
+   // --- HELPER CALCULATIONS ---
+   const getMedian = (values: number[]) => {
+      if (values.length === 0) return 0;
+      values.sort((a, b) => a - b);
+      const half = Math.floor(values.length / 2);
+      if (values.length % 2) return values[half];
+      return (values[half - 1] + values[half]) / 2.0;
+   };
+
+   return (
+      <div className="space-y-8 pb-20 animate-in fade-in duration-500">
+         {/* HEADER & FILTERS */}
+         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6 bg-white p-6 rounded-[40px] shadow-sm border border-slate-100">
+            <div>
+               <h2 className="text-3xl font-black text-slate-900 tracking-tighter uppercase">Painel de Inteligência</h2>
+               <p className="text-slate-500 font-bold text-xs mt-1 uppercase tracking-widest">
+                  {new Date(dateRange.start).toLocaleDateString()} ATÉ {new Date(dateRange.end).toLocaleDateString()}
+               </p>
             </div>
-            <div className="lg:col-span-3 flex justify-end">
-               <button
-                  onClick={handleExportCSV}
-                  disabled={isExporting || calls.length === 0}
-                  className="w-full lg:w-auto px-8 py-5 bg-emerald-600 text-white rounded-[24px] font-black uppercase tracking-widest text-[10px] shadow-2xl flex items-center justify-center gap-3 hover:bg-emerald-700 active:scale-95 transition-all disabled:opacity-30"
-               >
-                  {isExporting ? <Loader2 className="animate-spin" size={18} /> : <FileSpreadsheet size={18} />}
-                  {isExporting ? 'Processando...' : 'Exportar Atendimentos'}
+
+            <div className="flex flex-wrap items-center gap-4">
+               <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-2xl border border-slate-200">
+                  <Calendar size={16} className="text-slate-400 ml-2" />
+                  <input
+                     type="date"
+                     value={dateRange.start}
+                     onChange={e => setDateRange({ ...dateRange, start: e.target.value })}
+                     className="bg-transparent text-xs font-black uppercase text-slate-700 outline-none w-28"
+                  />
+                  <span className="text-slate-300 font-black">/</span>
+                  <input
+                     type="date"
+                     value={dateRange.end}
+                     onChange={e => setDateRange({ ...dateRange, end: e.target.value })}
+                     className="bg-transparent text-xs font-black uppercase text-slate-700 outline-none w-28"
+                  />
+               </div>
+
+               <button onClick={() => handleExport('csv')} className="p-4 bg-slate-900 text-white rounded-2xl hover:bg-slate-800 transition-colors">
+                  <Download size={20} />
                </button>
             </div>
          </div>
 
+         {/* TABS */}
+         <div className="flex overflow-x-auto no-scrollbar gap-2 pb-2">
+            {[
+               { id: 'overview', label: 'Visão Geral', icon: Target },
+               { id: 'communications', label: 'Comunicações', icon: MessageSquare },
+               { id: 'sales', label: 'Vendas & Receita', icon: DollarSign },
+               { id: 'operators', label: 'Produtividade', icon: Users },
+               { id: 'leads', label: 'Leads (Prospecção)', icon: Target },
+               { id: 'post_sale', label: 'Pós-Venda & Remarketing', icon: Timer },
+               { id: 'audit', label: 'Auditoria', icon: ClipboardList },
+            ].map(tab => (
+               <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id as any)}
+                  className={`px-6 py-4 rounded-3xl text-sm font-black uppercase tracking-wide transition-all flex items-center gap-3 whitespace-nowrap border ${activeTab === tab.id
+                     ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-200'
+                     : 'bg-white text-slate-400 border-slate-100 hover:bg-slate-50'
+                     }`}
+               >
+                  <tab.icon size={18} /> {tab.label}
+               </button>
+            ))}
+         </div>
+
          {isLoading ? (
-            <div className="h-96 flex flex-col items-center justify-center text-slate-300 gap-4">
-               <Loader2 className="animate-spin" size={64} />
-               <p className="font-black uppercase text-xs tracking-[0.3em]">Extraindo Inteligência de Dados...</p>
+            <div className="h-96 flex flex-col items-center justify-center text-slate-400">
+               <Loader2 className="animate-spin mb-4" size={48} />
+               <p className="font-black uppercase tracking-widest text-xs">Processando dados...</p>
             </div>
          ) : (
-            <div className="animate-in slide-in-from-bottom-6 duration-700">
+            <div className="space-y-8">
 
-               {activeTab === 'operators' && (
+               {/* OVERVIEW TAB */}
+               {activeTab === 'overview' && (
                   <div className="space-y-8">
-                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                        <div className="lg:col-span-12 bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm overflow-hidden">
-                           <h4 className="text-[11px] font-black text-slate-900 uppercase tracking-widest mb-8 flex items-center gap-2">
-                              <Trophy className="text-yellow-500" size={18} /> Ranking de Performance (Vendas + Agilidade)
-                           </h4>
-                           <div className="overflow-x-auto">
-                              <table className="w-full text-left">
-                                 <thead>
-                                    <tr className="border-b border-slate-100">
-                                       <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Operador</th>
-                                       <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4 text-center">TMA</th>
-                                       <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4 text-center">GAP Transição</th>
-                                       <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4 text-center">Concluídos</th>
-                                       <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4 text-center">Pulos (%)</th>
-                                       <th className="pb-6 text-[10px] font-black text-slate-900 uppercase tracking-widest px-4 text-right">Pontuação</th>
-                                    </tr>
-                                 </thead>
-                                 <tbody className="divide-y divide-slate-50">
-                                    {operatorMetrics.ranking.map((op, i) => (
-                                       <tr key={op.id} className="group hover:bg-slate-50 transition-all">
-                                          <td className="py-6 px-4">
-                                             <div className="flex items-center gap-3">
-                                                <div className="w-10 h-10 bg-slate-900 text-white rounded-xl flex items-center justify-center font-black text-sm">{op.name.charAt(0)}</div>
-                                                <span className="font-black text-slate-800">{op.name}</span>
-                                             </div>
-                                          </td>
-                                          <td className="py-6 px-4 text-center">
-                                             <span className="font-black text-slate-600 flex items-center justify-center gap-1"><Clock size={12} className="text-blue-400" /> {formatTime(op.tma)}</span>
-                                          </td>
-                                          <td className="py-6 px-4 text-center">
-                                             <div className="flex flex-col items-center">
-                                                <span className={`font-black flex items-center gap-1 ${op.avgGap > 120 ? 'text-red-500' : 'text-emerald-600'}`}>
-                                                   <Timer size={12} /> {formatTime(op.avgGap)}
-                                                </span>
-                                                <span className="text-[8px] font-bold text-slate-400 uppercase tracking-tight">Pico: {formatTime(op.maxGap)}</span>
-                                             </div>
-                                          </td>
-                                          <td className="py-6 px-4 text-center">
-                                             <span className="bg-slate-100 text-slate-700 px-4 py-1.5 rounded-full text-[11px] font-black">{op.completed}</span>
-                                          </td>
-                                          <td className="py-6 px-4 text-center">
-                                             <span className={`text-[10px] font-black px-2 py-0.5 rounded-md ${op.skipPercentage > 15 ? 'bg-red-50 text-red-500' : 'bg-slate-50 text-slate-400'}`}>{op.skipPercentage}%</span>
-                                          </td>
-                                          <td className="py-6 px-4 text-right">
-                                             <div className="flex items-center justify-end gap-2">
-                                                {i === 0 && <Trophy size={16} className="text-yellow-500 animate-bounce" />}
-                                                <span className="text-2xl font-black text-slate-900">{op.score}</span>
-                                             </div>
-                                          </td>
-                                       </tr>
-                                    ))}
-                                 </tbody>
-                              </table>
+                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        <MetricCard
+                           title="Receita Total"
+                           value={metrics.revenue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                           icon={DollarSign} color="emerald"
+                           trend={{ value: 12, isUp: true }}
+                        />
+                        <MetricCard
+                           title="Vendas Realizadas"
+                           value={metrics.totalSales}
+                           icon={Trophy} color="blue"
+                        />
+                        <MetricCard
+                           title="Taxa de Conversão"
+                           value={`${metrics.conversionRate.toFixed(1)}%`}
+                           icon={TrendingUp} color="amber"
+                           subtitle="Vendas sobre Contatos Totais"
+                        />
+                        <MetricCard
+                           title="Contatos Totais"
+                           value={metrics.totalContacts}
+                           icon={Phone} color="slate"
+                        />
+                     </div>
+
+                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        <div className="lg:col-span-2 bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8">Evolução de Atendimentos</h4>
+                           <div className="h-[300px]">
+                              <ResponsiveContainer width="100%" height="100%">
+                                 <AreaChart data={Object.entries(calls.reduce((acc: any, call) => {
+                                    const day = new Date(call.startTime).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+                                    acc[day] = (acc[day] || 0) + 1;
+                                    return acc;
+                                 }, {})).map(([date, count]) => ({ date, count }))}>
+                                    <defs>
+                                       <linearGradient id="colorCalls" x1="0" y1="0" x2="0" y2="1">
+                                          <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.1} />
+                                          <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                                       </linearGradient>
+                                    </defs>
+                                    <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} />
+                                    <Tooltip />
+                                    <Area type="monotone" dataKey="count" stroke="#3b82f6" strokeWidth={3} fillOpacity={1} fill="url(#colorCalls)" />
+                                 </AreaChart>
+                              </ResponsiveContainer>
+                           </div>
+                        </div>
+
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm flex flex-col">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8">Mix de Canais</h4>
+                           <div className="flex-1 flex items-center justify-center">
+                              <PieChart width={200} height={200}>
+                                 <Pie
+                                    data={[
+                                       { name: 'Ligações', value: calls.filter(c => c.type !== CallType.WHATSAPP).length },
+                                       { name: 'WhatsApp', value: whatsappTasks.filter(w => w.status === 'completed').length + calls.filter(c => c.type === CallType.WHATSAPP).length }
+                                    ]}
+                                    innerRadius={60}
+                                    outerRadius={80}
+                                    paddingAngle={5}
+                                    dataKey="value"
+                                 >
+                                    <Cell key="cell-0" fill="#3b82f6" />
+                                    <Cell key="cell-1" fill="#10b981" />
+                                 </Pie>
+                                 <Tooltip />
+                              </PieChart>
+                           </div>
+                           <div className="flex justify-center gap-6 mt-4">
+                              <div className="flex items-center gap-2 text-xs font-bold text-slate-600">
+                                 <div className="w-3 h-3 rounded-full bg-blue-500" /> Ligações
+                              </div>
+                              <div className="flex items-center gap-2 text-xs font-bold text-slate-600">
+                                 <div className="w-3 h-3 rounded-full bg-emerald-500" /> WhatsApp
+                              </div>
                            </div>
                         </div>
                      </div>
                   </div>
                )}
 
-               {activeTab === 'overview' && (
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                     <div className="lg:col-span-8 bg-white p-12 rounded-[64px] shadow-sm border border-slate-100">
-                        <h4 className="text-[11px] font-black text-slate-900 uppercase tracking-widest flex items-center gap-3 mb-12">
-                           <TrendingUp className="text-blue-600" size={24} /> Saúde Operacional por Estágio (IDE)
-                        </h4>
-                        {stageStats.length > 0 ? (
-                           <div className="h-[400px]">
+               {/* COMMUNICATIONS TAB */}
+               {activeTab === 'communications' && (
+                  <div className="space-y-8">
+                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <MetricCard title="Total Ligações" value={calls.filter(c => c.type !== CallType.WHATSAPP).length} icon={Phone} color="blue" />
+                        <MetricCard
+                           title="WhatsApp Ativos"
+                           value={whatsappTasks.filter(w => w.status === 'completed').length + calls.filter(c => c.type === CallType.WHATSAPP).length}
+                           icon={MessageSquare} color="emerald"
+                        />
+                        <MetricCard
+                           title="Pulos / Sem Contato"
+                           value={
+                              events.filter(e => e.eventType === OperatorEventType.PULAR_ATENDIMENTO).length +
+                              whatsappTasks.filter(w => w.status === 'skipped').length
+                           }
+                           icon={PhoneOff} color="rose"
+                        />
+                     </div>
+
+                     <div className="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm">
+                        <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8">Detalhamento por Status</h4>
+                        <div className="h-[400px]">
+                           <ResponsiveContainer width="100%" height="100%">
+                              <BarChart data={[
+                                 { name: 'Atendido', value: calls.filter(c => c.type !== CallType.WHATSAPP).length, fill: '#3b82f6' },
+                                 {
+                                    name: 'Sem Resposta (Pulo)',
+                                    value: events.filter(e => e.eventType === OperatorEventType.PULAR_ATENDIMENTO && (!e.note || !e.note.toLowerCase().includes('inválido'))).length,
+                                    fill: '#f59e0b'
+                                 },
+                                 {
+                                    name: 'Número Inválido',
+                                    value: events.filter(e => e.eventType === OperatorEventType.PULAR_ATENDIMENTO && e.note?.toLowerCase().includes('inválido')).length,
+                                    fill: '#ef4444'
+                                 },
+                                 { name: 'WhatsApp Entregue', value: whatsappTasks.filter(w => w.status === 'completed').length + calls.filter(c => c.type === CallType.WHATSAPP).length, fill: '#10b981' },
+                              ]}>
+                                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fontWeight: 700, fill: '#64748b' }} />
+                                 <YAxis axisLine={false} tickLine={false} />
+                                 <Tooltip cursor={{ fill: '#f8fafc' }} />
+                                 <Bar dataKey="value" radius={[8, 8, 8, 8]} barSize={60} />
+                              </BarChart>
+                           </ResponsiveContainer>
+                        </div>
+                     </div>
+                  </div>
+               )}
+
+               {/* SALES TAB */}
+               {activeTab === 'sales' && (
+                  <div className="space-y-8">
+                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-6">Ranking de Vendedores</h4>
+                           <div className="space-y-4">
+                              {Object.entries(sales.reduce((acc: any, sale) => {
+                                 const name = sale.externalSalesperson || operators.find(o => o.id === sale.operatorId)?.name || 'N/A';
+                                 if (sale.status === SaleStatus.ENTREGUE) {
+                                    acc[name] = (acc[name] || 0) + (sale.value || 0);
+                                 }
+                                 return acc;
+                              }, {})).sort(([, a]: any, [, b]: any) => b - a).map(([name, val]: any, i) => (
+                                 <div key={name} className="flex items-center gap-4 p-4 border border-slate-50 rounded-2xl hover:bg-slate-50 transition-colors">
+                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-xs ${i === 0 ? 'bg-yellow-100 text-yellow-700' : 'bg-slate-100 text-slate-500'}`}>
+                                       {i + 1}
+                                    </div>
+                                    <div className="flex-1">
+                                       <p className="font-black text-slate-800 text-sm">{name}</p>
+                                       <div className="h-1.5 w-full bg-slate-100 rounded-full mt-2 overflow-hidden">
+                                          <div className="h-full bg-blue-500 rounded-full" style={{ width: `${(val / metrics.revenue) * 100}%` }} />
+                                       </div>
+                                    </div>
+                                    <p className="font-black text-emerald-600 text-sm">
+                                       {val.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                    </p>
+                                 </div>
+                              ))}
+                           </div>
+                        </div>
+
+                        <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-6">Vendas por Categoria</h4>
+                           <div className="h-[300px]">
                               <ResponsiveContainer width="100%" height="100%">
-                                 <BarChart data={stageStats}>
-                                    <XAxis dataKey="stage" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10, fontWeight: 900 }} />
-                                    <YAxis hide domain={[0, 100]} />
+                                 <PieChart>
+                                    <Pie
+                                       data={Object.entries(sales.reduce((acc: any, sale) => {
+                                          if (sale.status === SaleStatus.ENTREGUE) {
+                                             acc[sale.category] = (acc[sale.category] || 0) + 1;
+                                          }
+                                          return acc;
+                                       }, {})).map(([name, value]) => ({ name, value }))}
+                                       innerRadius={80}
+                                       outerRadius={120}
+                                       paddingAngle={2}
+                                       dataKey="value"
+                                    >
+                                       {Object.keys(sales).map((_, index) => (
+                                          <Cell key={`cell-${index}`} fill={['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'][index % 5]} />
+                                       ))}
+                                    </Pie>
+                                    <Tooltip />
+                                    <Legend />
+                                 </PieChart>
+                              </ResponsiveContainer>
+                           </div>
+                        </div>
+                     </div>
+                  </div>
+               )}
+
+               {/* OPERATORS TAB */}
+               {activeTab === 'operators' && (
+                  <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm overflow-hidden">
+                     <table className="w-full text-left">
+                        <thead className="border-b border-slate-100">
+                           <tr>
+                              <th className="pb-6 pl-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Operador</th>
+                              <th className="pb-6 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">Ligações</th>
+                              <th className="pb-6 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">WhatsApp</th>
+                              <th className="pb-6 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">Vendas</th>
+                              <th className="pb-6 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">TMA</th>
+                              <th className="pb-6 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">Gap Mediano</th>
+                              <th className="pb-6 pr-4 text-[10px] font-black uppercase text-slate-400 tracking-widest text-right">Score</th>
+                           </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                           {operators.filter(op => op.role !== 'ADMIN').map(op => {
+                              const opCalls = calls.filter(c => c.operatorId === op.id && c.type !== CallType.WHATSAPP);
+                              const opWaCount = whatsappTasks.filter(w => w.assignedTo === op.id && w.status === 'completed').length + calls.filter(c => c.operatorId === op.id && c.type === CallType.WHATSAPP).length;
+                              const opSales = sales.filter(s => s.operatorId === op.id && s.status === SaleStatus.ENTREGUE);
+
+                              const totalTime = opCalls.reduce((acc, c) => acc + (c.duration || 0), 0);
+                              const tma = opCalls.length > 0 ? totalTime / opCalls.length : 0;
+
+                              // Gap Calculation
+                              const opEvents = events.filter(e => e.operatorId === op.id).sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+                              const gaps: number[] = [];
+                              let lastEnd = 0;
+
+                              opEvents.forEach(e => {
+                                 const time = new Date(e.timestamp).getTime();
+                                 if (e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO || e.eventType === OperatorEventType.WHATSAPP_COMPLETE) {
+                                    lastEnd = time;
+                                 } else if (lastEnd > 0 && (e.eventType === OperatorEventType.INICIAR_PROXIMO_ATENDIMENTO || e.eventType === OperatorEventType.WHATSAPP_START)) {
+                                    const diff = (time - lastEnd) / 1000;
+                                    if (diff > 0 && diff < 3600) gaps.push(diff); // Filter unrealistic gaps
+                                    lastEnd = 0;
+                                 }
+                              });
+
+                              const medianGap = getMedian(gaps);
+
+                              // Simple Score: (Calls + WA) + (Sales * 5) - (Gap > 60s penalties)
+                              const score = (opCalls.length + opWaCount) + (opSales.length * 5) - (medianGap > 60 ? (medianGap - 60) * 0.1 : 0);
+
+                              return (
+                                 <tr key={op.id} className="group hover:bg-slate-50 transition-colors">
+                                    <td className="py-6 pl-4 font-black text-slate-700 text-sm">{op.name}</td>
+                                    <td className="py-6 text-center text-xs font-bold text-slate-600">{opCalls.length}</td>
+                                    <td className="py-6 text-center text-xs font-bold text-slate-600">{opWaCount}</td>
+                                    <td className="py-6 text-center text-xs font-black text-emerald-600">{opSales.length}</td>
+                                    <td className="py-6 text-center text-xs font-mono text-slate-500">{Math.round(tma)}s</td>
+                                    <td className="py-6 text-center">
+                                       <span className={`px-3 py-1 rounded-full text-[10px] font-black ${medianGap < 30 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                                          {Math.round(medianGap)}s
+                                       </span>
+                                    </td>
+                                    <td className="py-6 pr-4 text-right font-black text-blue-600">{Math.max(0, Math.round(score))}</td>
+                                 </tr>
+                              );
+                           })}
+                        </tbody>
+                     </table>
+                  </div>
+               )}
+
+               {/* AUDIT TAB */}
+               {activeTab === 'audit' && (
+                  <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm space-y-6">
+                     <div className="flex flex-wrap gap-4 items-center justify-between pb-6 border-b border-slate-50">
+                        <div className="flex gap-4 items-center flex-1">
+                           <div className="relative flex-1 max-w-sm">
+                              <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                              <input
+                                 type="text"
+                                 placeholder="Buscar por cliente ou telefone..."
+                                 value={searchTerm}
+                                 onChange={e => setSearchTerm(e.target.value)}
+                                 className="w-full pl-12 pr-4 py-3 bg-slate-50 rounded-2xl border-none font-bold text-slate-700 focus:ring-2 focus:ring-blue-100 outline-none transition-all placeholder:text-slate-400 text-sm"
+                              />
+                           </div>
+                           <select
+                              value={filterOperator}
+                              onChange={e => setFilterOperator(e.target.value)}
+                              className="px-4 py-3 bg-slate-50 rounded-2xl font-bold text-slate-600 outline-none text-sm cursor-pointer hover:bg-slate-100"
+                           >
+                              <option value="all">Todos Operadores</option>
+                              {operators.map(op => <option key={op.id} value={op.id}>{op.name}</option>)}
+                           </select>
+                           <select
+                              value={filterType}
+                              onChange={e => setFilterType(e.target.value as any)}
+                              className="px-4 py-3 bg-slate-50 rounded-2xl font-bold text-slate-600 outline-none text-sm cursor-pointer hover:bg-slate-100"
+                           >
+                              <option value="all">Todos Tipos</option>
+                              <option value="call">Ligações</option>
+                              <option value="whatsapp">WhatsApp</option>
+                           </select>
+                        </div>
+                        <div className="text-sm font-black text-slate-400 uppercase tracking-widest">
+                           {getFilteredAuditData().length} Registros
+                        </div>
+                     </div>
+
+                     <div className="overflow-x-auto">
+                        <table className="w-full text-left">
+                           <thead className="bg-slate-50/50 border-b border-slate-100">
+                              <tr>
+                                 <th className="py-4 px-6 text-[10px] font-black uppercase text-slate-400 tracking-widest pl-8">Data/Hora</th>
+                                 <th className="py-4 px-6 text-[10px] font-black uppercase text-slate-400 tracking-widest">Tipo</th>
+                                 <th className="py-4 px-6 text-[10px] font-black uppercase text-slate-400 tracking-widest">Operador</th>
+                                 <th className="py-4 px-6 text-[10px] font-black uppercase text-slate-400 tracking-widest">Cliente</th>
+                                 <th className="py-4 px-6 text-[10px] font-black uppercase text-slate-400 tracking-widest">Duração</th>
+                                 <th className="py-4 px-6 text-[10px] font-black uppercase text-slate-400 tracking-widest">Status</th>
+                                 <th className="py-4 px-6 text-[10px] font-black uppercase text-slate-400 tracking-widest">Ações</th>
+                              </tr>
+                           </thead>
+                           <tbody className="divide-y divide-slate-50">
+                              {getFilteredAuditData().slice(0, 100).map((item: any, i) => {
+                                 const isCall = item._type === 'call';
+                                 const date = new Date(isCall ? item.startTime : item.createdAt).toLocaleString();
+                                 const opName = operators.find(o => o.id === (isCall ? item.operatorId : item.assignedTo))?.name || 'N/A';
+                                 const clientName = clients.find(c => c.id === item.clientId)?.name || item.clientName || 'N/A';
+
+                                 return (
+                                    <tr
+                                       key={item.id + i}
+                                       onClick={() => setSelectedInteraction(item)}
+                                       className="hover:bg-blue-50/50 cursor-pointer group transition-colors"
+                                    >
+                                       <td className="py-4 px-6 text-xs font-bold text-slate-600 pl-8">{date}</td>
+                                       <td className="py-4 px-6">
+                                          <span className={`px-2 py-1 rounded-md text-[9px] font-black uppercase ${isCall ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                                             {isCall ? 'Ligação' : 'WhatsApp'}
+                                          </span>
+                                          {item.relatedVisit ? (
+                                             <div>
+                                                <p className="font-bold text-slate-800">Detalhes da Visita</p>
+                                                <p className="text-sm text-slate-600">Data: {new Date((item.relatedVisit as any).date || item.relatedVisit.createdAt).toLocaleDateString()}</p>
+                                                <p className="text-sm text-slate-600">Status: {item.relatedVisit.status}</p>
+                                                {item.relatedVisit.notes && <p className="text-sm text-slate-500 italic mt-2">"{item.relatedVisit.notes}"</p>}
+                                             </div>
+                                          ) : null}
+                                       </td>
+                                       <td className="py-4 px-6 text-xs text-slate-600">{opName}</td>
+                                       <td className="py-4 px-6 text-xs font-bold text-slate-800">{clientName}</td>
+                                       <td className="py-4 px-6 text-xs font-mono text-slate-500">{isCall ? `${item.duration}s` : '-'}</td>
+                                       <td className="py-4 px-6 text-xs font-bold text-slate-500 uppercase">{isCall ? 'Concluída' : item.status}</td>
+                                       <td className="py-4 px-6">
+                                          <button className="text-blue-500 opacity-0 group-hover:opacity-100 font-bold text-xs uppercase hover:underline">
+                                             Ver Detalhes
+                                          </button>
+                                       </td>
+                                    </tr>
+                                 );
+                              })}
+                           </tbody>
+                        </table>
+                     </div>
+                  </div>
+               )}
+
+               {/* LEADS TAB */}
+               {activeTab === 'leads' && (
+                  <div className="space-y-8">
+                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        <MetricCard
+                           title="Total de Leads"
+                           value={prospects.length}
+                           icon={Target}
+                           color="blue"
+                        />
+                        <MetricCard
+                           title="Leads Qualificados"
+                           value={prospects.filter(p => p.funnel_status === 'QUALIFIED' || p.funnel_status === 'PROPOSAL_SENT').length}
+                           icon={Trophy}
+                           color="emerald"
+                        />
+                        <MetricCard
+                           title="Em Negociação"
+                           value={prospects.filter(p => p.funnel_status === 'PROPOSAL_SENT' || p.funnel_status === 'PHYSICAL_VISIT').length}
+                           icon={DollarSign}
+                           color="amber"
+                        />
+                        <MetricCard
+                           title="Novos (Essa Semana)"
+                           value={prospects.length} // Placeholder for now, date filtering on prospects needs createdAt
+                           icon={Zap}
+                           color="slate"
+                           subtitle="Sem filtros de data ainda"
+                        />
+                     </div>
+
+                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        {/* Funnel Status Breakdown */}
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8">Funil de Vendas</h4>
+                           <div className="h-[300px]">
+                              <ResponsiveContainer width="100%" height="100%">
+                                 <BarChart layout="vertical" data={Object.entries(prospects.reduce((acc: any, p) => {
+                                    const status = p.funnel_status || 'NEW';
+                                    acc[status] = (acc[status] || 0) + 1;
+                                    return acc;
+                                 }, {})).map(([name, value]) => ({ name, value }))}>
+                                    <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="#f1f5f9" />
+                                    <XAxis type="number" hide />
+                                    <YAxis dataKey="name" type="category" width={120} tick={{ fontSize: 10, fontWeight: 700 }} />
                                     <Tooltip cursor={{ fill: '#f8fafc' }} />
-                                    <Bar dataKey="percentage" radius={[16, 16, 16, 16]} barSize={45}>
-                                       {stageStats.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
+                                    <Bar dataKey="value" fill="#3b82f6" radius={[0, 4, 4, 0]} barSize={30}>
+                                       <Cell fill="#3b82f6" />
                                     </Bar>
                                  </BarChart>
                               </ResponsiveContainer>
                            </div>
-                        ) : (
-                           <div className="h-[400px] flex items-center justify-center text-slate-300 font-black uppercase text-[10px] tracking-widest">Sem dados no período</div>
-                        )}
-                     </div>
-                     <div className="lg:col-span-4 bg-slate-900 p-10 rounded-[56px] text-white shadow-2xl flex flex-col justify-between">
-                        <div>
-                           <h5 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-8">IPM - Indice de Performance Médio</h5>
-                           <div className="space-y-6">
-                              <div className="flex justify-between items-center"><span className="text-sm font-bold text-slate-400">Total Ligações</span><span className="text-xl font-black text-blue-400">{calls.length}</span></div>
-                              <div className="flex justify-between items-center"><span className="text-sm font-bold text-slate-400">Média TMA</span><span className="text-xl font-black text-white">{formatTime(calls.length > 0 ? calls.reduce((a, b) => a + b.duration, 0) / calls.length : 0)}</span></div>
-                              <div className="flex justify-between items-center"><span className="text-sm font-bold text-slate-400">Taxa de Pulos</span><span className="text-xl font-black text-red-500">{tasks.length > 0 ? Math.round((tasks.filter(t => t.status === 'skipped').length / tasks.length) * 100) : 0}%</span></div>
-                           </div>
                         </div>
-                     </div>
-                  </div>
-               )}
 
-               {activeTab === 'deep_dive' && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-                     {deduplicatedAnalysis.map((q: any) => {
-                        const baseQuestion = questions.find(base => base.id === q.id || base.text === q.text || base.order === q.order);
-                        return (
-                           <div key={q.id} className="bg-white p-10 rounded-[48px] border border-slate-100 shadow-sm flex flex-col group hover:border-blue-200 transition-all">
-                              <div className="flex justify-between items-start mb-6">
-                                 <div className="bg-blue-50 text-blue-600 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest">IP: {q.positivity}%</div>
-                                 <span className="text-[10px] font-black text-slate-300">ORDEM {q.order}</span>
-                              </div>
-                              <h4 className="text-sm font-black text-slate-800 leading-tight mb-10 h-12 line-clamp-2">{q.text}</h4>
-                              <div className="flex-1 space-y-6">
-                                 {q.distribution.map((d: any, idx: number) => {
-                                    const normalizeValue = (s: string) => s ? s.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, "") : "";
-                                    const normName = normalizeValue(d.name);
-                                    const isExcellent = ['sim', 'otimo', 'atendeu', 'no prazo', 'boa', 'alto', 'quimicos', 'fotovoltaico', 'aquecedores'].includes(normName);
-                                    const isBad = ['nao', 'ruim', 'precisa melhorar', 'com problema', 'baixo', 'não, cliente perdido'].includes(normName);
-                                    const colorClass = isExcellent ? 'bg-emerald-500' : isBad ? 'bg-red-500' : 'bg-amber-500';
-                                    const percentage = q.responsesCount > 0 ? (d.value / q.responsesCount) * 100 : 0;
-                                    return (
-                                       <div key={idx} className="space-y-2 group/item cursor-pointer" onClick={() => baseQuestion && openAuditGrid(baseQuestion, d.name)}>
-                                          <div className="flex items-center justify-between">
-                                             <span className="text-[11px] font-black text-slate-600 uppercase tracking-tight">{d.name}</span>
-                                             <span className="text-[12px] font-black text-slate-900">{d.value}</span>
-                                          </div>
-                                          <div className="w-full h-3.5 bg-slate-50 rounded-full overflow-hidden border border-slate-100">
-                                             <div className={`h-full ${colorClass} transition-all duration-1000 shadow-sm`} style={{ width: `${percentage}%` }}></div>
-                                          </div>
-                                       </div>
-                                    );
-                                 })}
-                              </div>
-                           </div>
-                        );
-                     })}
-                  </div>
-               )}
-
-               {activeTab === 'protocols' && (
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                     <div className="bg-white p-12 rounded-[64px] border border-slate-100 shadow-sm">
-                        <h4 className="text-[11px] font-black text-slate-900 uppercase tracking-widest mb-8 flex items-center gap-2"><ClipboardList className="text-blue-500" size={18} /> Protocolos por Setor</h4>
-                        <div className="h-80">
-                           <ResponsiveContainer width="100%" height="100%">
-                              <BarChart data={detailedStats?.protocolCategoryStats} onClick={(d: any) => d?.activePayload?.[0] && openProtocolDrillDown(d.activePayload[0].payload.id, d.activePayload[0].payload.name)}>
-                                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10, fontWeight: 900 }} />
-                                 <Tooltip cursor={{ fill: '#f8fafc' }} />
-                                 <Bar dataKey="value" fill="#2563eb" radius={[12, 12, 0, 0]} barSize={40} />
-                              </BarChart>
-                           </ResponsiveContainer>
-                        </div>
-                     </div>
-
-                     <div className="bg-white p-12 rounded-[64px] border border-slate-100 shadow-sm">
-                        <h4 className="text-[11px] font-black text-slate-900 uppercase tracking-widest mb-8 flex items-center gap-2"><PhoneOff className="text-red-500" size={18} /> Motivos de Pulos (Skips)</h4>
-                        <div className="h-80">
-                           <ResponsiveContainer width="100%" height="100%">
-                              <BarChart data={detailedStats?.skipStats} onClick={(d: any) => d?.activePayload?.[0] && openSkipDrillDown(d.activePayload[0].payload.name)}>
-                                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10, fontWeight: 900 }} />
-                                 <Tooltip cursor={{ fill: '#f8fafc' }} />
-                                 <Bar dataKey="value" fill="#ef4444" radius={[12, 12, 0, 0]} barSize={40} />
-                              </BarChart>
-                           </ResponsiveContainer>
-                        </div>
-                     </div>
-                  </div>
-               )}
-
-               {activeTab === 'visits' && (
-                  <div className="space-y-8">
-                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <div className="bg-emerald-50 p-8 rounded-[32px] text-center border border-emerald-100">
-                           <p className="text-[9px] font-black uppercase text-emerald-400 tracking-widest mb-1">Total de Visitas</p>
-                           <p className="text-4xl font-black text-emerald-600">{visits.length}</p>
-                        </div>
-                        <div className="bg-blue-50 p-8 rounded-[32px] text-center border border-blue-100">
-                           <p className="text-[9px] font-black uppercase text-blue-400 tracking-widest mb-1">Agendadas</p>
-                           <p className="text-4xl font-black text-blue-600">{visits.filter((v: any) => v.status === 'PENDING').length}</p>
-                        </div>
-                        <div className="bg-slate-900 p-8 rounded-[32px] text-center text-white">
-                           <p className="text-[9px] font-black uppercase text-slate-400 tracking-widest mb-1">Concluídas</p>
-                           <p className="text-4xl font-black">{visits.filter((v: any) => v.status === 'COMPLETED').length}</p>
-                        </div>
-                     </div>
-
-                     <div className="bg-white p-12 rounded-[64px] border border-slate-100 shadow-sm">
-                        <h4 className="text-[11px] font-black text-slate-900 uppercase tracking-widest mb-8 flex items-center gap-2"><MapPin className="text-blue-500" size={18} /> Visitas por Vendedor</h4>
-                        <div className="h-80">
-                           <ResponsiveContainer width="100%" height="100%">
-                              <BarChart data={Object.entries(visits.reduce((acc: any, v: any) => {
-                                 const name = v.salespersonName || 'Desconhecido';
-                                 acc[name] = (acc[name] || 0) + 1;
-                                 return acc;
-                              }, {})).map(([name, value]) => ({ name, value }))}>
-                                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10, fontWeight: 900 }} />
-                                 <Tooltip cursor={{ fill: '#f8fafc' }} />
-                                 <Bar dataKey="value" fill="#10b981" radius={[12, 12, 0, 0]} barSize={40} />
-                              </BarChart>
-                           </ResponsiveContainer>
-                        </div>
-                     </div>
-                  </div>
-               )}
-            </div>
-         )}
-
-         {/* DRILL DOWN MODAL (TABLE VIEW) */}
-         {drillDownData.isOpen && (
-            <div className="fixed inset-0 z-[200] bg-slate-900/95 backdrop-blur-xl flex items-center justify-center p-2 md:p-8">
-               <div className="bg-white w-full h-full max-w-[98vw] rounded-[48px] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in duration-300">
-                  <div className="bg-slate-900 p-8 text-white flex justify-between items-center shrink-0">
-                     <div className="flex items-center gap-6">
-                        <div className="w-14 h-14 bg-blue-600 rounded-2xl flex items-center justify-center font-black text-xl shadow-2xl">ID</div>
-                        <div>
-                           <h3 className="text-xl md:text-2xl font-black uppercase tracking-tighter">Auditoria Dreon</h3>
-                           <p className="text-blue-400 text-[10px] font-black uppercase mt-1 tracking-[0.2em]">{drillDownData.title} &bull; <span className="text-white">{drillDownData.filterLabel}</span></p>
-                        </div>
-                     </div>
-                     <button onClick={() => setDrillDownData({ ...drillDownData, isOpen: false })} className="p-3 hover:bg-white/10 rounded-full transition-all"><X size={28} /></button>
-                  </div>
-
-                  <div className="flex-1 overflow-auto bg-slate-50 custom-scrollbar">
-                     {drillDownData.data.length > 0 ? (
-                        <div className="p-4 md:p-8 min-w-max">
-                           <table className="w-full text-left border-separate border-spacing-0 bg-white rounded-3xl shadow-sm border border-slate-200">
-                              <thead>
-                                 <tr className="bg-slate-50">
-                                    <th className="sticky left-0 bg-slate-50 z-20 py-5 px-6 text-[10px] font-black uppercase text-slate-400 tracking-widest border-b border-slate-200">Cliente</th>
-                                    <th className="py-5 px-6 text-[10px] font-black uppercase text-slate-400 tracking-widest border-b border-slate-200">Operador</th>
-                                    <th className="py-5 px-6 text-[10px] font-black uppercase text-slate-400 tracking-widest border-b border-slate-200">Tipo</th>
-                                    <th className="py-5 px-6 text-[10px] font-black uppercase text-slate-400 tracking-widest border-b border-slate-200">Data</th>
-                                    {drillDownData.type === 'question' && questions
-                                       .filter(q => !drillDownData.selectedCallType || q.type === drillDownData.selectedCallType || q.type === 'ALL')
-                                       .map(q => (
-                                          <th key={q.id} className="py-5 px-6 text-[10px] font-black uppercase text-blue-600 tracking-widest border-b border-slate-200 min-w-[200px] bg-blue-50/20">{q.text}</th>
-                                       ))}
-                                    {drillDownData.type === 'protocol' && <th className="py-5 px-6 text-[10px] font-black uppercase text-slate-400 tracking-widest border-b border-slate-200">Status</th>}
-                                    {drillDownData.type === 'skip' && <th className="py-5 px-6 text-[10px] font-black uppercase text-slate-400 tracking-widest border-b border-slate-200">Motivo Pulo</th>}
-                                 </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                 {drillDownData.data.map((item, idx) => (
-                                    <tr
-                                       key={idx}
-                                       onClick={() => drillDownData.type === 'question' && setSelectedAuditCall(item)}
-                                       className={`transition-colors group ${drillDownData.type === 'question' ? 'cursor-pointer hover:bg-blue-50/50' : 'hover:bg-slate-50'}`}
+                        {/* Leads by Origin */}
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8">Origem dos Leads</h4>
+                           <div className="h-[300px] flex justify-center">
+                              <ResponsiveContainer width="100%" height="100%">
+                                 <PieChart>
+                                    <Pie
+                                       data={Object.entries(prospects.reduce((acc: any, p) => {
+                                          const origin = p.origin || 'Desconhecido';
+                                          acc[origin] = (acc[origin] || 0) + 1;
+                                          return acc;
+                                       }, {})).map(([name, value]) => ({ name, value }))}
+                                       innerRadius={60}
+                                       outerRadius={100}
+                                       paddingAngle={2}
+                                       dataKey="value"
                                     >
-                                       <td className="sticky left-0 bg-white group-hover:bg-inherit z-10 py-5 px-6 border-r border-slate-50">
-                                          <p className="font-black text-slate-800 text-sm">{item.client?.name || item.clients?.name || 'Manual'}</p>
-                                          <span className="text-[10px] font-bold text-blue-600">{item.client?.phone || item.clients?.phone}</span>
-                                       </td>
-                                       <td className="py-5 px-6">
-                                          <span className="font-bold text-slate-600 text-xs">@{item.operator?.name || item.profiles?.username_display || item.operator?.username}</span>
-                                       </td>
-                                       <td className="py-5 px-6">
-                                          <span className="px-2 py-1 bg-slate-100 rounded text-[9px] font-black uppercase text-slate-500">{item.type || 'CHAMADA'}</span>
-                                       </td>
-                                       <td className="py-5 px-6 text-[10px] font-bold text-slate-400 whitespace-nowrap">
-                                          {new Date(item.startTime || item.openedAt || item.deadline).toLocaleString('pt-BR')}
-                                       </td>
-                                       {drillDownData.type === 'question' && questions
-                                          .filter(q => !drillDownData.selectedCallType || q.type === drillDownData.selectedCallType || q.type === 'ALL')
-                                          .map(q => {
-                                             const ans = dataService.getResponseValue(item.responses, q);
-                                             return (
-                                                <td key={q.id} className="py-5 px-6 bg-slate-50/10 text-[9px] font-black uppercase text-slate-600">{ans || '-'}</td>
-                                             );
-                                          })}
-                                       {drillDownData.type === 'protocol' && (
-                                          <td className="py-5 px-6"><span className="bg-slate-900 text-white px-3 py-1 rounded-md text-[9px] font-black uppercase">{item.status}</span></td>
-                                       )}
-                                       {drillDownData.type === 'skip' && (
-                                          <td className="py-5 px-6 font-bold text-red-500 italic text-xs">{item.skipReason}</td>
-                                       )}
-                                    </tr>
-                                 ))}
-                              </tbody>
-                           </table>
+                                       <Cell fill="#3b82f6" />
+                                       <Cell fill="#10b981" />
+                                       <Cell fill="#f59e0b" />
+                                       <Cell fill="#ef4444" />
+                                    </Pie>
+                                    <Tooltip />
+                                    <Legend />
+                                 </PieChart>
+                              </ResponsiveContainer>
+                           </div>
                         </div>
-                     ) : (
-                        <div className="h-full flex flex-col items-center justify-center text-slate-300">
-                           <AlertCircle size={64} className="animate-pulse" />
-                           <p className="font-black uppercase text-xs mt-6 tracking-[0.3em]">Nenhum registro encontrado.</p>
-                        </div>
-                     )}
+                     </div>
                   </div>
-                  <div className="p-8 bg-white border-t border-slate-100 flex justify-end">
-                     <button onClick={() => setDrillDownData({ ...drillDownData, isOpen: false })} className="px-12 py-5 bg-slate-900 text-white rounded-[24px] font-black uppercase tracking-widest text-[11px] shadow-2xl active:scale-95 transition-all">Fechar Auditoria</button>
-                  </div>
-               </div>
+               )}
+
+               {/* POST-SALE & REMARKETING TAB */}
+               {activeTab === 'post_sale' && (
+                  <PostSaleRemarketingReport
+                     user={user}
+                     operators={operators}
+                     onOpenProspect={(id: string) => setDrawerProspectId(id)}
+                  />
+               )}
+
+
             </div>
          )}
 
-         {/* FICHA DE AUDITORIA COMPLETA */}
-         {selectedAuditCall && (
-            <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-900/90 backdrop-blur-2xl p-4 animate-in fade-in zoom-in duration-300">
-               <div className="bg-white w-full max-w-4xl max-h-[90vh] rounded-[56px] shadow-2xl flex flex-col overflow-hidden">
-                  <div className="bg-slate-900 p-10 text-white flex justify-between items-center shrink-0">
-                     <div>
-                        <h3 className="text-2xl font-black uppercase tracking-tighter">Ficha de Atendimento Real</h3>
-                        <p className="text-blue-400 text-[10px] font-black uppercase tracking-widest mt-1">
-                           {selectedAuditCall.client?.name || selectedAuditCall.clients?.name} &bull; Operador: {selectedAuditCall.operator?.name || selectedAuditCall.profiles?.username_display}
-                        </p>
-                     </div>
-                     <button onClick={() => setSelectedAuditCall(null)} className="p-3 hover:bg-white/10 rounded-full transition-all"><X size={28} /></button>
-                  </div>
-
-                  <div className="flex-1 overflow-y-auto p-12 space-y-12 custom-scrollbar">
-                     <section className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                        <div className="space-y-4">
-                           <h4 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2"><MapPin size={16} className="text-red-500" /> Detalhes do Cliente</h4>
-                           <div className="p-6 bg-slate-50 rounded-[32px] border border-slate-100">
-                              <p className="text-lg font-black text-slate-800">{selectedAuditCall.client?.name || selectedAuditCall.clients?.name}</p>
-                              <p className="text-sm font-bold text-blue-600 mt-1">{selectedAuditCall.client?.phone || selectedAuditCall.clients?.phone}</p>
-                              <p className="text-xs text-slate-500 mt-4 leading-relaxed">{selectedAuditCall.client?.address || selectedAuditCall.clients?.address || 'Sem endereço'}</p>
-                              <div className="flex flex-wrap gap-2 mt-4">
-                                 {(selectedAuditCall.client?.items || selectedAuditCall.clients?.items || []).map((it: string) => (
-                                    <span key={it} className="bg-white text-[9px] font-black uppercase px-3 py-1 rounded-lg border border-slate-200">{it}</span>
-                                 ))}
-                              </div>
-                           </div>
-                        </div>
-                        <div className="space-y-4">
-                           <h4 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2"><Clock size={16} className="text-indigo-500" /> Cronometria</h4>
-                           <div className="p-6 bg-slate-50 rounded-[32px] border border-slate-100 flex flex-col justify-center gap-6 h-[168px]">
-                              <div className="flex justify-between items-center">
-                                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Início Chamada:</span>
-                                 <span className="text-xs font-bold text-slate-800">{new Date(selectedAuditCall.startTime).toLocaleString()}</span>
-                              </div>
-                              <div className="flex justify-between items-center">
-                                 <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Duração Conversa:</span>
-                                 <span className="text-lg font-black text-slate-900">{formatTime(selectedAuditCall.duration)}</span>
-                              </div>
-                           </div>
-                        </div>
-                     </section>
-
-                     <section className="space-y-6">
-                        <h4 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
-                           <FileText className="text-blue-600" size={20} /> Relatório Escrito do Operador
-                        </h4>
-                        <div className="p-8 bg-blue-50/30 rounded-[32px] border border-blue-100 text-slate-800 font-bold italic whitespace-pre-wrap leading-relaxed shadow-sm">
-                           {selectedAuditCall.responses?.written_report || "Nenhum relatório escrito registrado para esta chamada."}
-                        </div>
-                     </section>
-
-                     <section className="space-y-6">
-                        <h4 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
-                           <ClipboardList className="text-indigo-600" size={20} /> Respostas do Questionário
-                        </h4>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                           {Object.entries(selectedAuditCall.responses || {}).filter(([k]) => k !== 'written_report' && k !== 'call_type' && !k.endsWith('_note')).map(([qId, response]: any) => {
-                              const question = questions.find(q => q.id === qId || q.id.toLowerCase() === qId.toLowerCase());
-                              const label = question ? `${question.order}. ${question.text}` : qId.toUpperCase();
-                              return (
-                                 <div key={qId} className="p-6 bg-white border border-slate-100 rounded-[28px] shadow-sm flex flex-col justify-between">
-                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter mb-4 leading-tight">{label}</p>
-                                    <span className="self-start px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-black uppercase shadow-sm">
-                                       {response}
-                                    </span>
-                                 </div>
-                              );
-                           })}
-                        </div>
-                     </section>
-                  </div>
-
-                  <div className="p-10 bg-slate-50 border-t border-slate-100 flex justify-end shrink-0">
-                     <button onClick={() => setSelectedAuditCall(null)} className="px-14 py-5 bg-slate-900 text-white rounded-[24px] font-black uppercase tracking-widest text-[11px] shadow-2xl active:scale-95 transition-all">Fechar Auditoria</button>
-                  </div>
-               </div>
-            </div>
+         {/* RENDER MODAL */}
+         {renderInteractionDetails()}
+         {drawerProspectId && (
+            <ProspectHistoryDrawer
+               prospectId={drawerProspectId}
+               onClose={() => setDrawerProspectId(null)}
+            />
          )}
       </div>
    );
 };
 
-// Fixed export from Protocols to Reports
 export default Reports;

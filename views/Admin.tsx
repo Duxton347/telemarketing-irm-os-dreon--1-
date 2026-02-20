@@ -10,7 +10,11 @@ import { dataService } from '../services/dataService';
 import { User, UserRole, CallType, Question, Task, ScheduleStatus, ProductivityMetrics, WhatsAppTask } from '../types';
 import { RepiqueModal, RepiqueData } from '../components/RepiqueModal';
 
-const Admin: React.FC = () => {
+interface AdminProps {
+  user?: User;
+}
+
+const Admin: React.FC<AdminProps> = ({ user }) => {
   const [activeTab, setActiveTab] = React.useState<'import' | 'users' | 'questions' | 'skips' | 'tasks' | 'settings'>('questions');
   const [googleMapsKey, setGoogleMapsKey] = React.useState('');
   const [users, setUsers] = React.useState<User[]>([]);
@@ -314,28 +318,36 @@ const Admin: React.FC = () => {
         const equipIdx = headers.findIndex(h => ['equipamento', 'item', 'equipment', 'modelo', 'produto'].some(t => h.includes(t)));
         const offerIdx = headers.findIndex(h => ['oferta', 'offer', 'promocao'].some(t => h.includes(t)));
 
-        const finalNameIdx = nameIdx !== -1 ? nameIdx : 0;
-        const finalPhoneIdx = phoneIdx !== -1 ? phoneIdx : 1;
-        const finalEquipIdx = equipIdx !== -1 ? equipIdx : 2;
-        const finalOfferIdx = offerIdx !== -1 ? offerIdx : -1;
+        const addressIdx = headers.findIndex(h => ['endereco', 'address', 'local', 'rua', 'logradouro'].some(t => h.includes(t)));
+
+        const finalNameIdx = nameIdx;
+        const finalPhoneIdx = phoneIdx;
+        const finalEquipIdx = equipIdx;
+        const finalAddressIdx = addressIdx;
+        const finalOfferIdx = offerIdx;
 
         const rows = lines.slice(1).map(line => {
           let values: string[] = [];
           if (line.includes('"')) {
+            // Use positive lookahead to split by separator only if followed by even number of quotes
+            // This handles 'Field 1,"Field, 2",Field 3' correctly
             const regex = new RegExp(`${separator}(?=(?:(?:[^"]*"){2})*[^"]*$)`);
             values = line.split(regex).map(v => v.replace(/^"|"$/g, '').trim());
           } else {
             values = line.split(separator).map(v => v.trim());
           }
 
+          // Strict mapping with no fallbacks logic to avoid guessing wrong columns
+          // If a column is missing in header, it stays empty.
+
           return {
-            name: values[finalNameIdx] || '',
-            phone: values[finalPhoneIdx] || '',
-            address: values[3] || '',
-            equipment: values[finalEquipIdx] || '',
+            name: finalNameIdx !== -1 ? values[finalNameIdx] : '',
+            phone: finalPhoneIdx !== -1 ? values[finalPhoneIdx] : '',
+            address: finalAddressIdx !== -1 ? values[finalAddressIdx] : '',
+            equipment: finalEquipIdx !== -1 ? values[finalEquipIdx] : '',
             offer: finalOfferIdx !== -1 ? values[finalOfferIdx] : ''
           };
-        }).filter(r => r.name && r.phone);
+        }).filter(r => r.phone && r.phone.trim() !== '');
 
         if (rows.length === 0) {
           alert("Dados inválidos. Verifique a ordem: Nome, Telefone, Equipamento.");
@@ -352,6 +364,7 @@ const Admin: React.FC = () => {
   };
 
   const [selectedChannel, setSelectedChannel] = React.useState<'VOICE' | 'WHATSAPP'>('VOICE');
+  const [isImportingAsLead, setIsImportingAsLead] = React.useState(false);
 
   const runImport = async () => {
     if (csvPreview.length === 0 || isProcessing) return;
@@ -378,12 +391,18 @@ const Admin: React.FC = () => {
 
       let count = 0;
       for (const row of csvPreview) {
+
+        const isProspecting = selectedCallType.includes('PROSPEC') || isImportingAsLead;
+
         const client = await dataService.upsertClient({
           name: row.name,
           phone: row.phone,
           address: row.address,
           items: row.equipment ? [row.equipment] : [],
-          offers: row.offer ? [row.offer] : []
+          offers: row.offer ? [row.offer] : [],
+          origin: isProspecting ? 'CSV_IMPORT' : 'MANUAL',
+          status: isProspecting ? 'LEAD' : 'CLIENT',
+          funnel_status: isProspecting ? 'NEW' : undefined
         });
 
         // Check duplicate
@@ -417,9 +436,9 @@ const Admin: React.FC = () => {
       alert(`${count} tarefas importadas com sucesso para ${selectedChannel === 'VOICE' ? 'Ligação' : 'WhatsApp'}!`);
       setCsvPreview([]);
       await refreshData();
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      alert("Erro na importação.");
+      alert(`Erro na importação: ${e.message || JSON.stringify(e)}`);
     } finally { setIsProcessing(false); }
   };
 
@@ -799,6 +818,7 @@ const Admin: React.FC = () => {
                     <thead className="sticky top-0 bg-slate-50 border-b border-slate-200">
                       <tr>
                         <th className="pb-3 text-slate-400 uppercase tracking-widest">Cliente</th>
+                        <th className="pb-3 text-slate-400 uppercase tracking-widest">Endereço</th>
                         <th className="pb-3 text-slate-400 uppercase tracking-widest">Equipamento</th>
                         <th className="pb-3 text-slate-400 uppercase tracking-widest">Oferta</th>
                         <th className="pb-3 text-slate-400 uppercase tracking-widest text-right">Telefone</th>
@@ -806,10 +826,12 @@ const Admin: React.FC = () => {
                     </thead>
                     <tbody className="divide-y divide-slate-100">
                       {csvPreview.map((row, i) => (
-                        <tr key={i}>
-                          <td className="py-3 text-slate-800">{row.name}</td>
-                          <td className="py-3 text-blue-600 font-black">{row.equipment || '-'}</td>
-                          <td className="py-3 text-slate-500 text-right">{row.phone}</td>
+                        <tr key={i} className="border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors">
+                          <td className="py-3 font-black text-slate-700">{row.name}</td>
+                          <td className="py-3 text-[9px] text-slate-400 max-w-[150px] truncate" title={row.address}>{row.address || '-'}</td>
+                          <td className="py-3 text-blue-600">{row.equipment || '-'}</td>
+                          <td className="py-3 text-green-600">{row.offer || '-'}</td>
+                          <td className="py-3 text-right text-slate-400 font-mono tracking-tighter">{row.phone}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -822,14 +844,29 @@ const Admin: React.FC = () => {
                 )}
               </div>
               {csvPreview.length > 0 && (
-                <button
-                  onClick={runImport}
-                  disabled={isProcessing}
-                  className="mt-6 w-full py-6 bg-blue-600 text-white rounded-[24px] font-black uppercase tracking-widest text-[10px] shadow-2xl flex items-center justify-center gap-3 active:scale-95 transition-all disabled:opacity-50"
-                >
-                  {isProcessing ? <Loader2 className="animate-spin" /> : <Database size={16} />}
-                  Processar {csvPreview.length} Registros
-                </button>
+                <>
+                  <div className="flex items-center gap-2 mt-4 ml-1">
+                    <input
+                      type="checkbox"
+                      id="isLead"
+                      checked={isImportingAsLead}
+                      onChange={(e) => setIsImportingAsLead(e.target.checked)}
+                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <label htmlFor="isLead" className="text-xs font-bold text-slate-600 cursor-pointer select-none">
+                      Cadastrar este arquivo como LEADS? (Para funil de prospecção)
+                    </label>
+                  </div>
+
+                  <button
+                    onClick={runImport}
+                    disabled={isProcessing}
+                    className="mt-6 w-full py-6 bg-blue-600 text-white rounded-[24px] font-black uppercase tracking-widest text-[10px] shadow-2xl flex items-center justify-center gap-3 active:scale-95 transition-all disabled:opacity-50"
+                  >
+                    {isProcessing ? <Loader2 className="animate-spin" /> : <Database size={16} />}
+                    Processar {csvPreview.length} Registros
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -1058,10 +1095,51 @@ const Admin: React.FC = () => {
         selectedCount={selectedTaskIds.length}
         isProcessing={isProcessingRepique}
         onConfirm={async (data: RepiqueData) => {
-          // ... existing body ...
-          // I will just close the modal here to avoid huge replacement.
-          // Wait, I need to append the TypeModal.
-          // I'll replace the closing brace of Admin component.
+          if (!user) return alert("Erro: Usuário não identificado.");
+          setIsProcessingRepique(true);
+          try {
+            // Fetch validation data
+            const allTasks = taskFilterChannel === 'VOICE' ? pendingTasks : pendingWhatsAppTasks;
+            const selectedTasks = allTasks.filter((t: any) => selectedTaskIds.includes(t.id));
+
+            const schedules = selectedTasks.map((t: any) => ({
+              customerId: t.clientId,
+              requestedByOperatorId: user.id,
+              assignedOperatorId: t.assignedTo || user.id,
+              scheduledFor: `${data.date}T${data.time}:00`,
+              callType: t.type,
+              status: 'PENDENTE_APROVACAO' as ScheduleStatus, // Force approval
+              scheduleReason: data.reason,
+              resolutionChannel: data.contactType === 'whatsapp' ? 'whatsapp' : 'telefone',
+              hasRepick: true
+            }));
+
+            await dataService.bulkCreateScheduleRequest(schedules);
+
+            // Clean up: Remove from current queue since they are now scheduled/pending approval
+            if (taskFilterChannel === 'VOICE') {
+              // If it's a task, maybe we should mark it as skipped or hold? 
+              // Creating a schedule doesn't automatically delete the task unless we say so.
+              // Usually repique implies "I will call later", so effectively rescheduling.
+              // But the schedule is now in "Pendentes" (Approval Queue).
+              // We should probably remove them from "Queue" to avoid double calling?
+              // Or leave them until approved?
+              // User said "appeared there instead of...". 
+              // Let's assume we leave them in queue until approved? 
+              // Dashboard implementation CLEARED the selection but didn't delete tasks.
+              // Let's match Dashboard: just clear selection.
+            }
+
+            setSelectedTaskIds([]);
+            setIsRepiqueModalOpen(false);
+            await refreshData();
+            alert('Repique solicitado com sucesso! Aguardando aprovação.');
+          } catch (error) {
+            console.error(error);
+            alert('Erro ao processar repique.');
+          } finally {
+            setIsProcessingRepique(false);
+          }
         }}
       />
 

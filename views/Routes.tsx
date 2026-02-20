@@ -132,7 +132,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                     status: 'PENDING',
                     orderIndex: visits.length + i,
                     externalSalesperson: externalName,
-                    isIndication: c.type === 'CALL' || c.type === 'MANUAL',
+                    isIndication: c.type === 'CALL' || c.type === 'MANUAL' || c.type === 'WHATSAPP',
                     originType: c.type,
                     originId: c.id,
                     contactPerson: c.contactPerson,
@@ -438,7 +438,8 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                             <input type="date" className="p-3 bg-slate-50 rounded-xl font-bold text-sm outline-none" value={builderFilters.date} onChange={e => setBuilderFilters({ ...builderFilters, date: e.target.value })} />
                             <select className="p-3 bg-slate-50 rounded-xl font-bold text-sm outline-none" value={builderFilters.type} onChange={e => setBuilderFilters({ ...builderFilters, type: e.target.value })}>
                                 <option value="ALL">Todos Tipos</option>
-                                {Object.values(CallType).filter(t => t !== CallType.WHATSAPP).map(t => <option key={t} value={t}>{t}</option>)}
+                                <option value="VISIT">Prospects (Visita Física)</option>
+                                {Object.values(CallType).map(t => <option key={t} value={t}>{t}</option>)}
                             </select>
                             <button onClick={handleSearchCandidates} className="p-3 bg-blue-600 text-white rounded-xl hover:bg-blue-500 transition-colors"><Search size={20} /></button>
 
@@ -460,8 +461,12 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                                     {candidates.map(c => (
                                         <div key={c.id} onClick={() => toggleCandidate(c)} className={`group p-4 rounded-2xl border flex items-center justify-between cursor-pointer transition-all hover:shadow-md ${selectedCandidates.find(sc => sc.id === c.id) ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : 'bg-white border-slate-100 hover:border-slate-300'}`}>
                                             <div className="flex items-center gap-4">
-                                                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-xs ${c.type === 'MANUAL' ? 'bg-purple-100 text-purple-600' : 'bg-blue-100 text-blue-600'}`}>
-                                                    {c.type === 'MANUAL' ? 'MAN' : 'TEL'}
+                                                <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-xs ${c.type === 'MANUAL' ? 'bg-purple-100 text-purple-600' :
+                                                    c.type === 'WHATSAPP' ? 'bg-green-100 text-green-600' :
+                                                        c.type === 'VISIT_PROSPECT' ? 'bg-pink-100 text-pink-600' :
+                                                            'bg-blue-100 text-blue-600'
+                                                    }`}>
+                                                    {c.type === 'MANUAL' ? 'MAN' : c.type === 'WHATSAPP' ? 'ZAP' : c.type === 'VISIT_PROSPECT' ? 'PROS' : 'TEL'}
                                                 </div>
                                                 <div>
                                                     <p className="font-bold text-slate-800 text-base">{c.clientName}</p>

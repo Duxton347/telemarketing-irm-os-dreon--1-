@@ -72,6 +72,9 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setScheduleData({ isScheduling: false, date: '', time: '', reason: '' });
   }, []);
 
+  // State for upcoming tasks
+  const [upcomingTasks, setUpcomingTasks] = React.useState<Task[]>([]);
+
   const fetchQueue = React.useCallback(async () => {
     setIsLoading(true);
     try {
@@ -89,7 +92,11 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
         t.status === 'pending' &&
         (t.approvalStatus === 'APPROVED' || !t.approvalStatus)
       );
+
       const dueTasks = myPendingTasks.filter(t => !t.scheduledFor || new Date(t.scheduledFor) <= now);
+      const futureTasks = myPendingTasks.filter(t => t.scheduledFor && new Date(t.scheduledFor) > now);
+      setUpcomingTasks(futureTasks);
+
       // Prioritize scheduled tasks that are due
       dueTasks.sort((a, b) => {
         if (a.scheduledFor && !b.scheduledFor) return -1;
@@ -213,8 +220,6 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     }
   };
 
-
-
   const handleSelectSkipReason = (reason: string) => {
     setSkipReasonSelected(reason);
     setIsSkipModalOpen(false);
@@ -226,12 +231,6 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     if (!currentTask || !skipReasonSelected) return;
 
     setIsProcessing(true);
-
-    // Scenario A: Whatsapp Only (No Repique) - Handled separately if needed, but here we assume Repique is always triggered unless explicit "No Repique" button which user didn't ask for in modal, 
-    // BUT User said: "Operador pode escolher: (A) Só WhatsApp (sem repique)". 
-    // So we need a way to do that. Let's assume the modal has a button for "Finalizar (Só WhatsApp)" if checkbox is checked.
-    // However, the current flow requires selecting a time interval.
-    // Let's adapt: If user selects "Só WhatsApp", they shouldn't be in this function OR we verify `interval`.
 
     try {
       const date = new Date();
@@ -320,7 +319,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       });
 
       // Complete Task
-      await dataService.updateTask(currentTask.id, { status: 'completed' }); // User said "Completed" in Scenario A? "Enviar para relatório como comunicação concluída"
+      await dataService.updateTask(currentTask.id, { status: 'completed' });
 
       await dataService.logOperatorEvent(user.id, OperatorEventType.FINALIZAR_ATENDIMENTO, currentTask.id, `Pulo com WhatsApp (Sem Repique) - Motivo: ${skipReasonSelected}`);
       await fetchQueue();
@@ -384,7 +383,6 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       await dataService.saveCall(callData);
 
       // 3. Update Task (Complete or Schedule)
-      // 3. Update Task (Complete or Schedule)
       if (scheduleData.isScheduling) {
         // Create Schedule Request
         const scheduledDateTime = new Date(`${scheduleData.date}T${scheduleData.time}:00`).toISOString();
@@ -424,6 +422,21 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       <div className="h-full flex flex-col items-center justify-center gap-6 p-20 bg-white rounded-[56px] border border-dashed border-slate-200">
         <Phone size={48} className="text-slate-200" />
         <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">Nenhuma chamada pendente</h3>
+        {upcomingTasks.length > 0 && (
+          <div className="bg-orange-50 p-6 rounded-2xl border border-orange-100 flex flex-col items-center gap-2 max-w-md">
+            <Clock className="text-orange-500" size={24} />
+            <p className="font-bold text-slate-600 text-center">Você tem <strong className="text-orange-600">{upcomingTasks.length}</strong> agendamentos futuros na fila.</p>
+            <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Eles aparecerão aqui no horário agendado.</p>
+            <div className="w-full mt-4 space-y-2">
+              {upcomingTasks.slice(0, 3).map(t => (
+                <div key={t.id} className="bg-white p-3 rounded-xl text-xs font-bold text-slate-500 flex justify-between">
+                  <span>{new Date(t.scheduledFor!).toLocaleString()}</span>
+                  <span className="uppercase">{t.clientName || 'Cliente'}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <button onClick={fetchQueue} className="px-8 py-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-[10px]">Atualizar</button>
       </div>
     );

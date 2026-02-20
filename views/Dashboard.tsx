@@ -552,7 +552,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
               assignedOperatorId: t.assignedTo, // Keep assigned to same operator
               scheduledFor: `${data.date}T${data.time}:00`,
               callType: t.type,
-              status: (user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR) ? 'APROVADO' as ScheduleStatus : 'PENDENTE_APROVACAO' as ScheduleStatus,
+              status: 'PENDENTE_APROVACAO' as ScheduleStatus, // Always require approval for repicks
               scheduleReason: data.reason,
               resolutionChannel: data.contactType === 'whatsapp' ? 'whatsapp' : 'telefone',
               hasRepick: true

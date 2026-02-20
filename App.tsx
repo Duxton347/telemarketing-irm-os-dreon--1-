@@ -14,6 +14,8 @@ import Calendar from './views/Calendar';
 import RoutesView from './views/Routes';
 import WhatsAppDashboard from './views/WhatsAppDashboard';
 import { ScraperView } from './views/Scraper/ScraperView';
+import Prospects from './views/Prospects';
+import WorkloadUpload from './views/WorkloadUpload';
 // Import updated views
 import { UserRole } from './types';
 
@@ -49,13 +51,17 @@ const App: React.FC = () => {
           <Route path="/clients" element={<Clients user={user} />} />
           <Route path="/protocols" element={<Protocols user={user} />} />
           <Route path="/admin" element={
-            user.role === UserRole.ADMIN ? <Admin /> : <Navigate to="/" />
+            user.role === UserRole.ADMIN ? <Admin user={user} /> : <Navigate to="/" />
           } />
           <Route path="/calendar" element={<Calendar user={user} />} />
           <Route path="/routes" element={<RoutesView user={user} />} />
           <Route path="/whatsapp" element={<WhatsAppDashboard user={user} />} />
           <Route path="/scraper" element={<ScraperView user={user} />} />
           <Route path="/reports" element={<Reports user={user} />} />
+          <Route path="/prospects" element={<Prospects />} />
+          <Route path="/workload" element={
+            user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR ? <WorkloadUpload user={user} /> : <Navigate to="/" />
+          } />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>
       </Layout>

@@ -140,7 +140,7 @@ serve(async (req) => {
                                 // To get Phone/Website we NEED Details.
                                 // Fetch Details (Phone) - Costly but necessary for Telemarketing
                                 // User requested ONLY: Name, Phone, Address.
-                                const detailsUrl = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place.place_id}&fields=name,formatted_address,formatted_phone_number&key=${GOOGLE_MAPS_KEY}`;
+                                const detailsUrl = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place.place_id}&fields=name,formatted_address,formatted_phone_number,website&key=${GOOGLE_MAPS_KEY}`;
                                 const detailsRes = await fetch(detailsUrl);
                                 const detailsData = await detailsRes.json();
                                 const details = detailsData.result || {};
@@ -151,7 +151,7 @@ serve(async (req) => {
                                     name: details.name || place.name,
                                     address: details.formatted_address || place.vicinity,
                                     phone: details.formatted_phone_number,
-                                    website: null, // User requested to exclude
+                                    website: details.website,
                                     rating: null, // User requested to exclude
                                     user_ratings_total: null, // User requested to exclude
                                     types: place.types, // Keep types from search result as it's free/useful for filtering
