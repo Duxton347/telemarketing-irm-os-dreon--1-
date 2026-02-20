@@ -167,7 +167,7 @@ export const dataService = {
     let query = supabase.from('sales').select('*').order('registered_at', { ascending: false });
 
     if (startDate && endDate) {
-      query = query.gte('registered_at', `${startDate} T00:00:00`).lte('registered_at', `${endDate} T23: 59: 59`);
+      query = query.gte('registered_at', `${startDate}T00:00:00`).lte('registered_at', `${endDate}T23:59:59`);
     }
 
     const { data, error } = await query;
@@ -522,7 +522,7 @@ export const dataService = {
     let query = supabase.from('call_logs').select('*').order('start_time', { ascending: false });
 
     if (startDate && endDate) {
-      query = query.gte('start_time', `${startDate} T00:00:00`).lte('start_time', `${endDate} T23: 59: 59`);
+      query = query.gte('start_time', `${startDate}T00:00:00`).lte('start_time', `${endDate}T23:59:59`);
     }
 
     const { data, error } = await query;
@@ -595,7 +595,7 @@ export const dataService = {
     const { data, error } = await supabase
       .from('call_logs')
       .select('*, clients(*), profiles:operator_id(*)')
-      .gte('start_time', `${todayStr} T00:00:00`)
+      .gte('start_time', `${todayStr}T00:00:00`)
       .order('start_time', { ascending: false });
     if (error) throw error;
     return data || [];
@@ -669,8 +669,8 @@ export const dataService = {
     const { data, error } = await supabase
       .from('operator_events')
       .select('*')
-      .gte('timestamp', `${startDate} T00:00:00`)
-      .lte('timestamp', `${endDate} T23: 59: 59`)
+      .gte('timestamp', `${startDate}T00:00:00`)
+      .lte('timestamp', `${endDate}T23:59:59`)
       .order('timestamp', { ascending: true });
     if (error) throw error;
     return (data || []).map(e => ({
@@ -983,7 +983,8 @@ export const dataService = {
       realized: v.realized,
       originType: v.origin_type,
       originId: v.origin_id,
-      contactPerson: v.contact_person
+      contactPerson: v.contact_person,
+      notes: v.notes
     }));
   },
 
@@ -1005,7 +1006,8 @@ export const dataService = {
       realized: visit.realized,
       origin_type: visit.originType,
       origin_id: visit.originId,
-      contact_person: visit.contactPerson
+      contact_person: visit.contactPerson,
+      notes: visit.notes
     });
     if (error) throw error;
   },
@@ -1020,6 +1022,7 @@ export const dataService = {
     if (updates.isIndication !== undefined) payload.is_indication = updates.isIndication;
     if (updates.realized !== undefined) payload.realized = updates.realized;
     if (updates.contactPerson) payload.contact_person = updates.contactPerson;
+    if (updates.notes !== undefined) payload.notes = updates.notes;
 
     const { error } = await supabase.from('visits').update(payload).eq('id', id);
     if (error) throw error;
@@ -1036,8 +1039,8 @@ export const dataService = {
     }
 
     if (filters.date) {
-      const start = `${filters.date} T00:00:00`;
-      const end = `${filters.date} T23: 59: 59`;
+      const start = `${filters.date}T00:00:00`;
+      const end = `${filters.date}T23:59:59`;
       callsQuery = callsQuery.gte('start_time', start).lte('start_time', end);
       waQuery = waQuery.gte('created_at', start).lte('created_at', end);
     }
@@ -1176,7 +1179,7 @@ export const dataService = {
 
     if (startDate && endDate) {
       // For WhatsApp, we use created_at for general volume, but metrics might use started_at/completed_at
-      query = query.gte('created_at', `${startDate} T00:00:00`).lte('created_at', `${endDate} T23: 59: 59`);
+      query = query.gte('created_at', `${startDate}T00:00:00`).lte('created_at', `${endDate}T23:59:59`);
     }
 
     const { data, error } = await query.order('created_at', { ascending: true });

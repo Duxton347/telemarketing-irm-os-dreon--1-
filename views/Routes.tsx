@@ -2,7 +2,7 @@ import React from 'react';
 import {
     MapPin, Plus, Calendar, User, Search, Navigation,
     MoreVertical, CheckCircle2, Clock, X, Save, Loader2,
-    Filter, ArrowUp, ArrowDown, FileText, Download, TrendingUp, Users, Trash2, History, ArrowRight
+    Filter, ArrowUp, ArrowDown, FileText, Download, TrendingUp, Users, Trash2, History, ArrowRight, Edit
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { Visit, Client, User as UserType, CallType, SaleStatus, ExternalSalesperson, SaleCategory, SaleChannel } from '../types';
@@ -44,7 +44,10 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
     // Modal State
     const [isModalOpen, setIsModalOpen] = React.useState(false);
     const [activeVisit, setActiveVisit] = React.useState<Visit | null>(null);
-    const [modalType, setModalType] = React.useState<'FINALIZE' | 'MANUAL_ADD' | 'MANAGE_SALESPEOPLE' | null>(null);
+    const [modalType, setModalType] = React.useState<'FINALIZE' | 'MANUAL_ADD' | 'MANAGE_SALESPEOPLE' | 'EDIT_VISIT' | null>(null);
+
+    // Edit Visit Form Data
+    const [editVisitData, setEditVisitData] = React.useState<Partial<Visit>>({});
 
     // Finalize Form Data
     const [finalizeData, setFinalizeData] = React.useState({
@@ -242,6 +245,39 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
             ]);
             loadData();
         } catch (e) { console.error("Error reordering", e); }
+    };
+
+    const openEditModal = (visit: Visit) => {
+        setActiveVisit(visit);
+        setEditVisitData({
+            clientName: visit.clientName,
+            address: visit.address,
+            phone: visit.phone,
+            scheduledDate: visit.scheduledDate,
+            contactPerson: visit.contactPerson || '',
+            notes: visit.notes || ''
+        });
+        setModalType('EDIT_VISIT');
+        setIsModalOpen(true);
+    };
+
+    const handleSaveEditVisit = async () => {
+        if (!activeVisit) return;
+        setIsProcessing(true);
+        try {
+            await dataService.updateVisit(activeVisit.id, {
+                ...editVisitData
+            });
+            alert("Visita atualizada com sucesso!");
+            setIsModalOpen(false);
+            setActiveVisit(null);
+            setEditVisitData({});
+            await loadData();
+        } catch (error) {
+            alert("Erro ao atualizar a visita: " + error);
+        } finally {
+            setIsProcessing(false);
+        }
     };
 
     const handleDeleteVisit = async (id: string) => {
@@ -553,6 +589,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                         {(user.role === 'ADMIN' || user.role === 'SUPERVISOR') && (
                                             <>
+                                                <button onClick={() => openEditModal(visit)} className="p-1.5 bg-blue-50 text-blue-400 hover:text-blue-800 rounded-lg hover:bg-blue-200"><Edit size={14} /></button>
                                                 <button onClick={() => moveVisit(visit.id, -1)} className="p-1.5 bg-slate-50 text-slate-400 hover:text-slate-800 rounded-lg hover:bg-slate-200"><ArrowUp size={14} /></button>
                                                 <button onClick={() => moveVisit(visit.id, 1)} className="p-1.5 bg-slate-50 text-slate-400 hover:text-slate-800 rounded-lg hover:bg-slate-200"><ArrowDown size={14} /></button>
                                                 <button onClick={() => handleDeleteVisit(visit.id)} className="p-1.5 bg-red-50 text-red-300 hover:text-red-600 rounded-lg hover:bg-red-100"><Trash2 size={14} /></button>
@@ -649,6 +686,82 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
             {/* --- MODALS --- */}
             {isModalOpen && (
                 <div className="fixed inset-0 z-[200] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+
+                    {/* MODAL: EDIT VISIT */}
+                    {modalType === 'EDIT_VISIT' && (
+                        <div className="bg-white w-full max-w-lg rounded-[32px] shadow-2xl p-8 animate-in zoom-in-50 duration-200">
+                            <h3 className="text-xl font-black uppercase mb-6 text-slate-800 flex items-center gap-2">
+                                <Edit size={24} className="text-blue-600" /> Editar Tarefa do Roteiro
+                            </h3>
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Nome do Cliente</label>
+                                    <input
+                                        value={editVisitData.clientName || ''}
+                                        onChange={e => setEditVisitData({ ...editVisitData, clientName: e.target.value })}
+                                        className="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                    />
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Telefone</label>
+                                        <input
+                                            value={editVisitData.phone || ''}
+                                            onChange={e => setEditVisitData({ ...editVisitData, phone: e.target.value })}
+                                            className="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Responsável</label>
+                                        <input
+                                            value={editVisitData.contactPerson || ''}
+                                            onChange={e => setEditVisitData({ ...editVisitData, contactPerson: e.target.value })}
+                                            className="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Endereço</label>
+                                    <textarea
+                                        value={editVisitData.address || ''}
+                                        onChange={e => setEditVisitData({ ...editVisitData, address: e.target.value })}
+                                        className="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm resize-none h-20 outline-none focus:ring-2 focus:ring-blue-500"
+                                    ></textarea>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Data e Hora</label>
+                                        <input
+                                            type="datetime-local"
+                                            value={editVisitData.scheduledDate ? new Date(editVisitData.scheduledDate).toISOString().slice(0, 16) : ''}
+                                            onChange={e => setEditVisitData({ ...editVisitData, scheduledDate: new Date(e.target.value).toISOString() })}
+                                            className="w-full mt-1 p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="text-[10px] font-black uppercase tracking-widest text-amber-500">Observação do Vendedor</label>
+                                    <textarea
+                                        value={editVisitData.notes || ''}
+                                        onChange={e => setEditVisitData({ ...editVisitData, notes: e.target.value })}
+                                        className="w-full mt-1 p-3 bg-amber-50 border border-amber-200 rounded-xl font-bold text-sm resize-none h-20 outline-none focus:ring-2 focus:ring-amber-500"
+                                        placeholder="Informação adicional..."
+                                    ></textarea>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4 pt-4">
+                                    <button onClick={() => { setIsModalOpen(false); setActiveVisit(null); setEditVisitData({}); }} className="py-3.5 bg-white border border-slate-200 rounded-xl font-bold text-slate-500 hover:bg-slate-50 uppercase text-xs">Cancelar</button>
+                                    <button
+                                        onClick={handleSaveEditVisit}
+                                        disabled={isProcessing}
+                                        className="py-3.5 bg-blue-600 text-white rounded-xl font-black uppercase text-xs tracking-wider hover:bg-blue-500 disabled:opacity-50 flex justify-center items-center gap-2"
+                                    >
+                                        {isProcessing ? <Loader2 className="animate-spin" size={16} /> : 'Salvar Alterações'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {/* MODAL: MANUAL ADD */}
                     {modalType === 'MANUAL_ADD' && (
