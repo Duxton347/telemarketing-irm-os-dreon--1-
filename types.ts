@@ -1,0 +1,342 @@
+
+export enum UserRole {
+  ADMIN = 'ADMIN',
+  SUPERVISOR = 'SUPERVISOR',
+  OPERATOR = 'OPERATOR'
+}
+
+export interface User {
+  id: string;
+  username: string;
+  password?: string;
+  name: string;
+  role: UserRole;
+  active: boolean;
+}
+
+export enum CallType {
+  POS_VENDA = 'PÓS-VENDA',
+  PROSPECCAO = 'PROSPECÇÃO',
+  VENDA = 'VENDA',
+  CONFIRMACAO_PROTOCOLO = 'CONFIRMAÇÃO PROTOCOLO',
+  WHATSAPP = 'WHATSAPP' // Kept for internal logic/channel identification
+}
+
+export enum SaleCategory {
+  QUIMICOS = 'QUÍMICOS',
+  BOMBAS = 'BOMBAS',
+  BOILER = 'BOILER',
+  AQUECEDOR_PISCINA = 'AQUECEDOR PISCINA',
+  FOTOVOLTAICO = 'FOTOVOLTAICO',
+  LINHA_BANHO = 'LINHA BANHO',
+  OUTROS = 'OUTROS'
+}
+
+export enum SaleChannel {
+  WHATSAPP = 'WHATSAPP',
+  PROSPECCAO = 'PROSPECÇÃO',
+  RECUPERACAO = 'RECUPERAÇÃO DE CLIENTE',
+  SITE = 'SITE',
+  LOJA = 'LOJA FÍSICA'
+}
+
+export enum SaleStatus {
+  PENDENTE = 'PENDENTE',
+  ENTREGUE = 'ENTREGUE'
+}
+
+export interface Sale {
+  id: string;
+  saleNumber: string;
+  clientId?: string; // New field
+  clientName: string;
+  address: string;
+  category: SaleCategory;
+  channel: SaleChannel;
+  operatorId: string;
+  status: SaleStatus;
+  value: number;
+  registeredAt: string;
+  deliveredAt?: string;
+  externalSalesperson?: string;
+}
+
+export enum ProtocolStatus {
+  ABERTO = 'Aberto',
+  EM_ANDAMENTO = 'Em andamento',
+  AGUARDANDO_SETOR = 'Aguardando Setor',
+  AGUARDANDO_CLIENTE = 'Aguardando Cliente',
+  RESOLVIDO_PENDENTE = 'Resolvido (Pendente Confirmação)',
+  FECHADO = 'Fechado',
+  REABERTO = 'Reaberto'
+}
+
+export enum OperatorEventType {
+  INICIAR_PROXIMO_ATENDIMENTO = 'INICIAR_PROXIMO_ATENDIMENTO',
+  FINALIZAR_ATENDIMENTO = 'FINALIZAR_ATENDIMENTO',
+  PULAR_ATENDIMENTO = 'PULAR_ATENDIMENTO',
+  ADMIN_AGENDAR = 'ADMIN_AGENDAR',
+  ADMIN_APROVAR = 'ADMIN_APROVAR',
+  ADMIN_REJEITAR = 'ADMIN_REJEITAR',
+  ADMIN_REAGENDAR = 'ADMIN_REAGENDAR',
+  WHATSAPP_START = 'WHATSAPP_START',
+  WHATSAPP_SKIP = 'WHATSAPP_SKIP',
+  WHATSAPP_COMPLETE = 'WHATSAPP_COMPLETE'
+}
+
+export interface OperatorEvent {
+  id: string;
+  operatorId: string;
+  taskId?: string;
+  eventType: OperatorEventType;
+  timestamp: string;
+  note?: string;
+}
+
+export interface Interaction {
+  id: string;
+  type: string;
+  date: string;
+  summary: string;
+  operatorId?: string;
+}
+
+export interface Client {
+  id: string;
+  name: string;
+  phone: string;
+  address: string;
+  acceptance: 'low' | 'medium' | 'high';
+  satisfaction: 'low' | 'medium' | 'high';
+  items: string[];
+  offers?: string[];
+  lastInteraction?: string;
+  invalid?: boolean;
+  history?: Interaction[];
+  // New Fields for Scraper & Prospects
+  origin?: 'MANUAL' | 'GOOGLE_SEARCH' | 'CSV_IMPORT';
+  email?: string;
+  website?: string;
+  status?: 'CLIENT' | 'LEAD';
+  responsible_phone?: string;
+  buyer_name?: string;
+  interest_product?: string;
+  preferred_channel?: 'PHONE' | 'WHATSAPP' | 'BOTH';
+  funnel_status?: 'NEW' | 'CONTACT_ATTEMPT' | 'CONTACT_MADE' | 'QUALIFIED' | 'PROPOSAL_SENT' | 'PHYSICAL_VISIT';
+}
+
+export type ScheduleStatus = 'PENDENTE_APROVACAO' | 'APROVADO' | 'REJEITADO' | 'REPROGRAMADO' | 'CONCLUIDO' | 'CANCELADO';
+
+export interface CallSchedule {
+  id: string;
+  customerId?: string; // FK to Client
+  originCallId?: string; // Optional link to original task
+  requestedByOperatorId: string;
+  assignedOperatorId: string;
+  approvedByAdminId?: string;
+  scheduledFor: string; // ISO String
+  callType: CallType;
+  status: ScheduleStatus;
+  scheduleReason?: string;
+  approvalReason?: string;
+  resolutionChannel?: string;
+
+  // New fields for Repique
+  skipReason?: string;
+  whatsappSent?: boolean;
+  whatsappNote?: string;
+  hasRepick?: boolean;
+  rescheduledBy?: string;
+  rescheduledAt?: string;
+  rescheduleReason?: string;
+  deletedBy?: string;
+  deletedAt?: string;
+  deleteReason?: string;
+  queuedAt?: string;
+  completedAt?: string;
+
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AuditLog {
+  id: string;
+  tableName: string;
+  recordId: string;
+  action: string;
+  changes?: any;
+  userId: string;
+  reason?: string;
+  createdAt: string;
+}
+
+export interface ProductivityMetrics {
+  totalCalls: number;
+  totalWhatsApp: number;
+  salesCount: number;
+  conversionRate: number;
+  operatorStats: {
+    id: string;
+    name: string;
+    calls: number;
+    whatsapp: number;
+    sales: number;
+  }[];
+}
+
+export interface CallScheduleWithClient extends CallSchedule {
+  clientName?: string;
+  clientPhone?: string;
+}
+
+export interface Task {
+  id: string;
+  clientId: string;
+  type: CallType;
+  deadline: string;
+  assignedTo: string;
+  status: 'pending' | 'completed' | 'skipped';
+  skipReason?: string;
+  scheduledFor?: string; // ISO Date for callback
+  scheduleReason?: string;
+
+  // New fields for Scheduling/Approval
+  approvalStatus?: 'PENDING' | 'APPROVED' | 'RESOLVED';
+  originCallId?: string;
+  targetCallType?: string;
+
+  // Joined fields
+  clientName?: string;
+  clientPhone?: string;
+  clients?: any; // For full object access if needed
+}
+
+export interface Visit {
+  id: string;
+  clientId?: string;
+  clientName: string;
+  address: string;
+  city?: string;
+  phone: string;
+  salespersonId: string;
+  salespersonName: string;
+  scheduledDate: string; // ISO
+  status: 'PENDING' | 'COMPLETED' | 'CANCELED';
+  outcome?: string;
+  createdAt: string;
+
+  // New fields for Route Management
+  orderIndex?: number;
+  externalSalesperson?: string;
+  isIndication?: boolean;
+  realized?: boolean;
+  originType?: 'CALL' | 'TASK' | 'MANUAL';
+  originId?: string;
+  contactPerson?: string;
+  notes?: string; // Observation about visit purpose
+}
+
+export interface CallRecord {
+  id: string;
+  taskId?: string;
+  operatorId: string;
+  clientId: string;
+  startTime: string;
+  endTime: string;
+  duration: number;
+  reportTime: number;
+  responses: Record<string, any>;
+  type: CallType;
+  protocolId?: string;
+}
+
+export interface Protocol {
+  id: string;
+  protocolNumber?: string;
+  clientId: string;
+  openedByOperatorId: string;
+  ownerOperatorId: string;
+  origin: string;
+  departmentId: string;
+  categoryId: string;
+  title: string;
+  description: string;
+  priority: 'Baixa' | 'Média' | 'Alta';
+  status: ProtocolStatus;
+  openedAt: string;
+  updatedAt: string;
+  closedAt?: string;
+  firstResponseAt?: string;
+  lastActionAt: string;
+  slaDueAt: string;
+  resolutionSummary?: string;
+  rootCause?: string;
+}
+
+export interface ProtocolEvent {
+  id: string;
+  protocolId: string;
+  eventType: string;
+  oldValue?: string;
+  newValue?: string;
+  note?: string;
+  actorId: string;
+  createdAt: string;
+}
+
+export interface Question {
+  id: string;
+  text: string;
+  options: string[];
+  type: CallType | 'ALL';
+  order: number;
+  stageId?: string;
+}
+
+export interface ExternalSalesperson {
+  id: string;
+  name: string;
+  active: boolean;
+}
+
+export type WhatsAppStatus = 'pending' | 'started' | 'completed' | 'skipped';
+
+export interface WhatsAppTask {
+  id: string;
+  clientId: string;
+  assignedTo?: string; // Operator ID
+  status: WhatsAppStatus;
+  type: CallType;
+  source: 'manual' | 'call_skip_whatsapp';
+  sourceId?: string;
+  skipReason?: string;
+  skipNote?: string;
+  startedAt?: string;
+  completedAt?: string;
+  responses?: Record<string, any>;
+  createdAt: string;
+  updatedAt: string;
+
+  // Joined fields
+  clientName?: string;
+  clientPhone?: string;
+}
+
+export interface UnifiedReportRow {
+  clientId: string;
+  clientName: string;
+  clientPhone: string;
+  clientStatus: string;
+  attemptsCount: number;
+  lastContactAt?: string;
+  lastOutcome?: string;
+  lastOperatorId?: string;
+  lastChannel?: string;
+  lastContactGenre?: string;
+  lastRating?: number; // 1 (Bad) or 5 (Good) based on JSON responses proxy
+  upsellOffer?: string; // Captured from the JSON responses
+  upsellStatus?: 'OPEN' | 'DONE' | 'CANCELLED';
+  responseStatus: string; // 'Não Contatado', 'Sem Resposta', 'Respondeu'
+  conversionStatus: string; // 'Gerou Venda', 'Sem Venda'
+  lastSkipReason?: string;
+}
