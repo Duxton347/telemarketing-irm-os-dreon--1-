@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import {
-    CheckCircle2, XCircle, Search, Filter, Phone, MapPin, Globe,
+    CheckCircle2, XCircle, Search, Filter, Phone, MapPin, Globe, Mail,
     MoreVertical, ArrowRight, Loader2, Inbox, Trash2, Merge
 } from 'lucide-react';
 import { scraperService, ScraperResult, ScraperRun } from '../../services/scraperService';
@@ -10,6 +10,11 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
     const [results, setResults] = useState<ScraperResult[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [filterStatus, setFilterStatus] = useState('PENDING');
+
+    // Filters and Bulk Actions
+    const [onlyWithPhone, setOnlyWithPhone] = useState(false);
+    const [cityFilter, setCityFilter] = useState('');
+    const [isProcessingBulk, setIsProcessingBulk] = useState(false);
 
     const loadData = async () => {
         setIsLoading(true);
@@ -28,8 +33,8 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
     const handleAction = async (result: ScraperResult, action: 'APPROVE' | 'REJECT' | 'IGNORE') => {
         try {
             if (action === 'APPROVE') {
-                // Send to Queue
-                await scraperService.sendToQueue(result, user.id);
+                // Send to CRM (Not Queue anymore)
+                await scraperService.approveLead(result, user.id);
             } else {
                 await scraperService.updateResultStatus(result.id, action === 'REJECT' ? 'REJECTED' : 'IGNORED', undefined, user.id);
             }
@@ -37,6 +42,28 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
             setResults(prev => prev.filter(r => r.id !== result.id));
         } catch (e: any) {
             alert("Erro na ação: " + e.message);
+        }
+    };
+
+    const filteredResults = results.filter(r => {
+        if (onlyWithPhone && !r.phone) return false;
+        if (cityFilter && !r.address.toLowerCase().includes(cityFilter.toLowerCase())) return false;
+        return true;
+    });
+
+    const handleBulkApprove = async () => {
+        if (!confirm(`Tem certeza que deseja aprovar ${filteredResults.length} leads em massa?`)) return;
+        setIsProcessingBulk(true);
+        try {
+            for (const r of filteredResults) {
+                await scraperService.approveLead(r, user.id);
+            }
+            setResults(prev => prev.filter(r => !filteredResults.some(fr => fr.id === r.id)));
+            alert(`${filteredResults.length} leads aprovados com sucesso!`);
+        } catch (e: any) {
+            alert("Erro na aprovação em massa: " + e.message);
+        } finally {
+            setIsProcessingBulk(false);
         }
     };
 
@@ -61,11 +88,46 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
                 </div>
             </div>
 
+            {/* BARRA DE FILTROS ADICIONAL */}
+            <div className="flex flex-col md:flex-row gap-4 bg-white p-4 rounded-[24px] border border-slate-100 shadow-sm items-center justify-between">
+                <div className="flex gap-4 items-center flex-1 w-full">
+                    <div className="relative flex-1 max-w-sm">
+                        <MapPin className="absolute left-3 top-2.5 text-slate-400" size={16} />
+                        <input
+                            type="text"
+                            placeholder="Alguma cidade ou bairro no endereço..."
+                            value={cityFilter}
+                            onChange={e => setCityFilter(e.target.value)}
+                            className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer text-sm font-bold text-slate-600">
+                        <input
+                            type="checkbox"
+                            checked={onlyWithPhone}
+                            onChange={e => setOnlyWithPhone(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        Com Telefone
+                    </label>
+                </div>
+                {filterStatus === 'PENDING' && filteredResults.length > 0 && (
+                    <button
+                        onClick={handleBulkApprove}
+                        disabled={isProcessingBulk}
+                        className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-xl font-bold flex items-center gap-2 transition-all shadow-md disabled:opacity-50 text-sm whitespace-nowrap"
+                    >
+                        {isProcessingBulk ? <Loader2 className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
+                        Aprovar Todos ({filteredResults.length})
+                    </button>
+                )}
+            </div>
+
             {isLoading ? (
                 <div className="flex justify-center py-20">
                     <Loader2 className="animate-spin text-slate-300" size={48} />
                 </div>
-            ) : results.length === 0 ? (
+            ) : filteredResults.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-20 text-slate-400 bg-white rounded-[32px] border border-slate-100 border-dashed">
                     <Inbox size={48} className="mb-4 text-slate-200" />
                     <p className="font-bold">Nenhum resultado encontrado.</p>
@@ -73,7 +135,7 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
                 </div>
             ) : (
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                    {results.map(result => (
+                    {filteredResults.map(result => (
                         <div key={result.id} className="bg-white p-6 rounded-[24px] border border-slate-100 shadow-sm hover:shadow-md transition-all flex flex-col md:flex-row gap-6 animate-in fade-in slide-in-from-bottom-4">
                             <div className="flex-1 space-y-3">
                                 <div>
@@ -91,19 +153,25 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
                                     </p>
                                 </div>
 
-                                <div className="space-y-2">
-                                    <div className="flex items-center gap-2 text-sm text-slate-600 bg-slate-50 p-2 rounded-lg">
-                                        <MapPin size={16} className="text-blue-500 shrink-0" />
-                                        <span className="truncate">{result.address}</span>
+                                <div className="space-y-2 mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                    <div className="flex items-center gap-2 text-[10px] sm:text-xs font-bold text-slate-600 bg-slate-50 p-2 rounded-lg truncate">
+                                        <MapPin size={14} className="text-blue-500 shrink-0" />
+                                        <span className="truncate" title={result.address}>{result.address}</span>
                                     </div>
-                                    <div className="flex items-center gap-2 text-sm text-slate-600 bg-slate-50 p-2 rounded-lg">
-                                        <Phone size={16} className="text-green-500 shrink-0" />
-                                        <span className="font-bold">{result.phone || 'Sem Telefone'}</span>
+                                    <div className="flex items-center gap-2 text-[10px] sm:text-xs font-black text-slate-600 bg-slate-50 p-2 rounded-lg truncate">
+                                        <Phone size={14} className="text-green-500 shrink-0" />
+                                        <span>{result.phone || 'S/ Tel'}</span>
                                     </div>
                                     {result.website && (
-                                        <div className="flex items-center gap-2 text-xs text-blue-600 px-2">
+                                        <div className="flex items-center gap-2 text-[10px] sm:text-xs font-bold text-blue-600 bg-blue-50/50 p-2 rounded-lg truncate">
                                             <Globe size={14} className="shrink-0" />
-                                            <a href={result.website} target="_blank" rel="noreferrer" className="hover:underline truncate">{result.website}</a>
+                                            <a href={result.website} target="_blank" rel="noreferrer" className="hover:underline truncate" title={result.website}>{result.website.replace(/^https?:\/\//, '')}</a>
+                                        </div>
+                                    )}
+                                    {result.email && (
+                                        <div className="flex items-center gap-2 text-[10px] sm:text-xs font-bold text-purple-600 bg-purple-50 p-2 rounded-lg truncate">
+                                            <Mail size={14} className="shrink-0" />
+                                            <a href={`mailto:${result.email}`} className="hover:underline truncate" title={result.email}>{result.email}</a>
                                         </div>
                                     )}
                                 </div>
@@ -116,7 +184,7 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
                                         <button
                                             onClick={() => handleAction(result, 'APPROVE')}
                                             className="flex-1 md:flex-none p-3 bg-green-50 text-green-700 hover:bg-green-100 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-colors"
-                                            title="Aprovar e Enviar para Ligações"
+                                            title="Aprovar e Enviar para CRM"
                                         >
                                             <CheckCircle2 size={16} /> Aprovar
                                         </button>

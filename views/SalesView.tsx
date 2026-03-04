@@ -4,7 +4,7 @@ import {
     ShoppingBag, Plus, Search, Truck, CheckCircle2,
     MapPin, Tag, X, Save, Loader2, Hash, Zap,
     TrendingUp, DollarSign, BarChart3, Receipt, Check,
-    Clock, Filter, Edit2, Trash2
+    Clock, Filter, Edit2, Trash2, AlertCircle
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { Sale, SaleCategory, SaleChannel, SaleStatus, User as UserType, UserRole } from '../types';
@@ -24,6 +24,10 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
     const [statusFilter, setStatusFilter] = React.useState<'all' | SaleStatus>('all');
     const [showSuccessToast, setShowSuccessToast] = React.useState(false);
     const [toastMessage, setToastMessage] = React.useState('');
+
+    // Delivery Justification States
+    const [justifyingSaleId, setJustifyingSaleId] = React.useState<string | null>(null);
+    const [justification, setJustification] = React.useState({ delayReason: '', note: '' });
 
     // Filros Avançados
     const [dateRange, setDateRange] = React.useState({ start: '', end: '' });
@@ -135,6 +139,7 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
         setNewSale({
             saleNumber: sale.saleNumber,
             clientName: sale.clientName,
+            clientId: sale.clientId || '',
             address: sale.address,
             category: sale.category,
             channel: sale.channel,
@@ -191,6 +196,26 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
         }
     };
 
+    const handleSaveJustification = async () => {
+        if (!justifyingSaleId) return;
+        setIsProcessing(true);
+        try {
+            await dataService.updateSale(justifyingSaleId, {
+                deliveryDelayReason: justification.delayReason,
+                deliveryNote: justification.note
+            });
+            setSales(prev => prev.map(s => s.id === justifyingSaleId ? { ...s, deliveryDelayReason: justification.delayReason, deliveryNote: justification.note } : s));
+            setJustifyingSaleId(null);
+            setJustification({ delayReason: '', note: '' });
+            triggerToast("Justificativa registrada com sucesso!");
+        } catch (e) {
+            console.error("Erro ao salvar justificativa:", e);
+            alert("Erro ao salvar justificativa de atraso.");
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
     const filteredSales = sales.filter(s => {
         const matchesSearch = s.clientName.toLowerCase().includes(searchTerm.toLowerCase()) || s.saleNumber.includes(searchTerm);
         const matchesStatus = statusFilter === 'all' || s.status === statusFilter;
@@ -221,6 +246,13 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
 
     const formatCurrency = (val: number) => {
         return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
+    };
+
+    const calculateGapDays = (start: string, end: string) => {
+        const diffTime = Math.abs(new Date(end).getTime() - new Date(start).getTime());
+        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+        const diffHours = Math.floor((diffTime % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+        return `${diffDays}d ${diffHours}h`;
     };
 
     return (
@@ -406,6 +438,16 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
                                         <p className={`text-[10px] font-bold uppercase tracking-widest flex items-center gap-2 mt-2 transition-colors ${isPendente ? 'text-slate-400' : 'text-emerald-600/60'}`}>
                                             <MapPin size={12} className={isPendente ? 'text-red-500' : 'text-emerald-400'} /> {sale.address || 'Endereço não informado'}
                                         </p>
+
+                                        {/* Status Delivery Flags */}
+                                        {sale.deliveryDelayReason && (
+                                            <div className="mt-3 p-3 bg-red-50 border border-red-100 rounded-xl inline-block max-w-full">
+                                                <div className="flex items-center gap-2 text-[10px] font-black uppercase text-red-600 tracking-widest mb-1">
+                                                    <AlertCircle size={14} /> {sale.deliveryDelayReason}
+                                                </div>
+                                                {sale.deliveryNote && <p className="text-xs font-bold text-slate-600">{sale.deliveryNote}</p>}
+                                            </div>
+                                        )}
                                     </div>
                                     <div className="flex flex-wrap gap-2 pt-2 items-center">
                                         <span className={`px-3 py-1 rounded-md text-[9px] font-black uppercase border flex items-center gap-2 transition-all ${isPendente ? 'bg-blue-50 text-blue-600 border-blue-100' : 'bg-emerald-100/50 text-emerald-600 border-emerald-200'}`}>
@@ -439,28 +481,43 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
                                     </div>
 
                                     {isPendente ? (
-                                        <button
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleUpdateStatus(sale.id, SaleStatus.ENTREGUE);
-                                            }}
-                                            disabled={updatingId === sale.id}
-                                            className="w-full md:w-auto px-12 py-5 bg-emerald-600 text-white rounded-[24px] font-black uppercase text-[11px] tracking-widest shadow-2xl hover:bg-emerald-700 active:scale-95 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
-                                        >
-                                            {updatingId === sale.id ? (
-                                                <Loader2 className="animate-spin" size={18} />
-                                            ) : (
-                                                <Truck size={18} strokeWidth={2.5} />
-                                            )}
-                                            Confirmar Entrega
-                                        </button>
+                                        <div className="flex flex-col items-center md:items-end w-full">
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    handleUpdateStatus(sale.id, SaleStatus.ENTREGUE);
+                                                }}
+                                                disabled={updatingId === sale.id}
+                                                className="w-full md:w-auto px-12 py-5 bg-emerald-600 text-white rounded-[24px] font-black uppercase text-[11px] tracking-widest shadow-2xl hover:bg-emerald-700 active:scale-95 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
+                                            >
+                                                {updatingId === sale.id ? (
+                                                    <Loader2 className="animate-spin" size={18} />
+                                                ) : (
+                                                    <Truck size={18} strokeWidth={2.5} />
+                                                )}
+                                                Confirmar Entrega
+                                            </button>
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setJustification({ delayReason: sale.deliveryDelayReason || '', note: sale.deliveryNote || '' });
+                                                    setJustifyingSaleId(sale.id);
+                                                }}
+                                                className="mt-3 text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-red-500 underline transition-colors"
+                                            >
+                                                Justificar Pendência
+                                            </button>
+                                        </div>
                                     ) : (
                                         <div className="flex flex-col items-center md:items-end animate-in zoom-in duration-500">
                                             <div className="flex items-center gap-3 text-emerald-700 bg-emerald-100 px-6 py-4 rounded-[20px] border border-emerald-200 shadow-sm">
                                                 <CheckCircle2 size={24} className="animate-pulse" />
                                                 <span className="font-black uppercase text-xs tracking-widest">Venda Entregue</span>
                                             </div>
-                                            <p className="text-[9px] font-bold text-emerald-400 uppercase mt-2">Finalizado em: {sale.deliveredAt ? new Date(sale.deliveredAt).toLocaleString() : '-'}</p>
+                                            <p className="text-[9px] font-bold text-emerald-400 uppercase mt-2 text-right">
+                                                Finalizado em: {sale.deliveredAt ? new Date(sale.deliveredAt).toLocaleString() : '-'}<br />
+                                                {sale.deliveredAt && <span className="text-emerald-600 font-black">GAP de Entrega: {calculateGapDays(sale.registeredAt, sale.deliveredAt)}</span>}
+                                            </p>
                                         </div>
                                     )}
                                 </div>
@@ -473,131 +530,191 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
                 </div>
             </div>
 
-            {isModalOpen && (
-                <div className="fixed inset-0 z-[150] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
-                    <div className="bg-white w-full max-w-xl rounded-[48px] shadow-2xl overflow-hidden animate-in zoom-in duration-300">
-                        <div className="bg-slate-900 p-10 text-white flex justify-between items-center">
-                            <div>
-                                <h3 className="text-2xl font-black uppercase tracking-tighter flex items-center gap-4">
-                                    <ShoppingBag className="text-blue-400" /> {editingSaleId ? 'Editar Venda' : 'Nova Venda'}
-                                </h3>
-                                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1">Operador atual: @{user.username}</p>
-                            </div>
-                            <button onClick={() => setIsModalOpen(false)} className="hover:bg-white/10 p-3 rounded-full transition-all active:scale-90"><X size={28} /></button>
-                        </div>
-
-                        <form onSubmit={handleCreateSale} className="p-10 space-y-6">
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nº do Pedido</label>
-                                    <input
-                                        type="text"
-                                        required
-                                        value={newSale.saleNumber}
-                                        onChange={e => setNewSale({ ...newSale, saleNumber: e.target.value })}
-                                        className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-bold outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
-                                        placeholder="Ex: 99887"
-                                    />
+            {
+                isModalOpen && (
+                    <div className="fixed inset-0 z-[150] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
+                        <div className="bg-white w-full max-w-xl rounded-[48px] shadow-2xl overflow-hidden animate-in zoom-in duration-300">
+                            <div className="bg-slate-900 p-10 text-white flex justify-between items-center">
+                                <div>
+                                    <h3 className="text-2xl font-black uppercase tracking-tighter flex items-center gap-4">
+                                        <ShoppingBag className="text-blue-400" /> {editingSaleId ? 'Editar Venda' : 'Nova Venda'}
+                                    </h3>
+                                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1">Operador atual: @{user.username}</p>
                                 </div>
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Valor Venda (R$)</label>
-                                    <input
-                                        type="text"
-                                        required
-                                        value={newSale.value}
-                                        onChange={e => setNewSale({ ...newSale, value: e.target.value })}
-                                        className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-bold outline-none focus:ring-4 focus:ring-emerald-500/10 transition-all text-emerald-600"
-                                        placeholder="0,00"
-                                    />
-                                </div>
+                                <button onClick={() => setIsModalOpen(false)} className="hover:bg-white/10 p-3 rounded-full transition-all active:scale-90"><X size={28} /></button>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Categoria</label>
-                                    <select
-                                        value={newSale.category}
-                                        onChange={e => setNewSale({ ...newSale, category: e.target.value as SaleCategory })}
-                                        className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-black text-[10px] uppercase outline-none cursor-pointer"
-                                    >
-                                        {Object.values(SaleCategory).map(c => <option key={c} value={c}>{c}</option>)}
-                                    </select>
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Canal</label>
-                                    <select
-                                        value={newSale.channel}
-                                        onChange={e => setNewSale({ ...newSale, channel: e.target.value as SaleChannel })}
-                                        className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-black text-[10px] uppercase outline-none cursor-pointer"
-                                    >
-                                        {Object.values(SaleChannel).map(c => <option key={c} value={c}>{c}</option>)}
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div className="space-y-2 relative">
-                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nome do Cliente</label>
-                                <input
-                                    type="text"
-                                    required
-                                    value={newSale.clientName}
-                                    onChange={e => {
-                                        const val = e.target.value;
-                                        setNewSale({ ...newSale, clientName: val });
-                                        if (val.length > 2) {
-                                            const matches = clients.filter(c => c.name.toLowerCase().includes(val.toLowerCase()));
-                                            setClientSuggestions(matches.slice(0, 5));
-                                            setShowClientSuggestions(true);
-                                        } else {
-                                            setShowClientSuggestions(false);
-                                        }
-                                    }}
-                                    onBlur={() => setTimeout(() => setShowClientSuggestions(false), 200)}
-                                    className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-bold outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
-                                    placeholder="Nome completo do comprador"
-                                    autoComplete="off"
-                                />
-                                {showClientSuggestions && clientSuggestions.length > 0 && (
-                                    <div className="absolute top-full left-0 w-full bg-white border border-slate-100 rounded-xl shadow-xl z-50 mt-1 max-h-40 overflow-y-auto">
-                                        {clientSuggestions.map(c => (
-                                            <div
-                                                key={c.id}
-                                                className="p-3 hover:bg-slate-50 cursor-pointer text-sm font-bold text-slate-700 transition-colors"
-                                                onMouseDown={() => {
-                                                    setNewSale({
-                                                        ...newSale,
-                                                        clientName: c.name,
-                                                        clientId: c.id,
-                                                        address: c.address || newSale.address
-                                                    });
-                                                    setShowClientSuggestions(false);
-                                                }}
-                                            >
-                                                {c.name}
-                                            </div>
-                                        ))}
+                            <form onSubmit={handleCreateSale} className="p-10 space-y-6">
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nº do Pedido</label>
+                                        <input
+                                            type="text"
+                                            required
+                                            value={newSale.saleNumber}
+                                            onChange={e => setNewSale({ ...newSale, saleNumber: e.target.value })}
+                                            className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-bold outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
+                                            placeholder="Ex: 99887"
+                                        />
                                     </div>
-                                )}
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Valor Venda (R$)</label>
+                                        <input
+                                            type="text"
+                                            required
+                                            value={newSale.value}
+                                            onChange={e => setNewSale({ ...newSale, value: e.target.value })}
+                                            className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-bold outline-none focus:ring-4 focus:ring-emerald-500/10 transition-all text-emerald-600"
+                                            placeholder="0,00"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Categoria</label>
+                                        <select
+                                            value={newSale.category}
+                                            onChange={e => setNewSale({ ...newSale, category: e.target.value as SaleCategory })}
+                                            className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-black text-[10px] uppercase outline-none cursor-pointer"
+                                        >
+                                            {Object.values(SaleCategory).map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Canal</label>
+                                        <select
+                                            value={newSale.channel}
+                                            onChange={e => setNewSale({ ...newSale, channel: e.target.value as SaleChannel })}
+                                            className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-black text-[10px] uppercase outline-none cursor-pointer"
+                                        >
+                                            {Object.values(SaleChannel).map(c => <option key={c} value={c}>{c}</option>)}
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2 relative">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nome do Cliente</label>
+                                    <input
+                                        type="text"
+                                        required
+                                        value={newSale.clientName}
+                                        onChange={e => {
+                                            const val = e.target.value;
+                                            setNewSale({ ...newSale, clientName: val });
+                                            if (val.length > 2) {
+                                                const matches = clients.filter(c => c.name.toLowerCase().includes(val.toLowerCase()));
+                                                setClientSuggestions(matches.slice(0, 5));
+                                                setShowClientSuggestions(true);
+                                            } else {
+                                                setShowClientSuggestions(false);
+                                            }
+                                        }}
+                                        onBlur={() => setTimeout(() => setShowClientSuggestions(false), 200)}
+                                        className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-bold outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
+                                        placeholder="Nome completo do comprador"
+                                        autoComplete="off"
+                                    />
+                                    {showClientSuggestions && clientSuggestions.length > 0 && (
+                                        <div className="absolute top-full left-0 w-full bg-white border border-slate-100 rounded-xl shadow-xl z-50 mt-1 max-h-40 overflow-y-auto">
+                                            {clientSuggestions.map(c => (
+                                                <div
+                                                    key={c.id}
+                                                    className="p-3 hover:bg-slate-50 cursor-pointer text-sm font-bold text-slate-700 transition-colors"
+                                                    onMouseDown={() => {
+                                                        setNewSale({
+                                                            ...newSale,
+                                                            clientName: c.name,
+                                                            clientId: c.id,
+                                                            address: c.address || newSale.address
+                                                        });
+                                                        setShowClientSuggestions(false);
+                                                    }}
+                                                >
+                                                    {c.name}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Endereço Completo</label>
+                                    <textarea
+                                        value={newSale.address}
+                                        onChange={e => setNewSale({ ...newSale, address: e.target.value })}
+                                        className="w-full p-5 bg-slate-50 border border-slate-200 rounded-[32px] font-bold h-28 resize-none outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
+                                        placeholder="Rua, número, bairro e cidade..."
+                                    />
+                                </div>
+
+                                <button
+                                    type="submit"
+                                    disabled={isProcessing}
+                                    className="w-full py-6 bg-slate-900 text-white rounded-[32px] font-black uppercase tracking-widest text-[10px] shadow-2xl flex items-center justify-center gap-3 hover:bg-slate-800 transition-all active:scale-95 disabled:opacity-50"
+                                >
+                                    {isProcessing ? <Loader2 className="animate-spin" size={20} /> : <Save size={20} />} {editingSaleId ? 'Salvar Alterações' : 'Registrar Venda e Gerar Logística'}
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                )}
+
+            {justifyingSaleId && (
+                <div className="fixed inset-0 z-[200] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
+                    <div className="bg-white w-full max-w-md rounded-[32px] shadow-2xl overflow-hidden animate-in zoom-in duration-300">
+                        <div className="p-8">
+                            <h3 className="text-xl font-black text-slate-800 uppercase tracking-tighter mb-6 flex items-center gap-2">
+                                <AlertCircle className="text-red-500" /> Justificar Atraso
+                            </h3>
+
+                            <div className="space-y-4">
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Motivo Principal</label>
+                                    <select
+                                        value={justification.delayReason}
+                                        onChange={e => setJustification(prev => ({ ...prev, delayReason: e.target.value }))}
+                                        className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none cursor-pointer"
+                                    >
+                                        <option value="">Selecione um motivo...</option>
+                                        <option value="Falta de Material/Estoque">Falta de Material/Estoque</option>
+                                        <option value="Cliente Remarcou">Cliente Remarcou</option>
+                                        <option value="Aguardando Pagamento">Aguardando Pagamento</option>
+                                        <option value="Problema Logístico">Problema Logístico</option>
+                                        <option value="Cancelado/Desistência">Cancelado/Desistência</option>
+                                        <option value="Outros">Outros</option>
+                                    </select>
+                                </div>
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Observações P/ Equipe</label>
+                                    <textarea
+                                        value={justification.note}
+                                        onChange={e => setJustification(prev => ({ ...prev, note: e.target.value }))}
+                                        className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-medium outline-none h-24 resize-none text-sm placeholder:text-slate-300"
+                                        placeholder="Ex: Bomba principal em falta no fornecedor. Previsão para terça-feira."
+                                    />
+                                </div>
                             </div>
 
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Endereço Completo</label>
-                                <textarea
-                                    value={newSale.address}
-                                    onChange={e => setNewSale({ ...newSale, address: e.target.value })}
-                                    className="w-full p-5 bg-slate-50 border border-slate-200 rounded-[32px] font-bold h-28 resize-none outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
-                                    placeholder="Rua, número, bairro e cidade..."
-                                />
+                            <div className="flex gap-4 mt-8">
+                                <button
+                                    onClick={() => {
+                                        setJustifyingSaleId(null);
+                                        setJustification({ delayReason: '', note: '' });
+                                    }}
+                                    className="flex-1 py-4 bg-slate-100 text-slate-500 rounded-2xl font-black uppercase text-[10px] tracking-widest hover:bg-slate-200 transition-colors"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    onClick={handleSaveJustification}
+                                    disabled={!justification.delayReason || isProcessing}
+                                    className="flex-1 py-4 bg-red-600 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-xl shadow-red-500/20 hover:bg-red-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                                >
+                                    {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />} Salvar Rótulo
+                                </button>
                             </div>
-
-                            <button
-                                type="submit"
-                                disabled={isProcessing}
-                                className="w-full py-6 bg-slate-900 text-white rounded-[32px] font-black uppercase tracking-widest text-[10px] shadow-2xl flex items-center justify-center gap-3 hover:bg-slate-800 transition-all active:scale-95 disabled:opacity-50"
-                            >
-                                {isProcessing ? <Loader2 className="animate-spin" size={20} /> : <Save size={20} />} {editingSaleId ? 'Salvar Alterações' : 'Registrar Venda e Gerar Logística'}
-                            </button>
-                        </form>
+                        </div>
                     </div>
                 </div>
             )}

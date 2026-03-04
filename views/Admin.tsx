@@ -50,7 +50,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   const refreshData = async () => {
     setIsProcessing(true);
     try {
-      const [userList, questionList, taskList, allClients, whatsappList] = await Promise.all([
+      const [userList, questionList, taskList, allClients, whatsappList, mapsKey] = await Promise.all([
         dataService.getUsers(),
         dataService.getQuestions(),
         dataService.getTasks(),
@@ -60,7 +60,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
       ]);
       setUsers(userList);
       setQuestions(questionList);
-      setGoogleMapsKey(allClients[3] as any); // Correcting destructuring below
+      setGoogleMapsKey(mapsKey);
 
       const skipped = taskList.filter(t => t.status === 'skipped').map(t => ({
         ...t,

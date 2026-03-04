@@ -458,6 +458,27 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                {/* OVERVIEW TAB */}
                {activeTab === 'overview' && (
                   <div className="space-y-8">
+                     {/* VOLUME DE BASE KPIs */}
+                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <MetricCard
+                           title="Base Total (Contatos)"
+                           value={clients.length + prospects.length}
+                           icon={Users} color="slate"
+                        />
+                        <MetricCard
+                           title="Carteira de Clientes (Pós-Venda)"
+                           value={clients.length}
+                           icon={Target} color="emerald"
+                           subtitle="Isolado para Remarketing e Pós-venda"
+                        />
+                        <MetricCard
+                           title="Prospecção Fria (CRM Leads)"
+                           value={prospects.length}
+                           icon={Filter} color="blue"
+                           subtitle="Aguardando qualificação / vendas"
+                        />
+                     </div>
+
                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                         <MetricCard
                            title="Receita Total"

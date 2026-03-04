@@ -37,6 +37,7 @@ export interface ScraperResult {
     google_place_id: string;
     review_status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'IGNORED' | 'MERGED';
     duplication_score: number;
+    email?: string;
     scraper_runs?: ScraperRun; // Join
     // ... other fields
 }
@@ -118,81 +119,85 @@ export const scraperService = {
         let totalNew = 0;
         let errors = [];
 
-        for (const point of points) {
-            try {
-                let nextPageToken = '';
-                let pages = 0;
+        try {
+            for (const point of points) {
+                try {
+                    let nextPageToken = '';
+                    let pages = 0;
 
-                do {
-                    const searchUrl = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${point.lat},${point.lng}&radius=${process.radius_km * 1000}&keyword=${encodeURIComponent(process.keyword)}&key=${GOOGLE_MAPS_KEY}${nextPageToken ? `&pagetoken=${nextPageToken}` : ''}`;
-                    const searchRes = await fetch(searchUrl);
-                    const searchData = await searchRes.json();
+                    do {
+                        const searchUrl = `/google-proxy/maps/api/place/nearbysearch/json?location=${point.lat},${point.lng}&radius=${process.radius_km * 1000}&keyword=${encodeURIComponent(process.keyword)}&key=${GOOGLE_MAPS_KEY}${nextPageToken ? `&pagetoken=${nextPageToken}` : ''}`;
+                        const searchRes = await fetch(searchUrl);
+                        if (!searchRes.ok) throw new Error(`Network Error: ${searchRes.statusText}`);
+                        const searchData = await searchRes.json();
 
-                    if (searchData.status !== 'OK' && searchData.status !== 'ZERO_RESULTS') {
-                        throw new Error(`Maps API Error: ${searchData.status}`);
-                    }
-
-                    const places = searchData.results || [];
-
-                    for (const place of places) {
-                        // Check deduplication
-                        const { count } = await supabase
-                            .from('scraper_results')
-                            .select('*', { count: 'exact', head: true })
-                            .eq('google_place_id', place.place_id);
-
-                        if (count === 0) {
-                            // Fetch Details (Phone, Website)
-                            const detailsUrl = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place.place_id}&fields=name,formatted_address,formatted_phone_number,website&key=${GOOGLE_MAPS_KEY}`;
-                            const detailsRes = await fetch(detailsUrl);
-                            const detailsData = await detailsRes.json();
-                            const details = detailsData.result || {};
-
-                            await supabase.from('scraper_results').insert({
-                                run_id: run.id,
-                                google_place_id: place.place_id,
-                                name: details.name || place.name,
-                                address: details.formatted_address || place.vicinity,
-                                phone: details.formatted_phone_number,
-                                website: details.website,
-                                rating: null,
-                                user_ratings_total: null,
-                                types: place.types,
-                                location_lat: place.geometry.location.lat,
-                                location_lng: place.geometry.location.lng,
-                                review_status: 'PENDING',
-                                raw_data: { ...place, ...details }
-                            });
-                            totalNew++;
+                        if (searchData.status !== 'OK' && searchData.status !== 'ZERO_RESULTS') {
+                            throw new Error(`Maps API Error: ${searchData.status}`);
                         }
-                        totalFound++;
-                    }
 
-                    nextPageToken = searchData.next_page_token;
-                    pages++;
+                        const places = searchData.results || [];
 
-                    if (nextPageToken) await new Promise(resolve => setTimeout(resolve, 2000));
-                    if (pages >= 3) nextPageToken = '';
+                        for (const place of places) {
+                            // Check deduplication
+                            const { count } = await supabase
+                                .from('scraper_results')
+                                .select('*', { count: 'exact', head: true })
+                                .eq('google_place_id', place.place_id);
 
-                } while (nextPageToken);
+                            if (count === 0) {
+                                // Fetch Details
+                                const detailsUrl = `/google-proxy/maps/api/place/details/json?place_id=${place.place_id}&fields=name,formatted_address,formatted_phone_number,website,business_status&key=${GOOGLE_MAPS_KEY}`;
+                                const detailsRes = await fetch(detailsUrl);
+                                const detailsData = await detailsRes.ok ? await detailsRes.json() : {};
+                                const details = detailsData.result || {};
 
-            } catch (err: any) {
-                console.error("Scrape Error:", err);
-                errors.push(err.message);
+                                await supabase.from('scraper_results').insert({
+                                    run_id: run.id,
+                                    google_place_id: place.place_id,
+                                    name: details.name || place.name,
+                                    address: details.formatted_address || place.vicinity,
+                                    phone: details.formatted_phone_number,
+                                    website: details.website,
+                                    email: null,
+                                    rating: null,
+                                    user_ratings_total: null,
+                                    types: place.types,
+                                    location_lat: place.geometry.location.lat,
+                                    location_lng: place.geometry.location.lng,
+                                    review_status: 'PENDING',
+                                    raw_data: { ...place, ...details }
+                                });
+                                totalNew++;
+                            }
+                            totalFound++;
+                        }
+
+                        nextPageToken = searchData.next_page_token;
+                        pages++;
+
+                        if (nextPageToken) await new Promise(resolve => setTimeout(resolve, 2000));
+                        if (pages >= 3) nextPageToken = '';
+
+                    } while (nextPageToken);
+
+                } catch (err: any) {
+                    console.error("Scrape Error for point:", point, err);
+                    errors.push(err.message);
+                }
             }
+        } finally {
+            // 5. UPDATE RUN
+            await supabase
+                .from('scraper_runs')
+                .update({
+                    status: errors.length > 0 && totalFound === 0 ? 'FAILED' : 'COMPLETED',
+                    finished_at: new Date().toISOString(),
+                    total_found: totalFound,
+                    total_new: totalNew,
+                    error_log: errors.join('\n')
+                })
+                .eq('id', run.id);
         }
-
-        // 5. UPDATE RUN
-        await supabase
-            .from('scraper_runs')
-            .update({
-                status: errors.length > 0 && totalFound === 0 ? 'FAILED' : 'COMPLETED',
-                finished_at: new Date().toISOString(),
-                total_found: totalFound,
-                total_new: totalNew,
-                error_log: errors.join('\n')
-            })
-            .eq('id', run.id);
 
         return { success: true, runId: run.id, totalNew };
     },
@@ -259,42 +264,61 @@ export const scraperService = {
         if (error) throw error;
     },
 
+    forceCompleteRun: async (runId: string) => {
+        // Conta os resultados encontrados no banco
+        const { count: foundCount } = await supabase
+            .from('scraper_results')
+            .select('*', { count: 'exact', head: true })
+            .eq('run_id', runId);
+
+        const { error } = await supabase
+            .from('scraper_runs')
+            .update({
+                status: 'COMPLETED',
+                total_found: foundCount || 0,
+                total_new: foundCount || 0, // Estimativa para execuções recuperadas
+                finished_at: new Date().toISOString()
+            })
+            .eq('id', runId);
+
+        if (error) throw new Error("Erro ao concluir execução: " + error.message);
+    },
+
+    deleteRun: async (runId: string) => {
+        // Primeiro remove os resultados pendentes para não deixar órfãos
+        await supabase.from('scraper_results').delete().eq('run_id', runId).eq('review_status', 'PENDING');
+        const { error } = await supabase.from('scraper_runs').delete().eq('id', runId);
+        if (error) throw new Error("Erro ao excluir execução: " + error.message);
+    },
+
     // --- INTEGRATIONS ---
-    sendToQueue: async (result: ScraperResult, operatorId?: string) => {
-        // 1. Create Task
-        // 2. Mark Result as APPROVED and Exported
-        // Transaction ideally, but sequential for now
+    // --- INTEGRATIONS ---
+    approveLead: async (result: ScraperResult, userId?: string) => {
+        // Marks Result as APPROVED and upserts into the 'clients' table as a LEAD.
+        // It DOES NOT dispatch to calls queue anymore. Bulk dispatching handles that later.
 
-        // Check if Client exists first? For now, we create a task linked to the scraper result directly.
-        // Actually, 'tasks' usually requires 'client_id'. We might need to CREATE A CLIENT first or allow NULL client_id.
-        // The migration scraper_integration added scraper_result_id to tasks.
-
-        // Let's create a Client from the lead first (Leads become Clients in this system?)
-        // Or we can create a "Prospect" client.
-
-        // For this system, we'll try to UPSERT a client based on phone.
-        let clientId = null;
-        if (result.phone) {
-            const { data: client } = await supabase.from('clients').upsert({
-                name: result.name,
-                phone: result.phone.replace(/\D/g, ''),
-                address: result.address,
-                origin: 'GOOGLE_SEARCH'
-            }, { onConflict: 'phone' }).select().single();
-            clientId = client?.id;
+        if (!result.phone) {
+            // Se não tem telefone, a gente ainda aprova e marca no scraper_results, mas não tenta upsert sem telefone
+            await scraperService.updateResultStatus(result.id, 'APPROVED', 'Sem telefone, salvo apenas no Scraper', userId);
+            return;
         }
 
-        const { error } = await supabase.from('tasks').insert({
-            client_id: clientId, // Can be null if system allows, otherwise we rely on the upsert above
-            type: 'CALL', // Default
-            assigned_to: operatorId,
-            status: 'pending',
-            description: `Lead do Google Maps: ${result.name}`,
-            scraper_result_id: result.id
-        });
+        const phoneCleaner = result.phone.replace(/\D/g, '');
 
-        if (error) throw error;
+        // Tentamos fazer Upsert baseado no telefone
+        const { error: upsertError } = await supabase.from('clients').upsert({
+            name: result.name,
+            phone: phoneCleaner,
+            address: result.address,
+            email: result.email || null,
+            website: result.website || null,
+            origin: 'GOOGLE_SEARCH',
+            status: 'LEAD',
+            funnel_status: 'NEW'
+        }, { onConflict: 'phone' });
 
-        await scraperService.updateResultStatus(result.id, 'APPROVED', 'Enviado para Fila');
+        if (upsertError) throw upsertError;
+
+        await scraperService.updateResultStatus(result.id, 'APPROVED', 'Salvo no CRM de Leads', userId);
     }
 };

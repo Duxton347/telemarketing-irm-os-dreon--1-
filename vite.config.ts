@@ -7,6 +7,13 @@ export default defineConfig({
   server: {
     port: 3000,
     host: true,
+    proxy: {
+      '/google-proxy': {
+        target: 'https://maps.googleapis.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/google-proxy/, '')
+      }
+    }
   },
   build: {
     outDir: 'dist',

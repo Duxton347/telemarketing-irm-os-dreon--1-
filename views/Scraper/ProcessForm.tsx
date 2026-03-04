@@ -41,8 +41,8 @@ export const ProcessForm: React.FC<ProcessFormProps> = ({ onClose, onSuccess, us
                 throw new Error("Chave do Google Maps não configurada no Módulo de Gestão.");
             }
 
-            // 2. Verify Location directly using Frontend API Call
-            const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(locationInput)}&key=${GOOGLE_MAPS_KEY}`;
+            // 2. Verify Location directly using Frontend API Call via Proxy
+            const url = `/google-proxy/maps/api/geocode/json?address=${encodeURIComponent(locationInput)}&key=${GOOGLE_MAPS_KEY}`;
             const res = await fetch(url);
             const data = await res.json();
 

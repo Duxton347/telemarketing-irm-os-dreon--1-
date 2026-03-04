@@ -42,7 +42,8 @@ export enum SaleChannel {
 
 export enum SaleStatus {
   PENDENTE = 'PENDENTE',
-  ENTREGUE = 'ENTREGUE'
+  ENTREGUE = 'ENTREGUE',
+  CANCELADO = 'CANCELADO'
 }
 
 export interface Sale {
@@ -59,6 +60,8 @@ export interface Sale {
   registeredAt: string;
   deliveredAt?: string;
   externalSalesperson?: string;
+  deliveryDelayReason?: string;
+  deliveryNote?: string;
 }
 
 export enum ProtocolStatus {

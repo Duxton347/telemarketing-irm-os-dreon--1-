@@ -185,7 +185,9 @@ export const dataService = {
       value: s.value || 0,
       registeredAt: s.registered_at,
       deliveredAt: s.delivered_at,
-      externalSalesperson: s.external_salesperson
+      externalSalesperson: s.external_salesperson,
+      deliveryDelayReason: s.delivery_delay_reason,
+      deliveryNote: s.delivery_note
     }));
   },
 
@@ -216,11 +218,14 @@ export const dataService = {
 
   // ... (updateSaleStatus, checkSaleExists, deleteSale, updateSale remain similar)
 
-  updateSaleStatus: async (saleId: string, status: SaleStatus): Promise<void> => {
+  updateSaleStatus: async (saleId: string, status: SaleStatus, options?: { delayReason?: string; note?: string }): Promise<void> => {
     const updates: any = { status };
     if (status === SaleStatus.ENTREGUE) {
       updates.delivered_at = new Date().toISOString();
     }
+    if (options?.delayReason !== undefined) updates.delivery_delay_reason = options.delayReason;
+    if (options?.note !== undefined) updates.delivery_note = options.note;
+
     const { error } = await supabase.from('sales').update(updates).eq('id', saleId);
     if (error) throw error;
   },
@@ -252,6 +257,8 @@ export const dataService = {
     if (updates.address) payload.address = updates.address;
     if (updates.operatorId) payload.operator_id = updates.operatorId;
     if (updates.clientId !== undefined) payload.customer_id = updates.clientId || null;
+    if (updates.deliveryDelayReason !== undefined) payload.delivery_delay_reason = updates.deliveryDelayReason;
+    if (updates.deliveryNote !== undefined) payload.delivery_note = updates.deliveryNote;
 
     const { error } = await supabase.from('sales').update(payload).eq('id', saleId);
     if (error) throw error;
@@ -721,6 +728,69 @@ export const dataService = {
     }));
   },
 
+  getClientHistory: async (clientId: string): Promise<{ calls: CallRecord[], protocols: Protocol[] }> => {
+    try {
+      // Fetch Call Logs
+      const { data: callsData, error: callsError } = await supabase
+        .from('call_logs')
+        .select('*')
+        .eq('client_id', clientId)
+        .order('start_time', { ascending: false });
+
+      if (callsError) throw callsError;
+
+      // Fetch Protocols
+      const { data: protocolsData, error: protocolsError } = await supabase
+        .from('protocols')
+        .select('*')
+        .eq('client_id', clientId)
+        .order('opened_at', { ascending: false });
+
+      if (protocolsError) throw protocolsError;
+
+      return {
+        calls: (callsData || []).map(c => ({
+          id: c.id,
+          taskId: c.task_id,
+          operatorId: c.operator_id,
+          clientId: c.client_id,
+          startTime: c.start_time,
+          endTime: c.end_time,
+          duration: c.duration,
+          reportTime: c.report_time,
+          responses: c.responses || {},
+          type: (c.call_type as CallType) || CallType.POS_VENDA,
+          protocolId: c.protocol_id
+        })),
+        protocols: (protocolsData || []).map(p => ({
+          id: p.id,
+          protocolNumber: p.protocol_number,
+          clientId: p.client_id,
+          openedByOperatorId: p.opened_by_operator_id,
+          ownerOperatorId: p.owner_operator_id,
+          origin: p.origin,
+          departmentId: p.department_id,
+          categoryId: p.category_id,
+          title: p.title,
+          description: p.description,
+          priority: p.priority as any,
+          status: p.status as ProtocolStatus,
+          openedAt: p.opened_at,
+          updatedAt: p.updated_at,
+          closedAt: p.closed_at,
+          firstResponseAt: p.first_response_at,
+          lastActionAt: p.last_action_at,
+          slaDueAt: p.sla_due_at,
+          resolutionSummary: p.resolution_summary,
+          rootCause: p.root_cause
+        }))
+      };
+    } catch (e) {
+      console.error("Error getting client history:", e);
+      return { calls: [], protocols: [] };
+    }
+  },
+
   getProspects: async (): Promise<Client[]> => {
     const { data, error } = await supabase.from('clients').select('*').eq('status', 'LEAD').order('name');
     if (error) throw error;
@@ -744,6 +814,21 @@ export const dataService = {
       funnel_status: c.funnel_status
     }));
   },
+
+  dispatchLeadsToQueue: async (leadIds: string[], operatorId?: string, taskType: CallType = CallType.PROSPECCAO): Promise<void> => {
+    if (!leadIds || leadIds.length === 0) return;
+
+    const payloads = leadIds.map(id => ({
+      client_id: id,
+      type: taskType,
+      assigned_to: operatorId || null,
+      status: 'pending'
+    }));
+
+    const { error } = await supabase.from('tasks').insert(payloads);
+    if (error) throw error;
+  },
+
 
   upsertClient: async (client: Partial<Client>): Promise<Client> => {
     const phone = normalizePhone(client.phone || '');
@@ -1026,6 +1111,18 @@ export const dataService = {
 
     const { error } = await supabase.from('visits').update(payload).eq('id', id);
     if (error) throw error;
+
+    // Automate funnel progression for Leads
+    if (updates.realized === true || updates.status === 'COMPLETED') {
+      const { data: visitData } = await supabase.from('visits').select('client_id').eq('id', id).single();
+      if (visitData && visitData.client_id) {
+        // Check if it's a LEAD, if so move to PHYSICAL_VISIT
+        const { data: clientData } = await supabase.from('clients').select('status, funnel_status').eq('id', visitData.client_id).single();
+        if (clientData && clientData.status === 'LEAD') {
+          await supabase.from('clients').update({ funnel_status: 'PHYSICAL_VISIT' }).eq('id', visitData.client_id);
+        }
+      }
+    }
   },
 
   // Busca candidatos para rotas (Calls e Tasks)
