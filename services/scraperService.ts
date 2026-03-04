@@ -139,12 +139,13 @@ export const scraperService = {
                         const places = searchData.results || [];
 
                         for (const place of places) {
-                            // Check deduplication
+                            // Check deduplication (Local Scraper DB + CRM DB)
                             const { count } = await supabase
                                 .from('scraper_results')
                                 .select('*', { count: 'exact', head: true })
                                 .eq('google_place_id', place.place_id);
 
+                            // We will fetch details first before CRM check to get the phone number
                             if (count === 0) {
                                 // Fetch Details
                                 const detailsGoogleUrl = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place.place_id}&fields=name,formatted_address,formatted_phone_number,website,business_status&key=${GOOGLE_MAPS_KEY}`;
@@ -153,23 +154,46 @@ export const scraperService = {
                                 const detailsData = await detailsRes.ok ? await detailsRes.json() : {};
                                 const details = detailsData.result || {};
 
-                                await supabase.from('scraper_results').insert({
-                                    run_id: run.id,
-                                    google_place_id: place.place_id,
-                                    name: details.name || place.name,
-                                    address: details.formatted_address || place.vicinity,
-                                    phone: details.formatted_phone_number,
-                                    website: details.website,
-                                    email: null,
-                                    rating: null,
-                                    user_ratings_total: null,
-                                    types: place.types,
-                                    location_lat: place.geometry.location.lat,
-                                    location_lng: place.geometry.location.lng,
-                                    review_status: 'PENDING',
-                                    raw_data: { ...place, ...details }
-                                });
-                                totalNew++;
+                                let isCrmDuplicate = false;
+
+                                if (details.formatted_phone_number) {
+                                    const phoneCleaner = details.formatted_phone_number.replace(/\D/g, '');
+                                    const { count: clientCount } = await supabase
+                                        .from('clients')
+                                        .select('*', { count: 'exact', head: true })
+                                        .eq('phone', phoneCleaner);
+
+                                    if (clientCount && clientCount > 0) {
+                                        isCrmDuplicate = true;
+                                    }
+                                }
+
+                                if (!isCrmDuplicate) {
+                                    // Fetch Details
+                                    const detailsGoogleUrl = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place.place_id}&fields=name,formatted_address,formatted_phone_number,website,business_status&key=${GOOGLE_MAPS_KEY}`;
+                                    const detailsUrl = import.meta.env.PROD ? `/proxy.php?url=${encodeURIComponent(detailsGoogleUrl)}` : `/google-proxy/maps/api/place/details/json?place_id=${place.place_id}&fields=name,formatted_address,formatted_phone_number,website,business_status&key=${GOOGLE_MAPS_KEY}`;
+                                    const detailsRes = await fetch(detailsUrl);
+                                    const detailsData = await detailsRes.ok ? await detailsRes.json() : {};
+                                    const details = detailsData.result || {};
+
+                                    await supabase.from('scraper_results').insert({
+                                        run_id: run.id,
+                                        google_place_id: place.place_id,
+                                        name: details.name || place.name,
+                                        address: details.formatted_address || place.vicinity,
+                                        phone: details.formatted_phone_number,
+                                        website: details.website,
+                                        email: null,
+                                        rating: null,
+                                        user_ratings_total: null,
+                                        types: place.types,
+                                        location_lat: place.geometry.location.lat,
+                                        location_lng: place.geometry.location.lng,
+                                        review_status: 'PENDING',
+                                        raw_data: { ...place, ...details }
+                                    });
+                                    totalNew++;
+                                } // end if !isCrmDuplicate
                             }
                             totalFound++;
                         }
@@ -216,6 +240,21 @@ export const scraperService = {
     },
 
     saveProcess: async (process: ScraperProcess) => {
+        if (!process.id) {
+            // Check if exact same process exists
+            const { count, error: checkError } = await supabase
+                .from('scraper_processes')
+                .select('*', { count: 'exact', head: true })
+                .eq('keyword', process.keyword)
+                .eq('location_input', process.location_input)
+                .eq('radius_km', process.radius_km)
+                .eq('grid_size', process.grid_size)
+                .neq('status', 'ARCHIVED');
+
+            if (checkError) throw checkError;
+            if (count && count > 0) throw new Error("Já existe um processo ativo com os mesmos parâmetros (Palavra, Localização, Raio e Grid).");
+        }
+
         if (process.id) {
             const { error } = await supabase.from('scraper_processes').update(process).eq('id', process.id);
             if (error) throw error;
@@ -295,7 +334,7 @@ export const scraperService = {
 
     // --- INTEGRATIONS ---
     // --- INTEGRATIONS ---
-    approveLead: async (result: ScraperResult, userId?: string) => {
+    approveLead: async (result: ScraperResult, userId?: string, processName?: string) => {
         // Marks Result as APPROVED and upserts into the 'clients' table as a LEAD.
         // It DOES NOT dispatch to calls queue anymore. Bulk dispatching handles that later.
 
@@ -306,6 +345,7 @@ export const scraperService = {
         }
 
         const phoneCleaner = result.phone.replace(/\D/g, '');
+        const originString = processName ? `GOOGLE_SEARCH (${processName})` : 'GOOGLE_SEARCH';
 
         // Tentamos fazer Upsert baseado no telefone
         const { error: upsertError } = await supabase.from('clients').upsert({
@@ -314,7 +354,7 @@ export const scraperService = {
             address: result.address,
             email: result.email || null,
             website: result.website || null,
-            origin: 'GOOGLE_SEARCH',
+            origin: originString,
             status: 'LEAD',
             funnel_status: 'NEW'
         }, { onConflict: 'phone' });

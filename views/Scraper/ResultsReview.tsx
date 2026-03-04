@@ -34,7 +34,8 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
         try {
             if (action === 'APPROVE') {
                 // Send to CRM (Not Queue anymore)
-                await scraperService.approveLead(result, user.id);
+                const processName = (result.scraper_runs as any)?.scraper_processes?.name;
+                await scraperService.approveLead(result, user.id, processName);
             } else {
                 await scraperService.updateResultStatus(result.id, action === 'REJECT' ? 'REJECTED' : 'IGNORED', undefined, user.id);
             }
@@ -56,7 +57,8 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
         setIsProcessingBulk(true);
         try {
             for (const r of filteredResults) {
-                await scraperService.approveLead(r, user.id);
+                const processName = (r.scraper_runs as any)?.scraper_processes?.name;
+                await scraperService.approveLead(r, user.id, processName);
             }
             setResults(prev => prev.filter(r => !filteredResults.some(fr => fr.id === r.id)));
             alert(`${filteredResults.length} leads aprovados com sucesso!`);
