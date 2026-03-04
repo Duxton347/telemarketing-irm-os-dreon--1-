@@ -126,7 +126,8 @@ export const scraperService = {
                     let pages = 0;
 
                     do {
-                        const searchUrl = `/google-proxy/maps/api/place/nearbysearch/json?location=${point.lat},${point.lng}&radius=${process.radius_km * 1000}&keyword=${encodeURIComponent(process.keyword)}&key=${GOOGLE_MAPS_KEY}${nextPageToken ? `&pagetoken=${nextPageToken}` : ''}`;
+                        const searchGoogleUrl = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${point.lat},${point.lng}&radius=${process.radius_km * 1000}&keyword=${encodeURIComponent(process.keyword)}&key=${GOOGLE_MAPS_KEY}${nextPageToken ? `&pagetoken=${nextPageToken}` : ''}`;
+                        const searchUrl = import.meta.env.PROD ? `/proxy.php?url=${encodeURIComponent(searchGoogleUrl)}` : `/google-proxy/maps/api/place/nearbysearch/json?location=${point.lat},${point.lng}&radius=${process.radius_km * 1000}&keyword=${encodeURIComponent(process.keyword)}&key=${GOOGLE_MAPS_KEY}${nextPageToken ? `&pagetoken=${nextPageToken}` : ''}`;
                         const searchRes = await fetch(searchUrl);
                         if (!searchRes.ok) throw new Error(`Network Error: ${searchRes.statusText}`);
                         const searchData = await searchRes.json();
@@ -146,7 +147,8 @@ export const scraperService = {
 
                             if (count === 0) {
                                 // Fetch Details
-                                const detailsUrl = `/google-proxy/maps/api/place/details/json?place_id=${place.place_id}&fields=name,formatted_address,formatted_phone_number,website,business_status&key=${GOOGLE_MAPS_KEY}`;
+                                const detailsGoogleUrl = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place.place_id}&fields=name,formatted_address,formatted_phone_number,website,business_status&key=${GOOGLE_MAPS_KEY}`;
+                                const detailsUrl = import.meta.env.PROD ? `/proxy.php?url=${encodeURIComponent(detailsGoogleUrl)}` : `/google-proxy/maps/api/place/details/json?place_id=${place.place_id}&fields=name,formatted_address,formatted_phone_number,website,business_status&key=${GOOGLE_MAPS_KEY}`;
                                 const detailsRes = await fetch(detailsUrl);
                                 const detailsData = await detailsRes.ok ? await detailsRes.json() : {};
                                 const details = detailsData.result || {};
