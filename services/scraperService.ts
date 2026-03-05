@@ -169,13 +169,6 @@ export const scraperService = {
                                 }
 
                                 if (!isCrmDuplicate) {
-                                    // Fetch Details
-                                    const detailsGoogleUrl = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place.place_id}&fields=name,formatted_address,formatted_phone_number,website,business_status&key=${GOOGLE_MAPS_KEY}`;
-                                    const detailsUrl = import.meta.env.PROD ? `/proxy.php?url=${encodeURIComponent(detailsGoogleUrl)}` : `/google-proxy/maps/api/place/details/json?place_id=${place.place_id}&fields=name,formatted_address,formatted_phone_number,website,business_status&key=${GOOGLE_MAPS_KEY}`;
-                                    const detailsRes = await fetch(detailsUrl);
-                                    const detailsData = await detailsRes.ok ? await detailsRes.json() : {};
-                                    const details = detailsData.result || {};
-
                                     await supabase.from('scraper_results').insert({
                                         run_id: run.id,
                                         google_place_id: place.place_id,
