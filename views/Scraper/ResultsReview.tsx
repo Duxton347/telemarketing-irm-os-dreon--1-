@@ -170,46 +170,39 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
                                             <a href={result.website} target="_blank" rel="noreferrer" className="hover:underline truncate" title={result.website}>{result.website.replace(/^https?:\/\//, '')}</a>
                                         </div>
                                     )}
-                                    {result.email && (
-                                        <div className="flex items-center gap-2 text-[10px] sm:text-xs font-bold text-purple-600 bg-purple-50 p-2 rounded-lg truncate">
-                                            <Mail size={14} className="shrink-0" />
-                                            <a href={`mailto:${result.email}`} className="hover:underline truncate" title={result.email}>{result.email}</a>
+                                </div>
+
+                                {/* Actions Column */}
+                                <div className="flex flex-row md:flex-col gap-2 justify-center border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-4">
+                                    {filterStatus === 'PENDING' && (
+                                        <>
+                                            <button
+                                                onClick={() => handleAction(result, 'APPROVE')}
+                                                className="flex-1 md:flex-none p-3 bg-green-50 text-green-700 hover:bg-green-100 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-colors"
+                                                title="Aprovar e Enviar para CRM"
+                                            >
+                                                <CheckCircle2 size={16} /> Aprovar
+                                            </button>
+                                            <button
+                                                onClick={() => handleAction(result, 'REJECT')}
+                                                className="flex-1 md:flex-none p-3 bg-red-50 text-red-700 hover:bg-red-100 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-colors"
+                                                title="Rejeitar"
+                                            >
+                                                <XCircle size={16} /> Rejeitar
+                                            </button>
+                                        </>
+                                    )}
+                                    {filterStatus === 'APPROVED' && (
+                                        <div className="text-center p-2 bg-green-50 text-green-700 rounded-xl text-xs font-bold">
+                                            <CheckCircle2 className="mx-auto mb-1" size={20} />
+                                            Enviado
                                         </div>
                                     )}
                                 </div>
                             </div>
-
-                            {/* Actions Column */}
-                            <div className="flex flex-row md:flex-col gap-2 justify-center border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-4">
-                                {filterStatus === 'PENDING' && (
-                                    <>
-                                        <button
-                                            onClick={() => handleAction(result, 'APPROVE')}
-                                            className="flex-1 md:flex-none p-3 bg-green-50 text-green-700 hover:bg-green-100 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-colors"
-                                            title="Aprovar e Enviar para CRM"
-                                        >
-                                            <CheckCircle2 size={16} /> Aprovar
-                                        </button>
-                                        <button
-                                            onClick={() => handleAction(result, 'REJECT')}
-                                            className="flex-1 md:flex-none p-3 bg-red-50 text-red-700 hover:bg-red-100 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-colors"
-                                            title="Rejeitar"
-                                        >
-                                            <XCircle size={16} /> Rejeitar
-                                        </button>
-                                    </>
-                                )}
-                                {filterStatus === 'APPROVED' && (
-                                    <div className="text-center p-2 bg-green-50 text-green-700 rounded-xl text-xs font-bold">
-                                        <CheckCircle2 className="mx-auto mb-1" size={20} />
-                                        Enviado
-                                    </div>
-                                )}
-                            </div>
-                        </div>
                     ))}
+                        </div>
+                    )}
                 </div>
-            )}
-        </div>
-    );
+            );
 };

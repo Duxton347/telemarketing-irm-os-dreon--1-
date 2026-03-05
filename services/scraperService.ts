@@ -38,7 +38,6 @@ export interface ScraperResult {
     google_place_id: string;
     review_status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'IGNORED' | 'MERGED';
     duplication_score: number;
-    email?: string;
     scraper_runs?: ScraperRun; // Join
     // ... other fields
 }
@@ -179,9 +178,6 @@ export const scraperService = {
                                         address: details.formatted_address || place.vicinity,
                                         phone: details.formatted_phone_number,
                                         website: details.website,
-                                        email: null,
-                                        rating: null,
-                                        user_ratings_total: null,
                                         types: place.types,
                                         location_lat: place.geometry.location.lat,
                                         location_lng: place.geometry.location.lng,
