@@ -24,6 +24,7 @@ export interface ScraperRun {
     total_found: number;
     total_new: number;
     cost_estimate_usd: number;
+    error_log?: string;
     scraper_processes?: ScraperProcess; // Join
 }
 

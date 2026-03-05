@@ -112,6 +112,14 @@ export const RunExecution: React.FC = () => {
                                 </div>
                             </div>
 
+                            {/* Error Message Display if FAILED */}
+                            {run.status === 'FAILED' && run.error_log && (
+                                <div className="w-full mt-2 md:mt-0 p-3 bg-red-50 text-red-700 text-xs rounded-xl font-mono overflow-auto max-w-full">
+                                    <strong>Detalhes do Erro Técnico:</strong>
+                                    <p className="mt-1 whitespace-pre-wrap">{run.error_log}</p>
+                                </div>
+                            )}
+
                             {/* Actions / Details */}
                             <div className="flex flex-row md:flex-col gap-2 justify-center">
                                 {run.status === 'RUNNING' && (
