@@ -199,6 +199,8 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   const [skipReasonSelected, setSkipReasonSelected] = React.useState<string | null>(null);
   const [whatsappCheck, setWhatsappCheck] = React.useState(false);
   const [isRescheduleModalOpen, setIsRescheduleModalOpen] = React.useState(false);
+  const [manualRepDate, setManualRepDate] = React.useState('');
+  const [manualRepTime, setManualRepTime] = React.useState('09:00');
 
   const handleCopyPhone = () => {
     if (client) {
@@ -276,15 +278,17 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setIsProcessing(true);
 
     try {
-      const date = new Date();
-      // Calculate next date
-      if (interval === '1d') date.setDate(date.getDate() + 1);
-      else if (interval === '2d') date.setDate(date.getDate() + 2);
-      else if (interval === '1w') date.setDate(date.getDate() + 7);
-      else if (interval === '1m') date.setMonth(date.getMonth() + 1);
-
-      // Default time: 09:00 AM
-      date.setHours(9, 0, 0, 0);
+      let date: Date;
+      if (interval === 'manual' && manualDate) {
+        date = new Date(`${manualDate}T${manualTime || '09:00'}:00`);
+      } else {
+        date = new Date();
+        if (interval === '1d') date.setDate(date.getDate() + 1);
+        else if (interval === '2d') date.setDate(date.getDate() + 2);
+        else if (interval === '1w') date.setDate(date.getDate() + 7);
+        else if (interval === '1m') date.setMonth(date.getMonth() + 1);
+        date.setHours(9, 0, 0, 0);
+      }
 
       // 1. Log WhatsApp if checked (Scenario B)
       if (whatsappCheck) {
@@ -545,44 +549,46 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                 </div>
               </div>
               <p className="font-bold text-slate-400 flex items-start gap-2"><MapPin size={18} className="shrink-0" /> {client.address || 'Sem endereço'}</p>
-              {client.buyer_name && (
+              {(currentTask.type === 'PROSPECÇÃO' || client.status === 'LEAD') && client.buyer_name && (
                 <p className="font-bold text-emerald-400 flex items-center gap-2 text-sm mt-2"><User size={16} className="shrink-0" /> Decisor: {client.buyer_name}</p>
               )}
-              {client.responsible_phone && (
+              {(currentTask.type === 'PROSPECÇÃO' || client.status === 'LEAD') && client.responsible_phone && (
                 <p className="font-bold text-blue-400 flex items-center gap-2 text-sm mt-1"><Phone size={16} className="shrink-0" /> Responsável: {client.responsible_phone}</p>
               )}
-              {client.email && (
+              {(currentTask.type === 'PROSPECÇÃO' || client.status === 'LEAD') && client.email && (
                 <p className="font-bold text-amber-400 flex items-center gap-2 text-sm mt-1"><Mail size={16} className="shrink-0 text-amber-400" /> {client.email}</p>
               )}
             </div>
 
-            <div className="pt-6 border-t border-slate-800">
-              <div className="flex gap-4">
-                <div className="flex-1">
-                  <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Origem do Lead</p>
-                  <span className="px-3 py-1 bg-slate-800 text-[10px] font-black uppercase text-slate-300 rounded-md border border-slate-700">{client.origin || 'Sistema'}</span>
-                </div>
-                {client.interest_product && (
+            {(currentTask.type === 'PROSPECÇÃO' || client.status === 'LEAD') && (
+              <div className="pt-6 border-t border-slate-800">
+                <div className="flex gap-4">
                   <div className="flex-1">
-                    <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Produto de Interesse</p>
-                    <span className="px-3 py-1 bg-emerald-900/50 text-[10px] font-black uppercase text-emerald-400 rounded-md border border-emerald-800">{client.interest_product}</span>
+                    <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Origem do Lead</p>
+                    <span className="px-3 py-1 bg-slate-800 text-[10px] font-black uppercase text-slate-300 rounded-md border border-slate-700">{client.origin || 'Sistema'}</span>
                   </div>
-                )}
-                {client.funnel_status && (() => {
-                  const STATUS_LABELS: Record<string, string> = {
-                    'NEW': 'Novo Lead', 'CONTACT_ATTEMPT': 'Tentativa de Contato',
-                    'CONTACT_MADE': 'Contato Feito', 'QUALIFIED': 'Qualificado',
-                    'PROPOSAL_SENT': 'Proposta Enviada', 'PHYSICAL_VISIT': 'Visita Física'
-                  };
-                  return (
+                  {client.interest_product && (
                     <div className="flex-1">
-                      <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Status do Lead</p>
-                      <span className="px-3 py-1 bg-blue-900/50 text-[10px] font-black uppercase text-blue-400 rounded-md border border-blue-800">{STATUS_LABELS[client.funnel_status] || client.funnel_status}</span>
+                      <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Produto de Interesse</p>
+                      <span className="px-3 py-1 bg-emerald-900/50 text-[10px] font-black uppercase text-emerald-400 rounded-md border border-emerald-800">{client.interest_product}</span>
                     </div>
-                  );
-                })()}
+                  )}
+                  {client.funnel_status && (() => {
+                    const STATUS_LABELS: Record<string, string> = {
+                      'NEW': 'Novo Lead', 'CONTACT_ATTEMPT': 'Tentativa de Contato',
+                      'CONTACT_MADE': 'Contato Feito', 'QUALIFIED': 'Qualificado',
+                      'PROPOSAL_SENT': 'Proposta Enviada', 'PHYSICAL_VISIT': 'Visita Física'
+                    };
+                    return (
+                      <div className="flex-1">
+                        <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Status do Lead</p>
+                        <span className="px-3 py-1 bg-blue-900/50 text-[10px] font-black uppercase text-blue-400 rounded-md border border-blue-800">{STATUS_LABELS[client.funnel_status] || client.funnel_status}</span>
+                      </div>
+                    );
+                  })()}
+                </div>
               </div>
-            </div>
+            )}
 
             <div className="pt-6 border-t border-slate-800">
               <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-3">Portfólio de Equipamentos</p>
@@ -672,8 +678,8 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   <textarea value={callSummary} onChange={e => setCallSummary(e.target.value)} className="w-full p-8 bg-slate-50 rounded-[40px] border border-slate-100 font-bold text-slate-800 h-48 outline-none resize-none focus:ring-8 focus:ring-blue-500/5 transition-all" placeholder="O que foi conversado? Anote detalhes importantes para o próximo contato." />
                 </section>
 
-                {/* PRODUTO DE INTERESSE E FUNIL (CRM) */}
-                {isFillingReport && (
+                {/* PRODUTO DE INTERESSE E FUNIL (CRM) — Somente para ligações de prospecção */}
+                {isFillingReport && (currentTask.type === 'PROSPECÇÃO' || client.status === 'LEAD') && (
                   <section className="space-y-6 pt-6 border-t border-slate-100">
                     <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
                       <User size={18} className="text-emerald-500" /> Atualizar Informações do Lead (CRM)
@@ -963,6 +969,36 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                 <button onClick={() => confirmRescheduleSkip('1m')} className="p-6 bg-slate-50 border-2 border-slate-100 rounded-[32px] hover:border-orange-500 hover:bg-orange-50 transition-all group">
                   <span className="block text-xl font-black text-slate-800 group-hover:text-orange-600 mb-1">1 Mês</span>
                   <span className="text-[9px] font-bold uppercase text-slate-400">Próximo mês</span>
+                </button>
+              </div>
+
+              {/* Manual Date/Time Picker */}
+              <div className="px-10 pb-6 space-y-4">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Ou escolha uma data específica:</p>
+                <div className="flex gap-3">
+                  <input
+                    type="date"
+                    value={manualRepDate}
+                    onChange={e => setManualRepDate(e.target.value)}
+                    min={new Date().toISOString().split('T')[0]}
+                    className="flex-1 p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-700 outline-none focus:border-orange-500 transition-all"
+                  />
+                  <input
+                    type="time"
+                    value={manualRepTime}
+                    onChange={e => setManualRepTime(e.target.value)}
+                    className="w-32 p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-700 outline-none focus:border-orange-500 transition-all"
+                  />
+                </div>
+                <button
+                  onClick={() => {
+                    if (!manualRepDate) { alert('Selecione uma data.'); return; }
+                    confirmRescheduleSkip('manual', manualRepDate, manualRepTime || '09:00');
+                  }}
+                  disabled={!manualRepDate}
+                  className="w-full py-4 bg-orange-500 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-lg hover:bg-orange-400 active:scale-95 transition-all disabled:opacity-50"
+                >
+                  <Calendar size={16} className="inline mr-2" />Solicitar Repique na Data Selecionada
                 </button>
               </div>
 

@@ -63,22 +63,22 @@ export const dataService = {
 
   // --- CALL SCHEDULES (Agendamentos) ---
   createScheduleRequest: async (schedule: Partial<CallSchedule>): Promise<void> => {
+    // Build schedule_reason including any skip/whatsapp metadata
+    let reason = schedule.scheduleReason || '';
+    if (schedule.skipReason) reason += ` | Motivo: ${schedule.skipReason}`;
+    if (schedule.whatsappSent) reason += ' | WhatsApp: Sim';
+    if (schedule.hasRepick) reason += ' | Repique';
+
     const { error } = await supabase.from('call_schedules').insert({
       customer_id: schedule.customerId || null,
       origin_call_id: schedule.originCallId || null,
       requested_by_operator_id: schedule.requestedByOperatorId,
       assigned_operator_id: schedule.assignedOperatorId,
       scheduled_for: schedule.scheduledFor,
-      call_type: schedule.callType, // Direct mapping to match Enum
+      call_type: schedule.callType,
       status: schedule.status || 'PENDENTE_APROVACAO',
-      schedule_reason: schedule.scheduleReason,
-      resolution_channel: schedule.resolutionChannel || 'telefone',
-
-      // New fields with defaults
-      skip_reason: schedule.skipReason || null,
-      whatsapp_sent: schedule.whatsappSent ?? false,
-      whatsapp_note: schedule.whatsappNote || null,
-      has_repick: schedule.hasRepick ?? false
+      schedule_reason: reason,
+      resolution_channel: schedule.resolutionChannel || 'telefone'
     });
     if (error) throw error;
   },
