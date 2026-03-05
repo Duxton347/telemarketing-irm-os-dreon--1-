@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import {
     CheckCircle2, XCircle, Search, Filter, Phone, MapPin, Globe, Mail,
@@ -33,13 +32,11 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
     const handleAction = async (result: ScraperResult, action: 'APPROVE' | 'REJECT' | 'IGNORE') => {
         try {
             if (action === 'APPROVE') {
-                // Send to CRM (Not Queue anymore)
                 const processName = (result.scraper_runs as any)?.scraper_processes?.name;
                 await scraperService.approveLead(result, user.id, processName);
             } else {
                 await scraperService.updateResultStatus(result.id, action === 'REJECT' ? 'REJECTED' : 'IGNORED', undefined, user.id);
             }
-            // Optimistic update
             setResults(prev => prev.filter(r => r.id !== result.id));
         } catch (e: any) {
             alert("Erro na ação: " + e.message);
@@ -90,7 +87,6 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
                 </div>
             </div>
 
-            {/* BARRA DE FILTROS ADICIONAL */}
             <div className="flex flex-col md:flex-row gap-4 bg-white p-4 rounded-[24px] border border-slate-100 shadow-sm items-center justify-between">
                 <div className="flex gap-4 items-center flex-1 w-full">
                     <div className="relative flex-1 max-w-sm">
@@ -143,7 +139,6 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
                                 <div>
                                     <div className="flex justify-between items-start">
                                         <h3 className="text-lg font-black text-slate-800 leading-tight">{result.name}</h3>
-                                        {/* Score Badge */}
                                         {result.duplication_score > 0 && (
                                             <span className="bg-orange-100 text-orange-600 px-2 py-1 rounded text-[10px] font-bold uppercase">
                                                 Duplicidade?
@@ -171,38 +166,38 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
                                         </div>
                                     )}
                                 </div>
-
-                                {/* Actions Column */}
-                                <div className="flex flex-row md:flex-col gap-2 justify-center border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-4">
-                                    {filterStatus === 'PENDING' && (
-                                        <>
-                                            <button
-                                                onClick={() => handleAction(result, 'APPROVE')}
-                                                className="flex-1 md:flex-none p-3 bg-green-50 text-green-700 hover:bg-green-100 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-colors"
-                                                title="Aprovar e Enviar para CRM"
-                                            >
-                                                <CheckCircle2 size={16} /> Aprovar
-                                            </button>
-                                            <button
-                                                onClick={() => handleAction(result, 'REJECT')}
-                                                className="flex-1 md:flex-none p-3 bg-red-50 text-red-700 hover:bg-red-100 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-colors"
-                                                title="Rejeitar"
-                                            >
-                                                <XCircle size={16} /> Rejeitar
-                                            </button>
-                                        </>
-                                    )}
-                                    {filterStatus === 'APPROVED' && (
-                                        <div className="text-center p-2 bg-green-50 text-green-700 rounded-xl text-xs font-bold">
-                                            <CheckCircle2 className="mx-auto mb-1" size={20} />
-                                            Enviado
-                                        </div>
-                                    )}
-                                </div>
                             </div>
-                    ))}
+
+                            <div className="flex flex-row md:flex-col gap-2 justify-center border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-4">
+                                {filterStatus === 'PENDING' && (
+                                    <>
+                                        <button
+                                            onClick={() => handleAction(result, 'APPROVE')}
+                                            className="flex-1 md:flex-none p-3 bg-green-50 text-green-700 hover:bg-green-100 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-colors"
+                                            title="Aprovar e Enviar para CRM"
+                                        >
+                                            <CheckCircle2 size={16} /> Aprovar
+                                        </button>
+                                        <button
+                                            onClick={() => handleAction(result, 'REJECT')}
+                                            className="flex-1 md:flex-none p-3 bg-red-50 text-red-700 hover:bg-red-100 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-colors"
+                                            title="Rejeitar"
+                                        >
+                                            <XCircle size={16} /> Rejeitar
+                                        </button>
+                                    </>
+                                )}
+                                {filterStatus === 'APPROVED' && (
+                                    <div className="text-center p-2 bg-green-50 text-green-700 rounded-xl text-xs font-bold">
+                                        <CheckCircle2 className="mx-auto mb-1" size={20} />
+                                        Enviado
+                                    </div>
+                                )}
+                            </div>
                         </div>
-                    )}
+                    ))}
                 </div>
-            );
+            )}
+        </div>
+    );
 };
