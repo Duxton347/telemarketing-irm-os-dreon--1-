@@ -311,7 +311,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
         requestedByOperatorId: user.id,
         assignedOperatorId: user.id,
         customerId: currentTask.clientId,
-        originCallId: currentTask.id,
+        originCallId: null, // No call record exists when skipping
         scheduledFor: date.toISOString(),
         callType: currentTask.type,
         scheduleReason: `Repique: ${skipReasonSelected}`,
@@ -329,9 +329,9 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
 
       await dataService.logOperatorEvent(user.id, OperatorEventType.PULAR_ATENDIMENTO, currentTask.id, `${skipReasonSelected} (Reagendado para ${date.toLocaleDateString()} - WhatsApp: ${whatsappCheck ? 'Sim' : 'Não'})`);
       await fetchQueue();
-    } catch (e) {
-      alert("Erro ao solicitar reagendamento.");
-      console.error(e);
+    } catch (e: any) {
+      console.error('Erro no repique:', e);
+      alert(`Erro ao solicitar reagendamento: ${e?.message || e}`);
     } finally {
       setIsProcessing(false);
       setIsRescheduleModalOpen(false);

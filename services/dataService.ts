@@ -69,13 +69,25 @@ export const dataService = {
     if (schedule.whatsappSent) reason += ' | WhatsApp: Sim';
     if (schedule.hasRepick) reason += ' | Repique';
 
+    // Normalize call_type to match DB CHECK constraint
+    // DB accepts: VENDA, POS_VENDA, PROSPECCAO, CONFIRMACAO_PROTOCOLO, WHATSAPP
+    const CALL_TYPE_DB_MAP: Record<string, string> = {
+      'VENDA': 'VENDA',
+      'PÓS-VENDA': 'POS_VENDA',
+      'PÓS_VENDA': 'POS_VENDA',
+      'PROSPECÇÃO': 'PROSPECCAO',
+      'CONFIRMAÇÃO PROTOCOLO': 'CONFIRMACAO_PROTOCOLO',
+      'WHATSAPP': 'WHATSAPP'
+    };
+    const dbCallType = CALL_TYPE_DB_MAP[schedule.callType || ''] || schedule.callType || 'VENDA';
+
     const { error } = await supabase.from('call_schedules').insert({
       customer_id: schedule.customerId || null,
       origin_call_id: schedule.originCallId || null,
       requested_by_operator_id: schedule.requestedByOperatorId,
       assigned_operator_id: schedule.assignedOperatorId,
       scheduled_for: schedule.scheduledFor,
-      call_type: schedule.callType,
+      call_type: dbCallType,
       status: schedule.status || 'PENDENTE_APROVACAO',
       schedule_reason: reason,
       resolution_channel: schedule.resolutionChannel || 'telefone'
@@ -84,6 +96,10 @@ export const dataService = {
   },
 
   bulkCreateScheduleRequest: async (schedules: Partial<CallSchedule>[]): Promise<void> => {
+    const CALL_TYPE_DB_MAP: Record<string, string> = {
+      'VENDA': 'VENDA', 'PÓS-VENDA': 'POS_VENDA', 'PÓS_VENDA': 'POS_VENDA',
+      'PROSPECÇÃO': 'PROSPECCAO', 'CONFIRMAÇÃO PROTOCOLO': 'CONFIRMACAO_PROTOCOLO', 'WHATSAPP': 'WHATSAPP'
+    };
     const { error } = await supabase.from('call_schedules').insert(
       schedules.map(s => ({
         customer_id: s.customerId || null,
@@ -91,14 +107,10 @@ export const dataService = {
         requested_by_operator_id: s.requestedByOperatorId,
         assigned_operator_id: s.assignedOperatorId,
         scheduled_for: s.scheduledFor,
-        call_type: s.callType, // Direct mapping
+        call_type: CALL_TYPE_DB_MAP[s.callType || ''] || s.callType || 'VENDA',
         status: s.status || 'PENDENTE_APROVACAO',
         schedule_reason: s.scheduleReason,
-        resolution_channel: s.resolutionChannel || 'telefone',
-        skip_reason: s.skipReason || null,
-        whatsapp_sent: s.whatsappSent ?? false,
-        whatsapp_note: s.whatsappNote || null,
-        has_repick: s.hasRepick ?? false
+        resolution_channel: s.resolutionChannel || 'telefone'
       }))
     );
     if (error) throw error;
@@ -613,55 +625,62 @@ export const dataService = {
   },
 
   getDetailedPendingTasks: async () => {
-    // 1. Fetch Legacy Tasks
+    // 1. Fetch tasks WITHOUT profiles join (avoids FK ambiguity errors)
     const { data: tasks, error } = await supabase
       .from('tasks')
-      .select('*, clients(*), profiles:assigned_to(*)')
+      .select('*, clients(*)')
       .eq('status', 'pending')
-      // Removed strict approval_status check
       .order('created_at', { ascending: true });
 
-    if (error) throw error;
+    if (error) console.error('getDetailedPendingTasks tasks error:', error);
 
-    // 2. Fetch Approved Schedules
-    const { data: schedData, error: schedError } = await supabase
-      .from('call_schedules')
-      .select('*, clients(*), profiles:assigned_operator_id(*)') // Join profiles for operator name
-      .eq('status', 'APROVADO')
-      .lte('scheduled_for', new Date().toISOString())
-      .order('scheduled_for', { ascending: true });
+    // 1b. Fetch profiles separately for operator name lookup
+    const { data: allProfiles } = await supabase
+      .from('profiles')
+      .select('id, username_display, username');
+    const profileMap = new Map((allProfiles || []).map(p => [p.id, p]));
 
-    if (schedError) throw schedError;
+    // 2. Fetch Approved Schedules (also without profiles join)
+    let mappedSchedules: any[] = [];
+    try {
+      const { data: schedData, error: schedError } = await supabase
+        .from('call_schedules')
+        .select('*, clients(*)')
+        .eq('status', 'APROVADO')
+        .lte('scheduled_for', new Date().toISOString())
+        .order('scheduled_for', { ascending: true });
 
-    // 3. Map Schedules to Task-like structure for the modal
-    const mappedSchedules = (schedData || []).map(s => {
-      const clientObj = Array.isArray(s.clients) ? s.clients[0] : s.clients;
-      const profileObj = Array.isArray(s.profiles) ? s.profiles[0] : s.profiles;
-      return {
-        id: s.id,
-        clientId: s.customer_id,
-        type: s.call_type,
-        deadline: s.scheduled_for,
-        assignedTo: s.assigned_operator_id,
-        status: 'pending',
-        clients: clientObj,
-        profiles: profileObj,
-        clientName: clientObj?.name,
-        clientPhone: clientObj?.phone,
-        duration: 0
-      };
-    });
+      if (!schedError && schedData) {
+        mappedSchedules = schedData.map(s => {
+          const clientObj = Array.isArray(s.clients) ? s.clients[0] : s.clients;
+          return {
+            id: s.id,
+            clientId: s.customer_id,
+            type: s.call_type,
+            deadline: s.scheduled_for,
+            assignedTo: s.assigned_operator_id,
+            status: 'pending',
+            clients: clientObj,
+            profiles: profileMap.get(s.assigned_operator_id) || null,
+            clientName: clientObj?.name,
+            clientPhone: clientObj?.phone,
+            duration: 0
+          };
+        });
+      }
+    } catch (e) {
+      console.error('getDetailedPendingTasks schedules error:', e);
+    }
 
     const validLegacyTasks = (tasks || [])
-      .filter(t => t.client_id) // Only require a valid client_id
+      .filter(t => t.client_id)
       .filter(t => !t.scheduled_for || new Date(t.scheduled_for) <= new Date())
       .map(t => {
         const clientObj = Array.isArray(t.clients) ? t.clients[0] : t.clients;
-        const profileObj = Array.isArray(t.profiles) ? t.profiles[0] : t.profiles;
         return {
           ...t,
           clients: clientObj || { name: 'Prospecto', phone: '' },
-          profiles: profileObj,
+          profiles: profileMap.get(t.assigned_to) || null,
           duration: 0
         };
       });
@@ -842,6 +861,7 @@ export const dataService = {
     const phone = normalizePhone(client.phone || '');
     if (!phone) throw new Error("Telefone obrigatório");
 
+    // 1. Check for existing client by normalized phone
     const { data: existing } = await supabase.from('clients').select('*').eq('phone', phone).maybeSingle();
 
     const payload: any = {
@@ -851,11 +871,11 @@ export const dataService = {
       items: Array.from(new Set([...(existing?.items || []), ...(client.items || [])])),
       offers: Array.from(new Set([...(existing?.offers || []), ...(client.offers || [])])),
       last_interaction: existing?.last_interaction || new Date().toISOString(),
-      // New Fields mappings
       origin: client.origin || existing?.origin || 'MANUAL',
       email: client.email || existing?.email,
       website: client.website || existing?.website,
-      status: client.status || existing?.status || 'CLIENT', // Default to CLIENT unless specified
+      // Never downgrade CLIENT to LEAD
+      status: existing?.status === 'CLIENT' ? 'CLIENT' : (client.status || existing?.status || 'CLIENT'),
       responsible_phone: client.responsible_phone || existing?.responsible_phone,
       buyer_name: client.buyer_name || existing?.buyer_name,
       interest_product: client.interest_product || existing?.interest_product,
@@ -863,14 +883,80 @@ export const dataService = {
       funnel_status: client.funnel_status || existing?.funnel_status || 'NEW'
     };
 
-    const { data, error } = await supabase.from('clients').upsert(payload, { onConflict: 'phone' }).select().single();
-    if (error) throw error;
-    return data;
+    if (existing) {
+      // 2a. UPDATE existing record — never duplicate
+      const { data, error } = await supabase.from('clients').update(payload).eq('id', existing.id).select().single();
+      if (error) throw error;
+      return data;
+    } else {
+      // 2b. INSERT new record
+      const { data, error } = await supabase.from('clients').insert(payload).select().single();
+      if (error) throw error;
+      return data;
+    }
   },
 
   updateClientFields: async (clientId: string, updates: Partial<Client>): Promise<void> => {
     const { error } = await supabase.from('clients').update(updates).eq('id', clientId);
     if (error) throw error;
+  },
+
+  // --- CLIENT MERGE (Deduplication) ---
+  findDuplicatesByName: async (name: string): Promise<any[]> => {
+    const { data, error } = await supabase.from('clients').select('*').ilike('name', `%${name}%`);
+    if (error) throw error;
+    return data || [];
+  },
+
+  mergeClients: async (keeperId: string, duplicateId: string): Promise<{ migratedCalls: number; migratedTasks: number; migratedSchedules: number }> => {
+    const stats = { migratedCalls: 0, migratedTasks: 0, migratedSchedules: 0 };
+
+    // 1. Merge items/offers arrays from duplicate into keeper
+    const { data: keeper } = await supabase.from('clients').select('*').eq('id', keeperId).single();
+    const { data: duplicate } = await supabase.from('clients').select('*').eq('id', duplicateId).single();
+    if (!keeper || !duplicate) throw new Error('Client(s) not found');
+
+    const mergedItems = Array.from(new Set([...(keeper.items || []), ...(duplicate.items || [])]));
+    const mergedOffers = Array.from(new Set([...(keeper.offers || []), ...(duplicate.offers || [])]));
+    await supabase.from('clients').update({ items: mergedItems, offers: mergedOffers }).eq('id', keeperId);
+
+    // 2. Migrate calls
+    const { data: calls } = await supabase.from('calls').select('id').eq('client_id', duplicateId);
+    if (calls && calls.length > 0) {
+      await supabase.from('calls').update({ client_id: keeperId }).eq('client_id', duplicateId);
+      stats.migratedCalls = calls.length;
+    }
+
+    // 3. Migrate tasks
+    const { data: tasks } = await supabase.from('tasks').select('id').eq('client_id', duplicateId);
+    if (tasks && tasks.length > 0) {
+      await supabase.from('tasks').update({ client_id: keeperId }).eq('client_id', duplicateId);
+      stats.migratedTasks = tasks.length;
+    }
+
+    // 4. Migrate call_schedules
+    const { data: schedules } = await supabase.from('call_schedules').select('id').eq('customer_id', duplicateId);
+    if (schedules && schedules.length > 0) {
+      await supabase.from('call_schedules').update({ customer_id: keeperId }).eq('customer_id', duplicateId);
+      stats.migratedSchedules = schedules.length;
+    }
+
+    // 5. Migrate protocols
+    const { data: protocols } = await supabase.from('protocols').select('id').eq('client_id', duplicateId);
+    if (protocols && protocols.length > 0) {
+      await supabase.from('protocols').update({ client_id: keeperId }).eq('client_id', duplicateId);
+    }
+
+    // 6. Migrate whatsapp_tasks
+    const { data: waTasks } = await supabase.from('whatsapp_tasks').select('id').eq('client_id', duplicateId);
+    if (waTasks && waTasks.length > 0) {
+      await supabase.from('whatsapp_tasks').update({ client_id: keeperId }).eq('client_id', duplicateId);
+    }
+
+    // 7. Delete the duplicate
+    await supabase.from('clients').delete().eq('id', duplicateId);
+
+    return stats;
   },
 
   getProtocolConfig: () => ({
@@ -1560,3 +1646,6 @@ export const dataService = {
     };
   }
 };
+
+// Expose for admin console operations (merge duplicates, etc.)
+(window as any).__dataService = dataService;
