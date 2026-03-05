@@ -158,18 +158,20 @@ export const scraperService = {
 
                                 if (details.formatted_phone_number) {
                                     const phoneCleaner = details.formatted_phone_number.replace(/\D/g, '');
-                                    const { count: clientCount } = await supabase
-                                        .from('clients')
-                                        .select('*', { count: 'exact', head: true })
-                                        .eq('phone', phoneCleaner);
+                                    if (phoneCleaner.length > 3) {
+                                        const { count: clientCount } = await supabase
+                                            .from('clients')
+                                            .select('*', { count: 'exact', head: true })
+                                            .eq('phone', phoneCleaner);
 
-                                    if (clientCount && clientCount > 0) {
-                                        isCrmDuplicate = true;
+                                        if (clientCount && clientCount > 0) {
+                                            isCrmDuplicate = true;
+                                        }
                                     }
                                 }
 
                                 if (!isCrmDuplicate) {
-                                    await supabase.from('scraper_results').insert({
+                                    const { error: insertError } = await supabase.from('scraper_results').insert({
                                         run_id: run.id,
                                         google_place_id: place.place_id,
                                         name: details.name || place.name,
@@ -185,6 +187,7 @@ export const scraperService = {
                                         review_status: 'PENDING',
                                         raw_data: { ...place, ...details }
                                     });
+                                    if (insertError) throw new Error(`DB Insert Error: ${insertError.message}`);
                                     totalNew++;
                                 } // end if !isCrmDuplicate
                             }
