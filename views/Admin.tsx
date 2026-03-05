@@ -54,7 +54,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
         dataService.getUsers(),
         dataService.getQuestions(),
         dataService.getTasks(),
-        dataService.getClients(),
+        dataService.getClients(true), // Include LEADs (Prospects)
         dataService.getWhatsAppTasks(),
         dataService.getSystemSetting('GOOGLE_MAPS_KEY')
       ]);
@@ -64,7 +64,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
 
       const skipped = taskList.filter(t => t.status === 'skipped').map(t => ({
         ...t,
-        client: allClients.find(c => c.id === t.clientId)
+        client: allClients.find(c => c.id === t.clientId) || { name: t.clientName || 'Prospecto', phone: t.clientPhone || '' }
       }));
       setSkippedTasks(skipped);
 
@@ -77,7 +77,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
 
       const pending = taskList.filter(t => t.status === 'pending').map(t => ({
         ...t,
-        client: allClients.find(c => c.id === t.clientId),
+        client: allClients.find(c => c.id === t.clientId) || { name: t.clientName || 'Prospecto', phone: t.clientPhone || '' },
         operator: userList.find(u => u.id === t.assignedTo)
       }));
       setPendingTasks(pending);

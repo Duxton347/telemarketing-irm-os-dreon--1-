@@ -24,6 +24,11 @@ const ORIGIN_TYPES = [
     { id: 'CSV_IMPORT', label: 'Planilha CSV' }
 ];
 
+const INTEREST_PRODUCTS = [
+    'Fotovoltaico', 'Bomba', 'Pressurizadora', 'Químicos', 'Gerador de Cloro',
+    'Aquecedor de Piscina', 'Aquecedor a Gás', 'Boiler', 'Placa Solar', 'Manutenção', 'Outros'
+];
+
 const MetricCard: React.FC<{ title: string; value: string | number; icon: any; color: string }> = ({ title, value, icon: Icon, color }) => {
     return (
         <div className={`p-6 bg-white rounded-[32px] border shadow-sm flex items-center gap-4 ${color}`}>
@@ -45,6 +50,7 @@ const Prospects: React.FC = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedStage, setSelectedStage] = useState<string>('ALL');
     const [selectedOrigin, setSelectedOrigin] = useState<string>('ALL');
+    const [selectedInterest, setSelectedInterest] = useState<string>('ALL');
 
     const [selectedClient, setSelectedClient] = useState<Client | null>(null);
 
@@ -106,10 +112,7 @@ const Prospects: React.FC = () => {
 
     const handleUpdateStatus = async (id: string, newStatus: string) => {
         try {
-            await dataService.upsertClient({
-                phone: prospects.find(p => p.id === id)?.phone,
-                funnel_status: newStatus as any
-            });
+            await dataService.updateClientFields(id, { funnel_status: newStatus as any });
             setProspects(prev => prev.map(p => p.id === id ? { ...p, funnel_status: newStatus as any } : p));
             if (selectedClient?.id === id) {
                 setSelectedClient(prev => prev ? { ...prev, funnel_status: newStatus as any } : null);
@@ -180,6 +183,7 @@ const Prospects: React.FC = () => {
     const filteredProspects = prospects.filter(p => {
         if (selectedStage !== 'ALL' && (p.funnel_status || 'NEW') !== selectedStage) return false;
         if (selectedOrigin !== 'ALL' && (p.origin || 'MANUAL') !== selectedOrigin) return false;
+        if (selectedInterest !== 'ALL' && (p.interest_product || '') !== selectedInterest) return false;
         if (searchTerm) {
             const lower = searchTerm.toLowerCase();
             return p.name.toLowerCase().includes(lower) || p.phone.includes(lower);
@@ -243,6 +247,15 @@ const Prospects: React.FC = () => {
                         onChange={e => setSelectedOrigin(e.target.value)}
                     >
                         {ORIGIN_TYPES.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
+                    </select>
+
+                    <select
+                        className="bg-slate-50 border border-slate-200 text-xs font-black uppercase tracking-widest text-slate-600 rounded-xl py-3 px-4 outline-none cursor-pointer hover:bg-slate-100"
+                        value={selectedInterest}
+                        onChange={e => setSelectedInterest(e.target.value)}
+                    >
+                        <option value="ALL">Todos Interesses</option>
+                        {INTEREST_PRODUCTS.map(p => <option key={p} value={p}>{p}</option>)}
                     </select>
                 </div>
             </div>

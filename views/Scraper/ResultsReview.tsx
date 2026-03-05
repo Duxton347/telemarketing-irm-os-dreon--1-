@@ -11,7 +11,12 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
     const [filterStatus, setFilterStatus] = useState('PENDING');
 
     // Filters and Bulk Actions
-    const [onlyWithPhone, setOnlyWithPhone] = useState(false);
+    const [filterWithPhone, setFilterWithPhone] = useState(false);
+    const [filterWithoutPhone, setFilterWithoutPhone] = useState(false);
+    const [filterWithAddress, setFilterWithAddress] = useState(false);
+    const [filterWithoutAddress, setFilterWithoutAddress] = useState(false);
+    const [filterWithWebsite, setFilterWithWebsite] = useState(false);
+    const [filterWithoutWebsite, setFilterWithoutWebsite] = useState(false);
     const [cityFilter, setCityFilter] = useState('');
     const [isProcessingBulk, setIsProcessingBulk] = useState(false);
 
@@ -44,8 +49,17 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
     };
 
     const filteredResults = results.filter(r => {
-        if (onlyWithPhone && !r.phone) return false;
-        if (cityFilter && !r.address.toLowerCase().includes(cityFilter.toLowerCase())) return false;
+        if (cityFilter && !r.address?.toLowerCase().includes(cityFilter.toLowerCase())) return false;
+
+        if (filterWithPhone && !r.phone) return false;
+        if (filterWithoutPhone && r.phone) return false;
+
+        if (filterWithAddress && !r.address) return false;
+        if (filterWithoutAddress && r.address) return false;
+
+        if (filterWithWebsite && !r.website) return false;
+        if (filterWithoutWebsite && r.website) return false;
+
         return true;
     });
 
@@ -87,9 +101,9 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
                 </div>
             </div>
 
-            <div className="flex flex-col md:flex-row gap-4 bg-white p-4 rounded-[24px] border border-slate-100 shadow-sm items-center justify-between">
-                <div className="flex gap-4 items-center flex-1 w-full">
-                    <div className="relative flex-1 max-w-sm">
+            <div className="flex flex-col gap-4 bg-white p-4 rounded-[24px] border border-slate-100 shadow-sm">
+                <div className="flex flex-col md:flex-row gap-4 items-center justify-between">
+                    <div className="relative flex-1 w-full max-w-sm">
                         <MapPin className="absolute left-3 top-2.5 text-slate-400" size={16} />
                         <input
                             type="text"
@@ -99,105 +113,108 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
                             className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none focus:ring-2 focus:ring-blue-500"
                         />
                     </div>
-                    <label className="flex items-center gap-2 cursor-pointer text-sm font-bold text-slate-600">
-                        <input
-                            type="checkbox"
-                            checked={onlyWithPhone}
-                            onChange={e => setOnlyWithPhone(e.target.checked)}
-                            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                        />
-                        Com Telefone
-                    </label>
+                    {filterStatus === 'PENDING' && filteredResults.length > 0 && (
+                        <button
+                            onClick={handleBulkApprove}
+                            disabled={isProcessingBulk}
+                            className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-xl font-bold flex items-center gap-2 transition-all shadow-md disabled:opacity-50 text-sm whitespace-nowrap"
+                        >
+                            {isProcessingBulk ? <Loader2 className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
+                            Aprovar Todos ({filteredResults.length})
+                        </button>
+                    )}
                 </div>
-                {filterStatus === 'PENDING' && filteredResults.length > 0 && (
-                    <button
-                        onClick={handleBulkApprove}
-                        disabled={isProcessingBulk}
-                        className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-xl font-bold flex items-center gap-2 transition-all shadow-md disabled:opacity-50 text-sm whitespace-nowrap"
-                    >
-                        {isProcessingBulk ? <Loader2 className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
-                        Aprovar Todos ({filteredResults.length})
-                    </button>
-                )}
+                <div className="flex flex-wrap gap-2">
+                    <button onClick={() => setFilterWithPhone(!filterWithPhone)} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border transition-all ${filterWithPhone ? 'bg-blue-100 border-blue-300 text-blue-700 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>+ Telefone</button>
+                    <button onClick={() => setFilterWithoutPhone(!filterWithoutPhone)} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border transition-all ${filterWithoutPhone ? 'bg-orange-100 border-orange-300 text-orange-700 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>- Telefone</button>
+
+                    <button onClick={() => setFilterWithAddress(!filterWithAddress)} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border transition-all ${filterWithAddress ? 'bg-blue-100 border-blue-300 text-blue-700 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>+ Endereço</button>
+                    <button onClick={() => setFilterWithoutAddress(!filterWithoutAddress)} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border transition-all ${filterWithoutAddress ? 'bg-orange-100 border-orange-300 text-orange-700 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>- Endereço</button>
+
+                    <button onClick={() => setFilterWithWebsite(!filterWithWebsite)} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border transition-all ${filterWithWebsite ? 'bg-blue-100 border-blue-300 text-blue-700 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>+ Website</button>
+                    <button onClick={() => setFilterWithoutWebsite(!filterWithoutWebsite)} className={`px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border transition-all ${filterWithoutWebsite ? 'bg-orange-100 border-orange-300 text-orange-700 shadow-sm' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}>- Website</button>
+                </div>
             </div>
 
-            {isLoading ? (
-                <div className="flex justify-center py-20">
-                    <Loader2 className="animate-spin text-slate-300" size={48} />
-                </div>
-            ) : filteredResults.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-20 text-slate-400 bg-white rounded-[32px] border border-slate-100 border-dashed">
-                    <Inbox size={48} className="mb-4 text-slate-200" />
-                    <p className="font-bold">Nenhum resultado encontrado.</p>
-                    <p className="text-xs">Tente mudar o filtro ou execute um novo processo.</p>
-                </div>
-            ) : (
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                    {filteredResults.map(result => (
-                        <div key={result.id} className="bg-white p-6 rounded-[24px] border border-slate-100 shadow-sm hover:shadow-md transition-all flex flex-col md:flex-row gap-6 animate-in fade-in slide-in-from-bottom-4">
-                            <div className="flex-1 space-y-3">
-                                <div>
-                                    <div className="flex justify-between items-start">
-                                        <h3 className="text-lg font-black text-slate-800 leading-tight">{result.name}</h3>
-                                        {result.duplication_score > 0 && (
-                                            <span className="bg-orange-100 text-orange-600 px-2 py-1 rounded text-[10px] font-bold uppercase">
-                                                Duplicidade?
-                                            </span>
+            {
+                isLoading ? (
+                    <div className="flex justify-center py-20">
+                        <Loader2 className="animate-spin text-slate-300" size={48} />
+                    </div>
+                ) : filteredResults.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-20 text-slate-400 bg-white rounded-[32px] border border-slate-100 border-dashed">
+                        <Inbox size={48} className="mb-4 text-slate-200" />
+                        <p className="font-bold">Nenhum resultado encontrado.</p>
+                        <p className="text-xs">Tente mudar o filtro ou execute um novo processo.</p>
+                    </div>
+                ) : (
+                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                        {filteredResults.map(result => (
+                            <div key={result.id} className="bg-white p-6 rounded-[24px] border border-slate-100 shadow-sm hover:shadow-md transition-all flex flex-col md:flex-row gap-6 animate-in fade-in slide-in-from-bottom-4">
+                                <div className="flex-1 space-y-3">
+                                    <div>
+                                        <div className="flex justify-between items-start">
+                                            <h3 className="text-lg font-black text-slate-800 leading-tight">{result.name}</h3>
+                                            {result.duplication_score > 0 && (
+                                                <span className="bg-orange-100 text-orange-600 px-2 py-1 rounded text-[10px] font-bold uppercase">
+                                                    Duplicidade?
+                                                </span>
+                                            )}
+                                        </div>
+                                        <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mt-1">
+                                            {(result.scraper_runs as any)?.scraper_processes?.name || 'Processo Desconhecido'}
+                                        </p>
+                                    </div>
+
+                                    <div className="space-y-2 mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                                        <div className="flex items-center gap-2 text-[10px] sm:text-xs font-bold text-slate-600 bg-slate-50 p-2 rounded-lg truncate">
+                                            <MapPin size={14} className="text-blue-500 shrink-0" />
+                                            <span className="truncate" title={result.address}>{result.address}</span>
+                                        </div>
+                                        <div className="flex items-center gap-2 text-[10px] sm:text-xs font-black text-slate-600 bg-slate-50 p-2 rounded-lg truncate">
+                                            <Phone size={14} className="text-green-500 shrink-0" />
+                                            <span>{result.phone || 'S/ Tel'}</span>
+                                        </div>
+                                        {result.website && (
+                                            <div className="flex items-center gap-2 text-[10px] sm:text-xs font-bold text-blue-600 bg-blue-50/50 p-2 rounded-lg truncate">
+                                                <Globe size={14} className="shrink-0" />
+                                                <a href={result.website} target="_blank" rel="noreferrer" className="hover:underline truncate" title={result.website}>{result.website.replace(/^https?:\/\//, '')}</a>
+                                            </div>
                                         )}
                                     </div>
-                                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mt-1">
-                                        {(result.scraper_runs as any)?.scraper_processes?.name || 'Processo Desconhecido'}
-                                    </p>
                                 </div>
 
-                                <div className="space-y-2 mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
-                                    <div className="flex items-center gap-2 text-[10px] sm:text-xs font-bold text-slate-600 bg-slate-50 p-2 rounded-lg truncate">
-                                        <MapPin size={14} className="text-blue-500 shrink-0" />
-                                        <span className="truncate" title={result.address}>{result.address}</span>
-                                    </div>
-                                    <div className="flex items-center gap-2 text-[10px] sm:text-xs font-black text-slate-600 bg-slate-50 p-2 rounded-lg truncate">
-                                        <Phone size={14} className="text-green-500 shrink-0" />
-                                        <span>{result.phone || 'S/ Tel'}</span>
-                                    </div>
-                                    {result.website && (
-                                        <div className="flex items-center gap-2 text-[10px] sm:text-xs font-bold text-blue-600 bg-blue-50/50 p-2 rounded-lg truncate">
-                                            <Globe size={14} className="shrink-0" />
-                                            <a href={result.website} target="_blank" rel="noreferrer" className="hover:underline truncate" title={result.website}>{result.website.replace(/^https?:\/\//, '')}</a>
+                                <div className="flex flex-row md:flex-col gap-2 justify-center border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-4">
+                                    {filterStatus === 'PENDING' && (
+                                        <>
+                                            <button
+                                                onClick={() => handleAction(result, 'APPROVE')}
+                                                className="flex-1 md:flex-none p-3 bg-green-50 text-green-700 hover:bg-green-100 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-colors"
+                                                title="Aprovar e Enviar para CRM"
+                                            >
+                                                <CheckCircle2 size={16} /> Aprovar
+                                            </button>
+                                            <button
+                                                onClick={() => handleAction(result, 'REJECT')}
+                                                className="flex-1 md:flex-none p-3 bg-red-50 text-red-700 hover:bg-red-100 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-colors"
+                                                title="Rejeitar"
+                                            >
+                                                <XCircle size={16} /> Rejeitar
+                                            </button>
+                                        </>
+                                    )}
+                                    {filterStatus === 'APPROVED' && (
+                                        <div className="text-center p-2 bg-green-50 text-green-700 rounded-xl text-xs font-bold">
+                                            <CheckCircle2 className="mx-auto mb-1" size={20} />
+                                            Enviado
                                         </div>
                                     )}
                                 </div>
                             </div>
-
-                            <div className="flex flex-row md:flex-col gap-2 justify-center border-t md:border-t-0 md:border-l border-slate-100 pt-4 md:pt-0 md:pl-4">
-                                {filterStatus === 'PENDING' && (
-                                    <>
-                                        <button
-                                            onClick={() => handleAction(result, 'APPROVE')}
-                                            className="flex-1 md:flex-none p-3 bg-green-50 text-green-700 hover:bg-green-100 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-colors"
-                                            title="Aprovar e Enviar para CRM"
-                                        >
-                                            <CheckCircle2 size={16} /> Aprovar
-                                        </button>
-                                        <button
-                                            onClick={() => handleAction(result, 'REJECT')}
-                                            className="flex-1 md:flex-none p-3 bg-red-50 text-red-700 hover:bg-red-100 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-colors"
-                                            title="Rejeitar"
-                                        >
-                                            <XCircle size={16} /> Rejeitar
-                                        </button>
-                                    </>
-                                )}
-                                {filterStatus === 'APPROVED' && (
-                                    <div className="text-center p-2 bg-green-50 text-green-700 rounded-xl text-xs font-bold">
-                                        <CheckCircle2 className="mx-auto mb-1" size={20} />
-                                        Enviado
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            )}
-        </div>
+                        ))}
+                    </div>
+                )
+            }
+        </div >
     );
 };

@@ -389,21 +389,25 @@ export const dataService = {
     if (tasksError) throw tasksError;
 
     const legacyTasks: Task[] = (tasksData || [])
-      .filter(t => t.clients && (!Array.isArray(t.clients) || t.clients.length > 0)) // Filter ghost tasks (strict)
-      .map(t => ({
-        id: t.id,
-        clientId: t.client_id,
-        type: t.type as CallType,
-        deadline: t.created_at,
-        assignedTo: t.assigned_to,
-        status: t.status as any,
-        skipReason: t.skip_reason,
-        clientName: Array.isArray(t.clients) ? t.clients[0]?.name : t.clients?.name,
-        clientPhone: Array.isArray(t.clients) ? t.clients[0]?.phone : t.clients?.phone,
-        approvalStatus: t.approval_status as any,
-        scheduledFor: t.scheduled_for,
-        scheduleReason: t.schedule_reason
-      }));
+      .filter(t => t.client_id) // Only require a valid client_id, don't filter by join result
+      .map(t => {
+        const clientObj = Array.isArray(t.clients) ? t.clients[0] : t.clients;
+        return {
+          id: t.id,
+          clientId: t.client_id,
+          type: t.type as CallType,
+          deadline: t.created_at,
+          assignedTo: t.assigned_to,
+          status: t.status as any,
+          skipReason: t.skip_reason,
+          clientName: clientObj?.name,
+          clientPhone: clientObj?.phone,
+          clients: clientObj || null, // Pass embedded client data for fallback
+          approvalStatus: t.approval_status as any,
+          scheduledFor: t.scheduled_for,
+          scheduleReason: t.schedule_reason
+        };
+      });
 
     // 2. Fetch Approved Schedules (where scheduled_for <= NOW)
     let schedQuery = supabase.from('call_schedules')
@@ -649,14 +653,18 @@ export const dataService = {
     });
 
     const validLegacyTasks = (tasks || [])
-      .filter(t => t.clients && (!Array.isArray(t.clients) || t.clients.length > 0))
+      .filter(t => t.client_id) // Only require a valid client_id
       .filter(t => !t.scheduled_for || new Date(t.scheduled_for) <= new Date())
-      .map(t => ({
-        ...t,
-        clients: Array.isArray(t.clients) ? t.clients[0] : t.clients,
-        profiles: Array.isArray(t.profiles) ? t.profiles[0] : t.profiles,
-        duration: 0
-      }));
+      .map(t => {
+        const clientObj = Array.isArray(t.clients) ? t.clients[0] : t.clients;
+        const profileObj = Array.isArray(t.profiles) ? t.profiles[0] : t.profiles;
+        return {
+          ...t,
+          clients: clientObj || { name: 'Prospecto', phone: '' },
+          profiles: profileObj,
+          duration: 0
+        };
+      });
 
     return [...mappedSchedules, ...validLegacyTasks];
   },
@@ -837,7 +845,7 @@ export const dataService = {
     const { data: existing } = await supabase.from('clients').select('*').eq('phone', phone).maybeSingle();
 
     const payload: any = {
-      name: client.name,
+      name: client.name || existing?.name || 'Sem Nome',
       phone,
       address: client.address || existing?.address || '',
       items: Array.from(new Set([...(existing?.items || []), ...(client.items || [])])),
@@ -858,6 +866,11 @@ export const dataService = {
     const { data, error } = await supabase.from('clients').upsert(payload, { onConflict: 'phone' }).select().single();
     if (error) throw error;
     return data;
+  },
+
+  updateClientFields: async (clientId: string, updates: Partial<Client>): Promise<void> => {
+    const { error } = await supabase.from('clients').update(updates).eq('id', clientId);
+    if (error) throw error;
   },
 
   getProtocolConfig: () => ({

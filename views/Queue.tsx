@@ -3,7 +3,7 @@ import React from 'react';
 import { QuestionnaireForm } from '../components/QuestionnaireForm';
 import {
   Phone, PhoneOff, SkipForward, Play, CheckCircle2,
-  Loader2, Clock, MapPin, User, FileText, AlertCircle, Save, X, MessageCircle, Copy, Check, ChevronRight, AlertTriangle, ClipboardList, Zap, Calendar
+  Loader2, Clock, MapPin, User, FileText, AlertCircle, Save, X, MessageCircle, Copy, Check, ChevronRight, AlertTriangle, ClipboardList, Zap, Calendar, Mail
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { Task, Client, Question, CallType, OperatorEventType, ProtocolStatus } from '../types';
@@ -21,6 +21,8 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   const [questions, setQuestions] = React.useState<Question[]>([]);
   const [responses, setResponses] = React.useState<Record<string, any>>({});
   const [callSummary, setCallSummary] = React.useState('');
+  const [crmStatus, setCrmStatus] = React.useState('');
+  const [interestProduct, setInterestProduct] = React.useState('');
 
   const [isCalling, setIsCalling] = React.useState(false);
   const [isFillingReport, setIsFillingReport] = React.useState(false);
@@ -30,6 +32,9 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   const [startTime, setStartTime] = React.useState<string | null>(null);
   const [isCopied, setIsCopied] = React.useState(false);
   const [hasRecentCall, setHasRecentCall] = React.useState(false);
+
+  const [clientHistory, setClientHistory] = React.useState<{ calls: any[], protocols: any[] }>({ calls: [], protocols: [] });
+  const [historyLoading, setHistoryLoading] = React.useState(false);
 
   // Estados para abertura de protocolo no report
   const [needsProtocol, setNeedsProtocol] = React.useState(false);
@@ -69,7 +74,9 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setHasRecentCall(false);
     setNeedsProtocol(false);
     setProtoData({ title: '', departmentId: 'atendimento', priority: 'Média' });
-    setScheduleData({ isScheduling: false, date: '', time: '', reason: '' });
+    setScheduleData({ isScheduling: false, date: '', time: '', reason: '', type: CallType.POS_VENDA });
+    setCrmStatus('');
+    setInterestProduct('');
   }, []);
 
   // State for upcoming tasks
@@ -81,7 +88,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       const [allTasks, allQuestions, allClients] = await Promise.all([
         dataService.getTasks(),
         dataService.getQuestions(),
-        dataService.getClients()
+        dataService.getClients(true) // Pass TRUE to include LEADS (Prospects)
       ]);
       setQuestions(allQuestions);
 
@@ -106,13 +113,49 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
 
       const myTask = dueTasks[0];
       if (myTask) {
-        const foundClient = allClients.find(c => c.id === myTask.clientId);
+        // Try normal client lookup first, then use embedded task data as fallback
+        let foundClient = allClients.find(c => c.id === myTask.clientId) || null;
+
+        // Fallback: build a Client object from embedded task data (for LEADs / Prospects)
+        if (!foundClient && (myTask.clientName || myTask.clientPhone || myTask.clients)) {
+          const embeddedClient = myTask.clients as any;
+          foundClient = {
+            id: myTask.clientId,
+            name: myTask.clientName || embeddedClient?.name || 'Prospecto',
+            phone: myTask.clientPhone || embeddedClient?.phone || '',
+            address: embeddedClient?.address || '',
+            items: embeddedClient?.items || [],
+            offers: embeddedClient?.offers || [],
+            acceptance: embeddedClient?.acceptance || 'medium',
+            satisfaction: embeddedClient?.satisfaction || 'medium',
+            origin: embeddedClient?.origin,
+            email: embeddedClient?.email,
+            website: embeddedClient?.website,
+            status: embeddedClient?.status || 'LEAD',
+            responsible_phone: embeddedClient?.responsible_phone,
+            buyer_name: embeddedClient?.buyer_name,
+            interest_product: embeddedClient?.interest_product,
+            preferred_channel: embeddedClient?.preferred_channel,
+            funnel_status: embeddedClient?.funnel_status
+          } as Client;
+        }
+
         setCurrentTask(myTask);
-        setClient(foundClient || null);
+        setClient(foundClient);
 
         if (foundClient) {
           const recent = await dataService.checkRecentCall(foundClient.id);
           setHasRecentCall(recent);
+          // Set initial values
+          setCrmStatus(foundClient.funnel_status || '');
+          setInterestProduct(foundClient.interest_product || '');
+
+          setHistoryLoading(true);
+          try {
+            const hist = await dataService.getClientHistory(foundClient.id);
+            setClientHistory(hist);
+          } catch (e) { console.error('Error fetching history', e); }
+          setHistoryLoading(false);
         }
       } else {
         setCurrentTask(null);
@@ -382,6 +425,34 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       };
       await dataService.saveCall(callData);
 
+      // 2.5. Update Client CRM Fields + Questionnaire mapped fields
+      const clientUpdates: any = {};
+      let needsClientUpdate = false;
+      if (crmStatus && crmStatus !== client.funnel_status) {
+        clientUpdates.funnel_status = crmStatus;
+        needsClientUpdate = true;
+      }
+      if (interestProduct && interestProduct !== client.interest_product) {
+        clientUpdates.interest_product = interestProduct;
+        needsClientUpdate = true;
+      }
+
+      // Map questionnaire responses to client fields via question.stageId
+      const FIELD_MAPPABLE = ['buyer_name', 'responsible_phone', 'email', 'interest_product', 'notes'];
+      for (const q of questions) {
+        if (q.stageId && FIELD_MAPPABLE.includes(q.stageId)) {
+          const val = responses[q.id] || responses[`${q.id}_note`];
+          if (val && val.trim()) {
+            clientUpdates[q.stageId] = val.trim();
+            needsClientUpdate = true;
+          }
+        }
+      }
+
+      if (needsClientUpdate) {
+        await dataService.updateClientFields(client.id, clientUpdates);
+      }
+
       // 3. Update Task (Complete or Schedule)
       if (scheduleData.isScheduling) {
         // Create Schedule Request
@@ -474,6 +545,43 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                 </div>
               </div>
               <p className="font-bold text-slate-400 flex items-start gap-2"><MapPin size={18} className="shrink-0" /> {client.address || 'Sem endereço'}</p>
+              {client.buyer_name && (
+                <p className="font-bold text-emerald-400 flex items-center gap-2 text-sm mt-2"><User size={16} className="shrink-0" /> Decisor: {client.buyer_name}</p>
+              )}
+              {client.responsible_phone && (
+                <p className="font-bold text-blue-400 flex items-center gap-2 text-sm mt-1"><Phone size={16} className="shrink-0" /> Responsável: {client.responsible_phone}</p>
+              )}
+              {client.email && (
+                <p className="font-bold text-amber-400 flex items-center gap-2 text-sm mt-1"><Mail size={16} className="shrink-0 text-amber-400" /> {client.email}</p>
+              )}
+            </div>
+
+            <div className="pt-6 border-t border-slate-800">
+              <div className="flex gap-4">
+                <div className="flex-1">
+                  <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Origem do Lead</p>
+                  <span className="px-3 py-1 bg-slate-800 text-[10px] font-black uppercase text-slate-300 rounded-md border border-slate-700">{client.origin || 'Sistema'}</span>
+                </div>
+                {client.interest_product && (
+                  <div className="flex-1">
+                    <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Produto de Interesse</p>
+                    <span className="px-3 py-1 bg-emerald-900/50 text-[10px] font-black uppercase text-emerald-400 rounded-md border border-emerald-800">{client.interest_product}</span>
+                  </div>
+                )}
+                {client.funnel_status && (() => {
+                  const STATUS_LABELS: Record<string, string> = {
+                    'NEW': 'Novo Lead', 'CONTACT_ATTEMPT': 'Tentativa de Contato',
+                    'CONTACT_MADE': 'Contato Feito', 'QUALIFIED': 'Qualificado',
+                    'PROPOSAL_SENT': 'Proposta Enviada', 'PHYSICAL_VISIT': 'Visita Física'
+                  };
+                  return (
+                    <div className="flex-1">
+                      <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-2">Status do Lead</p>
+                      <span className="px-3 py-1 bg-blue-900/50 text-[10px] font-black uppercase text-blue-400 rounded-md border border-blue-800">{STATUS_LABELS[client.funnel_status] || client.funnel_status}</span>
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
 
             <div className="pt-6 border-t border-slate-800">
@@ -485,6 +593,30 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   <span className="text-xs text-slate-600 italic">Nenhum equipamento cadastrado</span>
                 )}
               </div>
+            </div>
+
+            {/* HISTÓRICO DE INTERAÇÕES */}
+            <div className="pt-6 border-t border-slate-800">
+              <h5 className="text-[9px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2 mb-4"><FileText size={14} className="text-slate-400" /> Histórico de Contatos Recentes</h5>
+              {historyLoading ? (
+                <div className="flex justify-center py-4"><Loader2 className="animate-spin text-slate-600" size={16} /></div>
+              ) : clientHistory.calls.length > 0 ? (
+                <div className="space-y-3 max-h-[250px] overflow-y-auto pr-2 custom-scrollbar">
+                  {clientHistory.calls.map(call => (
+                    <div key={call.id} className="p-3 bg-slate-800/50 rounded-xl border border-slate-700 space-y-2">
+                      <div className="flex justify-between items-start">
+                        <span className="text-[8px] font-black uppercase tracking-widest px-2 py-0.5 bg-slate-700 text-slate-300 rounded">{call.type}</span>
+                        <span className="text-[8px] font-black text-slate-400 uppercase">{new Date(call.startTime).toLocaleDateString("pt-BR", { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                      <p className="text-[10px] font-bold text-slate-300 italic">"{call.responses?.written_report || call.responses?.justificativa || call.responses?.note || 'Sem anotações.'}"</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="bg-slate-800/20 p-4 rounded-xl border border-slate-800 text-center">
+                  <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Op. Inédita - Primeiro Contato</p>
+                </div>
+              )}
             </div>
           </div>
 
@@ -539,6 +671,54 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   </h5>
                   <textarea value={callSummary} onChange={e => setCallSummary(e.target.value)} className="w-full p-8 bg-slate-50 rounded-[40px] border border-slate-100 font-bold text-slate-800 h-48 outline-none resize-none focus:ring-8 focus:ring-blue-500/5 transition-all" placeholder="O que foi conversado? Anote detalhes importantes para o próximo contato." />
                 </section>
+
+                {/* PRODUTO DE INTERESSE E FUNIL (CRM) */}
+                {isFillingReport && (
+                  <section className="space-y-6 pt-6 border-t border-slate-100">
+                    <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
+                      <User size={18} className="text-emerald-500" /> Atualizar Informações do Lead (CRM)
+                    </h5>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-emerald-50/30 p-8 rounded-[40px] border border-emerald-100/50">
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Status do Funil (CRM)</label>
+                        <select
+                          className="w-full p-4 bg-white rounded-2xl outline-none font-bold text-slate-700 text-sm border border-slate-200 focus:border-emerald-500 transition-all cursor-pointer"
+                          value={crmStatus || 'NEW'}
+                          onChange={e => setCrmStatus(e.target.value)}
+                        >
+                          <option value="NEW">Novo Lead</option>
+                          <option value="CONTACT_ATTEMPT">Tentativa de Contato</option>
+                          <option value="CONTACT_MADE">Contato Feito</option>
+                          <option value="QUALIFIED">Qualificado</option>
+                          <option value="PROPOSAL_SENT">Proposta Enviada</option>
+                          <option value="PHYSICAL_VISIT">Visita Física</option>
+                        </select>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Produto de Interesse</label>
+                        <select
+                          className="w-full p-4 bg-white rounded-2xl outline-none font-bold text-slate-700 text-sm border border-slate-200 focus:border-emerald-500 transition-all cursor-pointer"
+                          value={interestProduct}
+                          onChange={e => setInterestProduct(e.target.value)}
+                        >
+                          <option value="">Selecione...</option>
+                          <option value="Fotovoltaico">Fotovoltaico</option>
+                          <option value="Bomba">Bomba</option>
+                          <option value="Pressurizadora">Pressurizadora</option>
+                          <option value="Químicos">Químicos</option>
+                          <option value="Gerador de Cloro">Gerador de Cloro</option>
+                          <option value="Aquecedor de Piscina">Aquecedor de Piscina</option>
+                          <option value="Aquecedor a Gás">Aquecedor a Gás</option>
+                          <option value="Boiler">Boiler</option>
+                          <option value="Placa Solar">Placa Solar</option>
+                          <option value="Manutenção">Manutenção</option>
+                          <option value="Outros">Outros</option>
+                        </select>
+                      </div>
+                    </div>
+                  </section>
+                )}
+
 
                 {isFillingReport && (
                   <section className="space-y-6 p-10 bg-blue-50/50 rounded-[48px] border border-blue-100 animate-in slide-in-from-bottom-2">
