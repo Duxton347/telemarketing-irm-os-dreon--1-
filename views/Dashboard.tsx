@@ -59,7 +59,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
       dataService.getQuestions()
     ]);
 
-    setOperators(allUsers.filter(u => u && u.role === UserRole.OPERATOR));
+    setOperators(allUsers.filter(u => u && u.active !== false));
     setQuestions(allQuestions);
     setTasks(tasks);
     const filterId = user?.role === UserRole.OPERATOR ? user.id : selectedFilter;
