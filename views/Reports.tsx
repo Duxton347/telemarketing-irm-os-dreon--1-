@@ -726,10 +726,10 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                                     <td className="py-6 text-center text-xs font-bold text-slate-600">{opCalls.length}</td>
                                     <td className="py-6 text-center text-xs font-bold text-slate-600">{opWaCount}</td>
                                     <td className="py-6 text-center text-xs font-black text-emerald-600">{opSales.length}</td>
-                                    <td className="py-6 text-center text-xs font-mono text-slate-500">{Math.round(tma)}s</td>
+                                    <td className="py-6 text-center text-xs font-mono text-slate-500">{Math.floor(tma / 60)}m {Math.round(tma % 60)}s</td>
                                     <td className="py-6 text-center">
                                        <span className={`px-3 py-1 rounded-full text-[10px] font-black ${medianGap < 30 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-                                          {Math.round(medianGap)}s
+                                          {Math.floor(medianGap / 60)}m {Math.round(medianGap % 60)}s
                                        </span>
                                     </td>
                                     <td className="py-6 pr-4 text-right font-black text-blue-600">{Math.max(0, Math.round(score))}</td>
