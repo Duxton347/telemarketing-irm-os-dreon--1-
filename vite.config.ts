@@ -11,7 +11,10 @@ export default defineConfig({
       '/google-proxy': {
         target: 'https://maps.googleapis.com',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/google-proxy/, '')
+        rewrite: (path) => path.replace(/^\/google-proxy/, ''),
+        headers: {
+          'X-Forwarded-Proto': 'https'
+        }
       }
     }
   },
