@@ -416,7 +416,7 @@ export const dataService = {
         return {
           id: t.id,
           clientId: t.client_id,
-          type: t.type as CallType,
+          type: clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : (t.type as CallType),
           deadline: t.created_at,
           assignedTo: t.assigned_to,
           status: t.status as any,
@@ -442,21 +442,24 @@ export const dataService = {
     const { data: schedData, error: schedError } = await schedQuery.order('scheduled_for', { ascending: true });
     if (schedError) throw schedError;
 
-    const scheduledTasks: Task[] = (schedData || []).map(s => ({
-      id: s.id,
-      clientId: s.customer_id || '', // Task expects string
-      clientName: Array.isArray(s.clients) ? s.clients[0]?.name : s.clients?.name || 'Cliente Agendado',
-      clientPhone: Array.isArray(s.clients) ? s.clients[0]?.phone : s.clients?.phone,
-      clients: s.clients, // Pass full client object just in case
-      type: s.call_type as CallType,
-      deadline: s.scheduled_for, // Use scheduled time as deadline/display time
-      assignedTo: s.assigned_operator_id,
-      status: 'pending', // Active in queue
-      scheduleReason: s.schedule_reason,
-      // Map fields to preserve context
-      originCallId: s.origin_call_id,
-      approvalStatus: 'APPROVED'
-    }));
+    const scheduledTasks: Task[] = (schedData || []).map(s => {
+      const clientObj = Array.isArray(s.clients) ? s.clients[0] : s.clients;
+      return {
+        id: s.id,
+        clientId: s.customer_id || '', // Task expects string
+        clientName: clientObj?.name || s.clients?.name || 'Cliente Agendado',
+        clientPhone: clientObj?.phone || s.clients?.phone,
+        clients: s.clients, // Pass full client object just in case
+        type: clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : (s.call_type as CallType),
+        deadline: s.scheduled_for, // Use scheduled time as deadline/display time
+        assignedTo: s.assigned_operator_id,
+        status: 'pending', // Active in queue
+        scheduleReason: s.schedule_reason,
+        // Map fields to preserve context
+        originCallId: s.origin_call_id,
+        approvalStatus: 'APPROVED'
+      };
+    });
 
     // 3. Merge: Prioritize Schedules
     return [...scheduledTasks, ...legacyTasks];
@@ -464,14 +467,17 @@ export const dataService = {
 
 
   createTask: async (task: Partial<Task>): Promise<void> => {
-    await supabase.from('tasks').insert({
+    // Save to DB using the mapped type to avoid check constraint errors if REATIVACAO is missing
+    const dbType = task.type === CallType.REATIVACAO ? 'POS_VENDA' : task.type;
+    const { error } = await supabase.from('tasks').insert({
       client_id: task.clientId,
-      type: task.type,
+      type: dbType,
       assigned_to: task.assignedTo,
       status: task.status || 'pending',
       scheduled_for: task.scheduledFor,
       schedule_reason: task.scheduleReason
     });
+    if (error) throw error;
   },
 
   updateTask: async (taskId: string, updates: Partial<Task>): Promise<void> => {
@@ -665,7 +671,7 @@ export const dataService = {
           return {
             id: s.id,
             clientId: s.customer_id,
-            type: s.call_type,
+            type: clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : s.call_type,
             deadline: s.scheduled_for,
             assignedTo: s.assigned_operator_id,
             status: 'pending',
@@ -688,6 +694,7 @@ export const dataService = {
         const clientObj = Array.isArray(t.clients) ? t.clients[0] : t.clients;
         return {
           ...t,
+          type: clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : t.type,
           clients: clientObj || { name: 'Prospecto', phone: '' },
           profiles: profileMap.get(t.assigned_to) || null,
           duration: 0

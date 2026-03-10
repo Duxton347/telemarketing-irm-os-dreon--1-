@@ -317,14 +317,15 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
         const phoneIdx = headers.findIndex(h => ['telefone', 'celular', 'phone', 'contato', 'tel'].some(t => h.includes(t)));
         const equipIdx = headers.findIndex(h => ['equipamento', 'item', 'equipment', 'modelo', 'produto'].some(t => h.includes(t)));
         const offerIdx = headers.findIndex(h => ['oferta', 'offer', 'promocao'].some(t => h.includes(t)));
-
         const addressIdx = headers.findIndex(h => ['endereco', 'address', 'local', 'rua', 'logradouro'].some(t => h.includes(t)));
+        const dateIdx = headers.findIndex(h => ['data', 'ultima', 'ultimacompra', 'compra', 'date'].some(t => h.includes(t)));
 
         const finalNameIdx = nameIdx;
         const finalPhoneIdx = phoneIdx;
         const finalEquipIdx = equipIdx;
         const finalAddressIdx = addressIdx;
         const finalOfferIdx = offerIdx;
+        const finalDateIdx = dateIdx;
 
         const rows = lines.slice(1).map(line => {
           let values: string[] = [];
@@ -345,7 +346,8 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
             phone: finalPhoneIdx !== -1 ? values[finalPhoneIdx] : '',
             address: finalAddressIdx !== -1 ? values[finalAddressIdx] : '',
             equipment: finalEquipIdx !== -1 ? values[finalEquipIdx] : '',
-            offer: finalOfferIdx !== -1 ? values[finalOfferIdx] : ''
+            offer: finalOfferIdx !== -1 ? values[finalOfferIdx] : '',
+            lastPurchaseDate: finalDateIdx !== -1 ? values[finalDateIdx] : ''
           };
         }).filter(r => r.phone && r.phone.trim() !== '');
 
@@ -393,6 +395,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
       for (const row of csvPreview) {
 
         const isProspecting = selectedCallType.includes('PROSPEC') || isImportingAsLead;
+        const isReativacao = selectedCallType === CallType.REATIVACAO;
 
         const client = await dataService.upsertClient({
           name: row.name,
@@ -400,8 +403,9 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
           address: row.address,
           items: row.equipment ? [row.equipment] : [],
           offers: row.offer ? [row.offer] : [],
+          last_purchase_date: row.lastPurchaseDate,
           origin: isProspecting ? 'CSV_IMPORT' : 'MANUAL',
-          status: isProspecting ? 'LEAD' : 'CLIENT',
+          status: isReativacao ? 'INATIVO' : (isProspecting ? 'LEAD' : 'CLIENT'),
           funnel_status: isProspecting ? 'NEW' : undefined
         });
 
