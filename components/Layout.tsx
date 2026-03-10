@@ -36,7 +36,7 @@ const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
 
   const navItems = [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },
-    { label: 'Atendimento', icon: PhoneCall, path: '/queue', roles: [UserRole.OPERATOR, UserRole.SUPERVISOR] },
+    { label: 'Atendimento', icon: PhoneCall, path: '/queue', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },
     { label: 'Vendas', icon: ShoppingBag, path: '/sales', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },
     { label: 'Clientes', icon: Users, path: '/clients', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },
     { label: 'Protocolos', icon: ClipboardList, path: '/protocols', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },

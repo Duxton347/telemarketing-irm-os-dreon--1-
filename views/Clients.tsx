@@ -189,9 +189,9 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 h-[75vh]">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 h-[calc(100vh-260px)]">
         {/* LISTA DE CLIENTES */}
-        <div className="lg:col-span-4 space-y-4 h-full flex flex-col">
+        <div className="lg:col-span-4 flex flex-col h-full overflow-hidden">
           {isLoading ? (
             <div className="flex-1 flex flex-col items-center justify-center gap-4 text-slate-300">
               <Loader2 className="animate-spin" size={32} />
@@ -226,9 +226,9 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
         </div>
 
         {/* DETALHES E HISTÓRICO */}
-        <div className="lg:col-span-8 h-full">
+        <div className="lg:col-span-8 h-full overflow-y-auto custom-scrollbar">
           {selectedClient ? (
-            <div className="bg-white h-full rounded-[56px] shadow-sm border border-slate-100 flex flex-col overflow-hidden animate-in slide-in-from-right-4 duration-300">
+            <div className="bg-white rounded-[56px] shadow-sm border border-slate-100 flex flex-col animate-in slide-in-from-right-4 duration-300">
               <div className="p-8 md:p-10 border-b border-slate-100 flex justify-between items-start bg-slate-50/50 shrink-0">
                 <div className="space-y-4">
                   <div className="flex items-center gap-3">
@@ -246,7 +246,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                     {selectedClient.phone_secondary && <span className="flex items-center gap-2 text-sm font-black text-blue-600"><Phone size={16} /> Secundário: {selectedClient.phone_secondary}</span>}
 
                     {selectedClient.neighborhood ? (
-                      <div className="flex items-start gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest max-w-xs mt-2">
+                      <div className="flex items-start gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest mt-2">
                         <MapPin size={16} className="shrink-0 text-red-500" />
                         <div>
                           <p>{selectedClient.street || ''}</p>
@@ -255,11 +255,11 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                         </div>
                       </div>
                     ) : (
-                      <span className="flex items-start gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest max-w-xs mt-2"><MapPin size={16} className="shrink-0 text-red-500" /> {selectedClient.address || 'Sem endereço cadastrado'}</span>
+                      <span className="flex items-start gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest mt-2"><MapPin size={16} className="shrink-0 text-red-500" /> {selectedClient.address || 'Sem endereço cadastrado'}</span>
                     )}
 
                     {selectedClient.last_purchase_date && (
-                      <div className="flex items-start gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest max-w-xs mt-2">
+                      <div className="flex items-start gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest mt-2">
                         <Calendar size={16} className="shrink-0 text-amber-500" />
                         <div>
                           <p className="text-[10px] text-slate-400 mb-1">Última Compra:</p>
@@ -357,7 +357,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
 
       {isModalOpen && (
         <div className="fixed inset-0 z-[150] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-md">
-          <div className="bg-white w-full max-w-lg rounded-[40px] shadow-2xl animate-in zoom-in duration-200 overflow-hidden">
+          <div className="bg-white w-full max-w-2xl rounded-[40px] shadow-2xl animate-in zoom-in duration-200 max-h-[90vh] overflow-y-auto custom-scrollbar">
             <div className="bg-slate-900 p-8 text-white flex justify-between items-center">
               <h3 className="text-xl font-black uppercase tracking-tighter flex items-center gap-3">
                 {editMode ? <Edit2 size={24} className="text-blue-400" /> : <UserPlus size={24} className="text-blue-400" />}

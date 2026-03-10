@@ -6,7 +6,7 @@ import {
   Loader2, Clock, MapPin, User, FileText, AlertCircle, Save, X, MessageCircle, Copy, Check, ChevronRight, AlertTriangle, ClipboardList, Zap, Calendar, Mail
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
-import { Task, Client, Question, CallType, OperatorEventType, ProtocolStatus } from '../types';
+import { Task, Client, Question, CallType, OperatorEventType, ProtocolStatus, UserRole } from '../types';
 import { SKIP_REASONS, PROTOCOL_SLA } from '../constants';
 
 interface QueueProps {
@@ -14,6 +14,17 @@ interface QueueProps {
 }
 
 const Queue: React.FC<QueueProps> = ({ user }) => {
+  const [effectiveOperatorId, setEffectiveOperatorId] = React.useState<string>(user.id);
+  const [operators, setOperators] = React.useState<any[]>([]);
+
+  React.useEffect(() => {
+    if (user.role === UserRole.ADMIN) {
+      dataService.getUsers().then(users => {
+        setOperators(users.filter(u => u.role === UserRole.OPERATOR || u.role === UserRole.SUPERVISOR));
+      }).catch(e => console.error("Error fetching operators:", e));
+    }
+  }, [user.role]);
+
   const [isLoading, setIsLoading] = React.useState(true);
   const [isProcessing, setIsProcessing] = React.useState(false);
   const [currentTask, setCurrentTask] = React.useState<Task | null>(null);
@@ -96,7 +107,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       const now = new Date();
       // Filter out tasks that are waiting for approval
       const myPendingTasks = allTasks.filter(t =>
-        t.assignedTo === user.id &&
+        t.assignedTo === effectiveOperatorId &&
         t.status === 'pending' &&
         (t.approvalStatus === 'APPROVED' || !t.approvalStatus)
       );
@@ -168,7 +179,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     } finally {
       setIsLoading(false);
     }
-  }, [user.id, resetState]);
+  }, [effectiveOperatorId, resetState]);
 
   React.useEffect(() => { fetchQueue(); }, [fetchQueue]);
 
@@ -507,35 +518,70 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     finally { setIsProcessing(false); }
   };
 
-  if (isLoading) return <div className="h-full flex items-center justify-center p-20"><Loader2 className="animate-spin text-blue-600" size={48} /></div>;
+  const renderAdminSelector = () => {
+    if (user.role !== UserRole.ADMIN) return null;
+    return (
+      <div className="mb-6 bg-white p-4 rounded-3xl flex items-center gap-4 shadow-sm border border-slate-200 w-full">
+        <div className="p-3 bg-blue-100 text-blue-600 rounded-2xl">
+          <User size={24} />
+        </div>
+        <div className="flex-1">
+          <p className="text-[10px] uppercase tracking-widest font-black text-slate-400 mb-1">Visualizar Carga como Operador</p>
+          <select
+            value={effectiveOperatorId}
+            onChange={(e) => setEffectiveOperatorId(e.target.value)}
+            className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none hover:bg-slate-100 transition-colors cursor-pointer"
+          >
+            <option value={user.id}>Eu mesmo (Admin)</option>
+            {operators.map(op => (
+              <option key={op.id} value={op.id}>{op.name} (@{op.username})</option>
+            ))}
+          </select>
+        </div>
+      </div>
+    );
+  };
+
+  if (isLoading) return (
+    <div className="h-full flex flex-col items-center p-8">
+      {renderAdminSelector()}
+      <div className="flex-1 flex items-center justify-center min-h-[400px]">
+        <Loader2 className="animate-spin text-blue-600" size={48} />
+      </div>
+    </div>
+  );
 
   if (!currentTask || !client) {
     return (
-      <div className="h-full flex flex-col items-center justify-center gap-6 p-20 bg-white rounded-[56px] border border-dashed border-slate-200">
-        <Phone size={48} className="text-slate-200" />
-        <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">Nenhuma chamada pendente</h3>
-        {upcomingTasks.length > 0 && (
-          <div className="bg-orange-50 p-6 rounded-2xl border border-orange-100 flex flex-col items-center gap-2 max-w-md">
-            <Clock className="text-orange-500" size={24} />
-            <p className="font-bold text-slate-600 text-center">Você tem <strong className="text-orange-600">{upcomingTasks.length}</strong> agendamentos futuros na fila.</p>
-            <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Eles aparecerão aqui no horário agendado.</p>
-            <div className="w-full mt-4 space-y-2">
-              {upcomingTasks.slice(0, 3).map(t => (
-                <div key={t.id} className="bg-white p-3 rounded-xl text-xs font-bold text-slate-500 flex justify-between">
-                  <span>{new Date(t.scheduledFor!).toLocaleString()}</span>
-                  <span className="uppercase">{t.clientName || 'Cliente'}</span>
-                </div>
-              ))}
+      <div className="flex flex-col h-full w-full">
+        {renderAdminSelector()}
+        <div className="flex-1 flex flex-col items-center justify-center gap-6 p-20 bg-white rounded-[56px] border border-dashed border-slate-200 min-h-[500px]">
+          <Phone size={48} className="text-slate-200" />
+          <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">Nenhuma chamada pendente</h3>
+          {upcomingTasks.length > 0 && (
+            <div className="bg-orange-50 p-6 rounded-2xl border border-orange-100 flex flex-col items-center gap-2 max-w-md">
+              <Clock className="text-orange-500" size={24} />
+              <p className="font-bold text-slate-600 text-center">Você tem <strong className="text-orange-600">{upcomingTasks.length}</strong> agendamentos futuros na fila.</p>
+              <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Eles aparecerão aqui no horário agendado.</p>
+              <div className="w-full mt-4 space-y-2">
+                {upcomingTasks.slice(0, 3).map(t => (
+                  <div key={t.id} className="bg-white p-3 rounded-xl text-xs font-bold text-slate-500 flex justify-between">
+                    <span>{new Date(t.scheduledFor!).toLocaleString()}</span>
+                    <span className="uppercase">{t.clientName || 'Cliente'}</span>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
-        <button onClick={fetchQueue} className="px-8 py-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-[10px]">Atualizar</button>
+          )}
+          <button onClick={fetchQueue} className="px-8 py-4 bg-slate-900 text-white rounded-2xl font-black uppercase text-[10px]">Atualizar</button>
+        </div>
       </div>
     );
   }
 
   return (
-    <>
+    <div className="flex flex-col h-full w-full">
+      {renderAdminSelector()}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-in fade-in duration-500 pb-20">
         <div className="lg:col-span-4 space-y-6">
           <div className="bg-slate-900 rounded-[48px] p-10 text-white shadow-2xl space-y-8 relative overflow-hidden">
@@ -1076,8 +1122,8 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
             </div>
           </div>
         )}
-      </div >
-    </>
+      </div>
+    </div>
   );
 };
 

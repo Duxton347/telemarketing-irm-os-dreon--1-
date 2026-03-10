@@ -76,12 +76,18 @@ export const dataService = {
       'VENDA': 'VENDA',
       'PÓS-VENDA': 'POS_VENDA',
       'PÓS_VENDA': 'POS_VENDA',
+      'POS_VENDA': 'POS_VENDA',
       'PROSPECÇÃO': 'PROSPECCAO',
+      'PROSPECCAO': 'PROSPECCAO',
       'CONFIRMAÇÃO PROTOCOLO': 'CONFIRMACAO_PROTOCOLO',
-      'REATIVAÇÃO': 'REATIVACAO',
+      'CONFIRMACAO_PROTOCOLO': 'CONFIRMACAO_PROTOCOLO',
+      'REATIVAÇÃO': 'POS_VENDA',
+      'REATIVACAO': 'POS_VENDA',
       'WHATSAPP': 'WHATSAPP'
     };
-    const dbCallType = CALL_TYPE_DB_MAP[schedule.callType || ''] || schedule.callType || 'VENDA';
+    const rawType = schedule.callType || 'VENDA';
+    const dbCallType = CALL_TYPE_DB_MAP[rawType] || CALL_TYPE_DB_MAP[rawType.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/-/g, '_')] || 'VENDA';
+    console.log('🔍 [createScheduleRequest] rawType:', JSON.stringify(rawType), '→ dbCallType:', JSON.stringify(dbCallType));
 
     const { error } = await supabase.from('call_schedules').insert({
       customer_id: schedule.customerId || null,
@@ -99,9 +105,13 @@ export const dataService = {
 
   bulkCreateScheduleRequest: async (schedules: Partial<CallSchedule>[]): Promise<void> => {
     const CALL_TYPE_DB_MAP: Record<string, string> = {
-      'VENDA': 'VENDA', 'PÓS-VENDA': 'POS_VENDA', 'PÓS_VENDA': 'POS_VENDA',
-      'PROSPECÇÃO': 'PROSPECCAO', 'CONFIRMAÇÃO PROTOCOLO': 'CONFIRMACAO_PROTOCOLO',
-      'REATIVAÇÃO': 'REATIVACAO', 'WHATSAPP': 'WHATSAPP'
+      'VENDA': 'VENDA', 'PÓS-VENDA': 'POS_VENDA', 'PÓS_VENDA': 'POS_VENDA', 'POS_VENDA': 'POS_VENDA',
+      'PROSPECÇÃO': 'PROSPECCAO', 'PROSPECCAO': 'PROSPECCAO',
+      'CONFIRMAÇÃO PROTOCOLO': 'CONFIRMACAO_PROTOCOLO', 'CONFIRMACAO_PROTOCOLO': 'CONFIRMACAO_PROTOCOLO',
+      'REATIVAÇÃO': 'POS_VENDA', 'REATIVACAO': 'POS_VENDA', 'WHATSAPP': 'WHATSAPP'
+    };
+    const mapType = (t: string) => {
+      return CALL_TYPE_DB_MAP[t] || CALL_TYPE_DB_MAP[t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/-/g, '_')] || 'VENDA';
     };
     const { error } = await supabase.from('call_schedules').insert(
       schedules.map(s => ({
@@ -110,7 +120,7 @@ export const dataService = {
         requested_by_operator_id: s.requestedByOperatorId,
         assigned_operator_id: s.assignedOperatorId,
         scheduled_for: s.scheduledFor,
-        call_type: CALL_TYPE_DB_MAP[s.callType || ''] || s.callType || 'VENDA',
+        call_type: mapType(s.callType || 'VENDA'),
         status: s.status || 'PENDENTE_APROVACAO',
         schedule_reason: s.scheduleReason,
         resolution_channel: s.resolutionChannel || 'telefone'
@@ -874,6 +884,89 @@ export const dataService = {
     }));
   },
 
+  findDuplicateClients: async (): Promise<any[]> => {
+    const { data: clients, error } = await supabase.from('clients').select('id, name, phone, status, created_at').order('created_at', { ascending: false });
+    if (error || !clients) return [];
+
+    const phoneMap = new Map<string, any[]>();
+    for (const c of clients) {
+      if (!c.phone) continue;
+      const normalized = normalizePhone(c.phone);
+      if (!phoneMap.has(normalized)) phoneMap.set(normalized, []);
+      phoneMap.get(normalized)!.push(c);
+    }
+
+    const duplicates = [];
+    for (const [phone, list] of phoneMap.entries()) {
+      if (list.length > 1) {
+        duplicates.push({ phone, count: list.length, clients: list });
+      }
+    }
+    return duplicates;
+  },
+
+  batchUpdateInactiveClients: async (entries: { name: string; phone: string; lastPurchaseDate: string }[]): Promise<{ updated: number; notFound: string[] }> => {
+    let updated = 0;
+    const notFound: string[] = [];
+
+    for (const entry of entries) {
+      const phone = normalizePhone(entry.phone);
+      if (!phone) { notFound.push(`${entry.name} (sem telefone)`); continue; }
+
+      // Try exact phone match first
+      let found: any = null;
+      const { data: byPhone } = await supabase.from('clients').select('id, name').eq('phone', phone).maybeSingle();
+      if (byPhone) found = byPhone;
+
+      // Fallback: match by name (case-insensitive)
+      if (!found && entry.name) {
+        const { data: byName } = await supabase.from('clients').select('id, name').ilike('name', entry.name.trim()).maybeSingle();
+        if (byName) found = byName;
+      }
+
+      if (!found) {
+        notFound.push(`${entry.name} (${entry.phone})`);
+        continue;
+      }
+
+      const { error } = await supabase
+        .from('clients')
+        .update({ last_purchase_date: entry.lastPurchaseDate, status: 'INATIVO' })
+        .eq('id', found.id);
+
+      if (error) {
+        console.error(`Error updating ${found.name}:`, error);
+        notFound.push(`${found.name} (erro: ${error.message})`);
+      } else {
+        updated++;
+      }
+    }
+
+    return { updated, notFound };
+  },
+
+  cleanupBadClientRecords: async (): Promise<number> => {
+    // Find and delete records with address fragments as names (created by a buggy CSV import)
+    const { data: badRecords } = await supabase
+      .from('clients')
+      .select('id, name, phone')
+      .eq('status', 'INATIVO');
+
+    if (!badRecords) return 0;
+
+    let cleaned = 0;
+    for (const rec of badRecords) {
+      const isBadName = rec.name?.startsWith('nº ') || rec.name?.match(/^\d{2}\/\d{2}\/\d{4}$/);
+      const isBadPhone = rec.phone && rec.phone.replace(/\D/g, '').length <= 8;
+
+      if (isBadName || isBadPhone) {
+        const { error } = await supabase.from('clients').delete().eq('id', rec.id);
+        if (!error) cleaned++;
+      }
+    }
+    return cleaned;
+  },
+
   dispatchLeadsToQueue: async (leadIds: string[], operatorId?: string, taskType: CallType = CallType.PROSPECCAO): Promise<void> => {
     if (!leadIds || leadIds.length === 0) return;
 
@@ -946,7 +1039,7 @@ export const dataService = {
       city: existing?.city || client.city,
       state: existing?.state || client.state,
       zip_code: existing?.zip_code || client.zip_code,
-      last_purchase_date: existing?.last_purchase_date || client.last_purchase_date
+      last_purchase_date: client.last_purchase_date || existing?.last_purchase_date
     };
 
     if (existing) {

@@ -4,7 +4,7 @@ import {
   Upload, Users, FileSpreadsheet, X, UserPlus, CheckCircle2,
   Loader2, Info, AlertCircle, Clock, Database, Trash2, Save,
   MessageSquarePlus, ChevronUp, ChevronDown, Trash, Edit3, RotateCcw,
-  PhoneOff, RefreshCw, ListFilter, Plus, UserCheck, UserMinus, Phone, PlayCircle, ChevronRight, LayoutList, Eraser, Sparkles, BarChart3, MessageCircle, Settings
+  PhoneOff, RefreshCw, ListFilter, Plus, UserCheck, UserMinus, Phone, PlayCircle, ChevronRight, LayoutList, Eraser, Sparkles, BarChart3, MessageCircle, Settings, Search, AlertTriangle
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { User, UserRole, CallType, Question, Task, ScheduleStatus, ProductivityMetrics, WhatsAppTask } from '../types';
@@ -40,6 +40,9 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   const [isRepiqueModalOpen, setIsRepiqueModalOpen] = React.useState(false);
   const [selectedTaskIds, setSelectedTaskIds] = React.useState<string[]>([]);
   const [isProcessingRepique, setIsProcessingRepique] = React.useState(false);
+
+  // Deduplication State
+  const [duplicateClients, setDuplicateClients] = React.useState<any[]>([]);
 
   const [userData, setUserData] = React.useState({ name: '', username: '', password: '', role: UserRole.OPERATOR });
   const [questionData, setQuestionData] = React.useState<Partial<Question>>({ text: '', options: [], type: 'ALL' as any, stageId: '' });
@@ -471,6 +474,19 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
       alert("Configurações salvas com sucesso!");
     } catch (e: any) {
       alert("Erro ao salvar configurações: " + e.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleScanDuplicates = async () => {
+    setIsProcessing(true);
+    try {
+      const dups = await dataService.findDuplicateClients();
+      setDuplicateClients(dups);
+      if (dups.length === 0) alert("Nenhum cliente duplicado encontrado!");
+    } catch (e) {
+      alert("Erro ao varrer clientes.");
     } finally {
       setIsProcessing(false);
     }
@@ -1060,6 +1076,130 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                 {isProcessing ? <Loader2 className="animate-spin" /> : <Clock size={16} />} Confirmar Agendamento
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'settings' && (
+        <div className="bg-white p-10 rounded-[40px] border border-slate-100 shadow-sm space-y-8 animate-in fade-in duration-300">
+          <div>
+            <h3 className="text-2xl font-black text-slate-800">Manutenção e Configurações</h3>
+            <p className="text-xs text-slate-400 font-bold">Gerencie dados e configurações do sistema.</p>
+          </div>
+
+          <div className="p-8 bg-blue-50/50 rounded-3xl border border-blue-100 space-y-6">
+            <div>
+              <h4 className="font-black text-slate-800 flex items-center gap-2"><Search size={18} className="text-blue-600" /> Varredura de Duplicados</h4>
+              <p className="text-xs text-slate-500 font-medium mt-1">Identifique cadastros de clientes que possuam o mesmo número de telefone.</p>
+            </div>
+            <button onClick={handleScanDuplicates} disabled={isProcessing} className="px-6 py-3 bg-blue-600 text-white rounded-xl font-black uppercase tracking-widest text-[10px] shadow-lg flex items-center gap-2 transition-all active:scale-95">
+              {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <Search size={16} />} Iniciar Varredura Dinâmica
+            </button>
+
+            {duplicateClients.length > 0 && (
+              <div className="space-y-4 max-h-[500px] overflow-y-auto custom-scrollbar mt-6 pt-6 border-t border-blue-100">
+                {duplicateClients.map((dup, i) => (
+                  <div key={i} className="p-6 bg-white border border-slate-200 rounded-[24px] space-y-4">
+                    <div className="flex items-center gap-3 mb-2">
+                      <span className="bg-red-100 text-red-600 px-3 py-1 rounded text-[10px] font-black">{dup.count} registros</span>
+                      <h4 className="font-black text-slate-800 text-lg tracking-tight">{dup.phone}</h4>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {dup.clients.map((c: any) => (
+                        <div key={c.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 flex justify-between items-center hover:bg-slate-100 transition-colors cursor-default">
+                          <div>
+                            <p className="font-black text-[11px] uppercase text-slate-700">{c.name}</p>
+                            <p className="text-[9px] font-bold text-slate-400 mt-1">ID: {c.id.slice(0, 8)}... | Status: <span className="text-blue-600">{c.status}</span></p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="p-8 bg-amber-50/50 rounded-3xl border border-amber-100 space-y-6 mt-6">
+            <div>
+              <h4 className="font-black text-slate-800 flex items-center gap-2"><AlertTriangle size={18} className="text-amber-600" /> Corrigir Clientes Inativos</h4>
+              <p className="text-xs text-slate-500 font-medium mt-1">Suba o CSV de clientes inativos para atualizar a data da última compra e marcar como INATIVO no cadastro existente.</p>
+            </div>
+
+            <div className="flex gap-4 flex-wrap">
+              <div className="relative">
+                <input
+                  type="file"
+                  accept=".csv"
+                  id="inactiveCsvInput"
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    setIsProcessing(true);
+                    try {
+                      const text = await file.text();
+                      const lines = text.split(/\r?\n/).filter(l => l.trim() !== '');
+                      const dataLines = lines.slice(1);
+
+                      const parseLine = (line: string): string[] => {
+                        const result: string[] = [];
+                        let current = '';
+                        let inQuotes = false;
+                        for (let i = 0; i < line.length; i++) {
+                          const ch = line[i];
+                          if (ch === '"') { inQuotes = !inQuotes; }
+                          else if (ch === ',' && !inQuotes) { result.push(current.trim()); current = ''; }
+                          else { current += ch; }
+                        }
+                        result.push(current.trim());
+                        return result;
+                      };
+
+                      const entries = dataLines.map(line => {
+                        const v = parseLine(line);
+                        const dateStr = v[0];
+                        const parts = dateStr.split('/');
+                        const isoDate = parts.length === 3 ? `${parts[2]}-${parts[1]}-${parts[0]}` : dateStr;
+                        return { name: v[2] || '', phone: v[3] || '', lastPurchaseDate: isoDate };
+                      }).filter(e => e.name && e.phone);
+
+                      const result = await dataService.batchUpdateInactiveClients(entries);
+                      alert(`✅ Atualizados: ${result.updated}\n🔍 Não encontrados: ${result.notFound.length}\n\n${result.notFound.length > 0 ? 'Não encontrados:\n' + result.notFound.join('\n') : ''}`);
+                      await refreshData();
+                    } catch (err: any) {
+                      alert(`Erro: ${err.message}`);
+                    } finally {
+                      setIsProcessing(false);
+                      e.target.value = '';
+                    }
+                  }}
+                />
+                <button className="px-6 py-3 bg-amber-600 text-white rounded-xl font-black uppercase tracking-widest text-[10px] shadow-lg flex items-center gap-2 transition-all active:scale-95" disabled={isProcessing}>
+                  {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <Upload size={16} />} Subir CSV de Inativos
+                </button>
+              </div>
+
+              <button
+                onClick={async () => {
+                  if (!confirm('Deseja limpar registros com nomes inválidos (fragmentos de endereço) do banco?')) return;
+                  setIsProcessing(true);
+                  try {
+                    const cleaned = await dataService.cleanupBadClientRecords();
+                    alert(`🧹 ${cleaned} registros inválidos removidos.`);
+                    await refreshData();
+                  } catch (err: any) {
+                    alert(`Erro: ${err.message}`);
+                  } finally {
+                    setIsProcessing(false);
+                  }
+                }}
+                disabled={isProcessing}
+                className="px-6 py-3 bg-red-600 text-white rounded-xl font-black uppercase tracking-widest text-[10px] shadow-lg flex items-center gap-2 transition-all active:scale-95"
+              >
+                {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <Trash2 size={16} />} Limpar Cadastros Fantasma
+              </button>
+            </div>
           </div>
         </div>
       )}
