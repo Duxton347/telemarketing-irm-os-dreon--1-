@@ -31,6 +31,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   const [reportDuration, setReportDuration] = React.useState(0);
   const [startTime, setStartTime] = React.useState<string | null>(null);
   const [isCopied, setIsCopied] = React.useState(false);
+  const [isCopiedSecondary, setIsCopiedSecondary] = React.useState(false);
   const [hasRecentCall, setHasRecentCall] = React.useState(false);
 
   const [clientHistory, setClientHistory] = React.useState<{ calls: any[], protocols: any[] }>({ calls: [], protocols: [] });
@@ -210,9 +211,25 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     }
   };
 
+  const handleCopyPhoneSecondary = () => {
+    if (client && client.phone_secondary) {
+      navigator.clipboard.writeText(client.phone_secondary);
+      setIsCopiedSecondary(true);
+      setTimeout(() => setIsCopiedSecondary(false), 2000);
+    }
+  };
+
   const handleWhatsApp = () => {
     if (client) {
       const phone = client.phone.replace(/\D/g, '');
+      const url = `https://wa.me/55${phone}`;
+      window.open(url, '_blank');
+    }
+  };
+
+  const handleWhatsAppSecondary = () => {
+    if (client && client.phone_secondary) {
+      const phone = client.phone_secondary.replace(/\D/g, '');
       const url = `https://wa.me/55${phone}`;
       window.open(url, '_blank');
     }
@@ -530,16 +547,27 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
             )}
 
             <div className={hasRecentCall ? 'pt-6' : ''}>
-              <span className="px-3 py-1 bg-blue-600 rounded-lg text-[9px] font-black uppercase tracking-widest">{currentTask.type}</span>
+              <div className="flex items-center gap-2">
+                <span className="px-3 py-1 bg-blue-600 rounded-lg text-[9px] font-black uppercase tracking-widest">{currentTask.type}</span>
+                {client.status === 'INATIVO' && (
+                  <span className="px-3 py-1 bg-rose-600/20 text-rose-400 border border-rose-500/30 rounded-lg text-[9px] font-black uppercase tracking-widest flex items-center gap-1">
+                    <AlertTriangle size={10} /> CLIENTE INATIVO
+                  </span>
+                )}
+              </div>
               <h3 className="text-3xl font-black mt-4 tracking-tighter uppercase">{client.name}</h3>
             </div>
 
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div className="font-bold text-slate-400 flex items-center gap-2">
-                  <Phone size={18} /> {client.phone}
+                  <Phone size={18} />
+                  <div className="flex flex-col">
+                    <span className="text-[10px] uppercase text-slate-500 tracking-widest leading-none mb-1">Primário</span>
+                    <span>{client.phone}</span>
+                  </div>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 items-center">
                   <button onClick={handleCopyPhone} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-all">
                     {isCopied ? <Check size={16} className="text-green-500" /> : <Copy size={16} />}
                   </button>
@@ -548,7 +576,36 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   </button>
                 </div>
               </div>
-              <p className="font-bold text-slate-400 flex items-start gap-2"><MapPin size={18} className="shrink-0" /> {client.address || 'Sem endereço'}</p>
+
+              {client.phone_secondary && (
+                <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-800/50">
+                  <div className="font-bold text-slate-400 flex items-center gap-2">
+                    <Phone size={18} />
+                    <div className="flex flex-col">
+                      <span className="text-[10px] uppercase text-slate-500 tracking-widest leading-none mb-1">Secundário</span>
+                      <span>{client.phone_secondary}</span>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 items-center">
+                    <button onClick={handleCopyPhoneSecondary} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-all">
+                      {isCopiedSecondary ? <Check size={16} className="text-green-500" /> : <Copy size={16} />}
+                    </button>
+                    <button onClick={handleWhatsAppSecondary} className="p-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white transition-all">
+                      <MessageCircle size={16} />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <p className="font-bold text-slate-400 flex items-start gap-2 mt-4"><MapPin size={18} className="shrink-0" /> {client.address || 'Sem endereço'}</p>
+              {client.last_purchase_date && (
+                <div className="mt-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+                  <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Última Compra</p>
+                  <p className="font-black text-amber-400 text-sm flex items-center gap-2">
+                    <Calendar size={16} /> {client.last_purchase_date}
+                  </p>
+                </div>
+              )}
               {(currentTask.type === 'PROSPECÇÃO' || client.status === 'LEAD') && client.buyer_name && (
                 <p className="font-bold text-emerald-400 flex items-center gap-2 text-sm mt-2"><User size={16} className="shrink-0" /> Decisor: {client.buyer_name}</p>
               )}

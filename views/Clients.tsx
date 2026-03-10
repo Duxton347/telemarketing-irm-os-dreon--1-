@@ -1,8 +1,8 @@
 
 import React from 'react';
-import { 
+import {
   Search, UserPlus, ChevronRight, Phone, History, Users, Calendar, X,
-  MapPin, Tag, Save, Copy, MessageSquare, Edit2, Loader2, Database, ClipboardList, Clock, CheckCircle2, FileText
+  MapPin, Tag, Save, Copy, MessageSquare, Edit2, Loader2, Database, ClipboardList, Clock, CheckCircle2, FileText, AlertTriangle
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { SATISFACTION_EMOJIS } from '../constants';
@@ -18,12 +18,21 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
   const [isModalOpen, setIsModalOpen] = React.useState(false);
   const [editMode, setEditMode] = React.useState(false);
   const [historyLoading, setHistoryLoading] = React.useState(false);
-  
+
+  const [neighborhoodFilter, setNeighborhoodFilter] = React.useState('');
+  const [cityFilter, setCityFilter] = React.useState('');
+
   const [clientData, setClientData] = React.useState({
     id: '',
     name: '',
     phone: '',
+    phone_secondary: '',
     address: '',
+    street: '',
+    neighborhood: '',
+    city: '',
+    state: '',
+    zip_code: '',
     items: ''
   });
 
@@ -75,13 +84,23 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
         id: clientData.id || undefined,
         name: clientData.name,
         phone: clientData.phone,
+        phone_secondary: clientData.phone_secondary,
         address: clientData.address,
+        street: clientData.street,
+        neighborhood: clientData.neighborhood,
+        city: clientData.city,
+        state: clientData.state,
+        zip_code: clientData.zip_code,
         items: clientData.items.split(',').map(i => i.trim()).filter(i => i),
       });
 
       setIsModalOpen(false);
       setEditMode(false);
-      setClientData({ id: '', name: '', phone: '', address: '', items: '' });
+      setClientData({
+        id: '', name: '', phone: '', phone_secondary: '',
+        address: '', street: '', neighborhood: '',
+        city: '', state: '', zip_code: '', items: ''
+      });
       await loadClients();
     } catch (e) { alert("Erro ao salvar cliente."); }
     finally { setIsProcessing(false); }
@@ -92,17 +111,30 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
       id: c.id,
       name: c.name,
       phone: c.phone,
-      address: c.address,
+      phone_secondary: c.phone_secondary || '',
+      address: c.address || '',
+      street: c.street || '',
+      neighborhood: c.neighborhood || '',
+      city: c.city || '',
+      state: c.state || '',
+      zip_code: c.zip_code || '',
       items: (c.items || []).join(', ')
     });
     setEditMode(true);
     setIsModalOpen(true);
   };
 
-  const filtered = (clients || []).filter(c => 
-    (c.name || '').toLowerCase().includes(search.toLowerCase()) || 
-    (c.phone || '').includes(search)
-  );
+  const neighborhoods = Array.from(new Set(clients.map(c => c.neighborhood).filter(Boolean))) as string[];
+  const cities = Array.from(new Set(clients.map(c => c.city).filter(Boolean))) as string[];
+
+  const filtered = (clients || []).filter(c => {
+    const matchSearch = (c.name || '').toLowerCase().includes(search.toLowerCase()) ||
+      (c.phone || '').includes(search) ||
+      (c.phone_secondary || '').includes(search);
+    const matchNeighborhood = neighborhoodFilter ? c.neighborhood === neighborhoodFilter : true;
+    const matchCity = cityFilter ? c.city === cityFilter : true;
+    return matchSearch && matchNeighborhood && matchCity;
+  });
 
   const isAdmin = user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR;
 
@@ -113,150 +145,213 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
           <h2 className="text-3xl font-black text-slate-800 tracking-tighter uppercase">Base de Clientes 360º</h2>
           <p className="text-slate-500 text-sm font-bold mt-1">Gestão centralizada com histórico de atendimentos e protocolos.</p>
         </div>
-        <button onClick={() => { setEditMode(false); setClientData({id:'', name:'', phone:'', address:'', items:''}); setIsModalOpen(true); }} className="flex items-center gap-2 bg-blue-600 text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-xl hover:bg-blue-700 transition-all">
+        <button onClick={() => {
+          setEditMode(false);
+          setClientData({
+            id: '', name: '', phone: '', phone_secondary: '',
+            address: '', street: '', neighborhood: '',
+            city: '', state: '', zip_code: '', items: ''
+          });
+          setIsModalOpen(true);
+        }} className="flex items-center gap-2 bg-blue-600 text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-xl hover:bg-blue-700 transition-all">
           <UserPlus size={18} /> Novo Cliente
         </button>
       </header>
 
-      <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex items-center gap-4">
-         <Search className="text-slate-400 shrink-0" size={20} />
-         <input 
-          type="text" 
-          placeholder="Pesquisar por nome ou telefone..." 
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          className="flex-1 bg-transparent border-none outline-none font-bold text-slate-700 placeholder:text-slate-300"
-         />
+      <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex flex-col md:flex-row items-center gap-4">
+        <div className="flex items-center gap-2 flex-1 w-full">
+          <Search className="text-slate-400 shrink-0" size={20} />
+          <input
+            type="text"
+            placeholder="Pesquisar por nome ou telefone..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="w-full bg-transparent border-none outline-none font-bold text-slate-700 placeholder:text-slate-300"
+          />
+        </div>
+        <div className="flex items-center gap-4 w-full md:w-auto">
+          <select
+            value={neighborhoodFilter}
+            onChange={e => setNeighborhoodFilter(e.target.value)}
+            className="px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 outline-none"
+          >
+            <option value="">Todos os Bairros</option>
+            {neighborhoods.sort().map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+          <select
+            value={cityFilter}
+            onChange={e => setCityFilter(e.target.value)}
+            className="px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 outline-none"
+          >
+            <option value="">Todas as Cidades</option>
+            {cities.sort().map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 h-[75vh]">
         {/* LISTA DE CLIENTES */}
         <div className="lg:col-span-4 space-y-4 h-full flex flex-col">
-           {isLoading ? (
-             <div className="flex-1 flex flex-col items-center justify-center gap-4 text-slate-300">
-                <Loader2 className="animate-spin" size={32} />
-                <p className="text-[10px] font-black uppercase tracking-widest">Sincronizando Base...</p>
-             </div>
-           ) : filtered.length === 0 ? (
-             <div className="flex-1 flex items-center justify-center text-slate-300 font-black uppercase tracking-widest text-[10px]">Nenhum cliente encontrado</div>
-           ) : (
-             <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-2">
-                {filtered.map(c => (
-                  <button 
-                    key={c.id} 
-                    onClick={() => setSelectedClient(c)}
-                    className={`w-full p-6 bg-white border-2 rounded-[32px] flex items-center justify-between group transition-all ${selectedClient?.id === c.id ? 'border-blue-600 shadow-xl shadow-blue-500/10' : 'border-slate-50 hover:border-slate-200 shadow-sm'}`}
-                  >
-                     <div className="text-left">
-                        <h4 className="font-black text-slate-800 uppercase text-sm tracking-tight">{c.name}</h4>
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{c.phone}</span>
-                     </div>
-                     <ChevronRight size={18} className={`transition-transform ${selectedClient?.id === c.id ? 'text-blue-600 translate-x-1' : 'text-slate-200'}`} />
-                  </button>
-                ))}
-             </div>
-           )}
+          {isLoading ? (
+            <div className="flex-1 flex flex-col items-center justify-center gap-4 text-slate-300">
+              <Loader2 className="animate-spin" size={32} />
+              <p className="text-[10px] font-black uppercase tracking-widest">Sincronizando Base...</p>
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="flex-1 flex items-center justify-center text-slate-300 font-black uppercase tracking-widest text-[10px]">Nenhum cliente encontrado</div>
+          ) : (
+            <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3 pr-2">
+              {filtered.map(c => (
+                <button
+                  key={c.id}
+                  onClick={() => setSelectedClient(c)}
+                  className={`w-full p-6 bg-white border-2 rounded-[32px] flex items-center justify-between group transition-all ${selectedClient?.id === c.id ? 'border-blue-600 shadow-xl shadow-blue-500/10' : 'border-slate-50 hover:border-slate-200 shadow-sm'}`}
+                >
+                  <div className="text-left flex flex-col gap-1 items-start">
+                    <div className="flex items-center gap-2">
+                      <h4 className="font-black text-slate-800 uppercase text-sm tracking-tight">{c.name}</h4>
+                      {c.status === 'INATIVO' && (
+                        <span className="px-2 py-0.5 bg-rose-600/20 text-rose-500 border border-rose-500/30 rounded-lg text-[8px] font-black uppercase tracking-widest shrink-0">
+                          INATIVO
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{c.phone}</span>
+                  </div>
+                  <ChevronRight size={18} className={`transition-transform ${selectedClient?.id === c.id ? 'text-blue-600 translate-x-1' : 'text-slate-200'} shrink-0`} />
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* DETALHES E HISTÓRICO */}
         <div className="lg:col-span-8 h-full">
-           {selectedClient ? (
-             <div className="bg-white h-full rounded-[56px] shadow-sm border border-slate-100 flex flex-col overflow-hidden animate-in slide-in-from-right-4 duration-300">
-                <div className="p-8 md:p-10 border-b border-slate-100 flex justify-between items-start bg-slate-50/50 shrink-0">
-                   <div className="space-y-4">
-                      <div className="flex items-center gap-3">
-                         <span className="px-3 py-1 bg-blue-600 text-white rounded-lg text-[8px] font-black uppercase tracking-widest">CLIENTE DREON</span>
-                         <span className="text-slate-400 text-[9px] font-black tracking-widest uppercase">#{selectedClient.id.substring(0,8)}</span>
-                      </div>
-                      <h3 className="text-4xl font-black text-slate-900 tracking-tighter leading-tight uppercase">{selectedClient.name}</h3>
-                      <div className="flex flex-wrap items-center gap-6">
-                         <span className="flex items-center gap-2 text-sm font-black text-blue-600"><Phone size={16} /> {selectedClient.phone}</span>
-                         <span className="flex items-start gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest max-w-xs"><MapPin size={16} className="shrink-0 text-red-500" /> {selectedClient.address || 'Sem endereço cadastrado'}</span>
-                      </div>
-                   </div>
-                   <div className="flex flex-col items-center gap-2">
-                      <div className="text-6xl drop-shadow-md">{SATISFACTION_EMOJIS[selectedClient.satisfaction] || '😐'}</div>
-                      {isAdmin && (
-                        <button onClick={() => startEdit(selectedClient)} className="mt-4 px-6 py-2 bg-slate-900 text-white rounded-xl text-[9px] font-black uppercase tracking-widest shadow-lg hover:bg-slate-800 transition-all flex items-center gap-2">
-                          <Edit2 size={12} /> Editar
-                        </button>
-                      )}
-                   </div>
-                </div>
-                
-                <div className="flex-1 overflow-y-auto p-10 space-y-12 custom-scrollbar">
-                   {/* EQUIPAMENTOS */}
-                   <section className="space-y-4">
-                      <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2"><Tag size={14} className="text-indigo-500" /> Itens Instalados / Contratados</h5>
-                      <div className="flex flex-wrap gap-2">
-                         {selectedClient.items && selectedClient.items.length > 0 ? selectedClient.items.map((item, i) => (
-                           <span key={i} className="px-4 py-2 bg-blue-50 text-blue-700 rounded-xl text-[10px] font-black uppercase border border-blue-100">{item}</span>
-                         )) : (
-                           <span className="text-xs font-bold text-slate-300 italic">Nenhum equipamento vinculado</span>
-                         )}
-                      </div>
-                   </section>
+          {selectedClient ? (
+            <div className="bg-white h-full rounded-[56px] shadow-sm border border-slate-100 flex flex-col overflow-hidden animate-in slide-in-from-right-4 duration-300">
+              <div className="p-8 md:p-10 border-b border-slate-100 flex justify-between items-start bg-slate-50/50 shrink-0">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <span className="px-3 py-1 bg-blue-600 text-white rounded-lg text-[8px] font-black uppercase tracking-widest">CLIENTE DREON</span>
+                    <span className="text-slate-400 text-[9px] font-black tracking-widest uppercase">#{selectedClient.id.substring(0, 8)}</span>
+                    {selectedClient.status === 'INATIVO' && (
+                      <span className="px-3 py-1 bg-rose-600/20 text-rose-500 border border-rose-500/30 rounded-lg text-[8px] font-black uppercase tracking-widest flex items-center gap-1">
+                        <AlertTriangle size={10} /> INATIVO
+                      </span>
+                    )}
+                  </div>
+                  <h3 className="text-4xl font-black text-slate-900 tracking-tighter leading-tight uppercase">{selectedClient.name}</h3>
+                  <div className="flex flex-col gap-2">
+                    <span className="flex items-center gap-2 text-sm font-black text-blue-600"><Phone size={16} /> Primário: {selectedClient.phone}</span>
+                    {selectedClient.phone_secondary && <span className="flex items-center gap-2 text-sm font-black text-blue-600"><Phone size={16} /> Secundário: {selectedClient.phone_secondary}</span>}
 
-                   <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-                      {/* ÚLTIMAS LIGAÇÕES */}
-                      <section className="space-y-4">
-                         <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2"><History size={14} className="text-blue-500" /> Histórico de Ligações</h5>
-                         {historyLoading ? (
-                           <div className="flex justify-center p-8"><Loader2 className="animate-spin text-blue-200" /></div>
-                         ) : clientHistory.calls.length > 0 ? (
-                           <div className="space-y-3">
-                              {clientHistory.calls.slice(0, 5).map(call => (
-                                <div key={call.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
-                                   <div className="flex justify-between items-start">
-                                      <span className="text-[8px] font-black uppercase px-2 py-0.5 bg-slate-200 text-slate-600 rounded">{call.type}</span>
-                                      <span className="text-[8px] font-black text-slate-400 uppercase">{new Date(call.startTime).toLocaleDateString()}</span>
-                                   </div>
-                                   <p className="text-xs font-bold text-slate-700 italic line-clamp-2">"{call.responses?.written_report || 'Sem resumo'}"</p>
-                                   <div className="flex justify-between items-center pt-2 border-t border-slate-200/50">
-                                      <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1"><Clock size={10} /> {Math.floor(call.duration/60)}m {call.duration%60}s</span>
-                                      <span className="text-[8px] font-black text-blue-500 uppercase tracking-widest">ID Operador: {call.operatorId.substring(0,6)}</span>
-                                   </div>
-                                </div>
-                              ))}
-                           </div>
-                         ) : (
-                           <p className="text-[10px] font-black uppercase text-slate-300 py-10 text-center tracking-widest">Nenhuma ligação registrada</p>
-                         )}
-                      </section>
+                    {selectedClient.neighborhood ? (
+                      <div className="flex items-start gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest max-w-xs mt-2">
+                        <MapPin size={16} className="shrink-0 text-red-500" />
+                        <div>
+                          <p>{selectedClient.street || ''}</p>
+                          <p>{selectedClient.neighborhood} - {selectedClient.city} / {selectedClient.state}</p>
+                          <p className="text-[10px] mt-1">CEP: {selectedClient.zip_code || 'N/A'}</p>
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="flex items-start gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest max-w-xs mt-2"><MapPin size={16} className="shrink-0 text-red-500" /> {selectedClient.address || 'Sem endereço cadastrado'}</span>
+                    )}
 
-                      {/* PROTOCOLOS DO CLIENTE */}
-                      <section className="space-y-4">
-                         <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2"><ClipboardList size={14} className="text-red-500" /> Protocolos Vinculados</h5>
-                         {historyLoading ? (
-                           <div className="flex justify-center p-8"><Loader2 className="animate-spin text-red-100" /></div>
-                         ) : clientHistory.protocols.length > 0 ? (
-                           <div className="space-y-3">
-                              {clientHistory.protocols.map(proto => (
-                                <div key={proto.id} className="p-4 bg-white border border-slate-200 rounded-2xl shadow-sm space-y-2">
-                                   <div className="flex justify-between items-center">
-                                      <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded text-white ${proto.status === ProtocolStatus.FECHADO ? 'bg-slate-500' : 'bg-red-600'}`}>
-                                        {proto.status}
-                                      </span>
-                                      <span className="text-[9px] font-black text-slate-300 uppercase">#{proto.protocolNumber || proto.id.substring(0,8)}</span>
-                                   </div>
-                                   <h6 className="text-sm font-black text-slate-800 leading-tight">{proto.title}</h6>
-                                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Aberto em: {new Date(proto.openedAt).toLocaleDateString()}</p>
-                                </div>
-                              ))}
-                           </div>
-                         ) : (
-                           <p className="text-[10px] font-black uppercase text-slate-300 py-10 text-center tracking-widest">Nenhum protocolo aberto</p>
-                         )}
-                      </section>
-                   </div>
+                    {selectedClient.last_purchase_date && (
+                      <div className="flex items-start gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest max-w-xs mt-2">
+                        <Calendar size={16} className="shrink-0 text-amber-500" />
+                        <div>
+                          <p className="text-[10px] text-slate-400 mb-1">Última Compra:</p>
+                          <p className="text-amber-500">{selectedClient.last_purchase_date}</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
-             </div>
-           ) : (
-             <div className="h-full bg-slate-50 border-4 border-dashed border-slate-100 rounded-[56px] flex flex-col items-center justify-center p-20 text-center gap-6 opacity-40">
-                <Users size={64} className="text-slate-300" />
-                <p className="text-sm font-black uppercase text-slate-400 tracking-widest">Selecione um cliente para auditar o histórico completo</p>
-             </div>
-           )}
+                <div className="flex flex-col items-center gap-2">
+                  <div className="text-6xl drop-shadow-md">{SATISFACTION_EMOJIS[selectedClient.satisfaction] || '😐'}</div>
+                  {isAdmin && (
+                    <button onClick={() => startEdit(selectedClient)} className="mt-4 px-6 py-2 bg-slate-900 text-white rounded-xl text-[9px] font-black uppercase tracking-widest shadow-lg hover:bg-slate-800 transition-all flex items-center gap-2">
+                      <Edit2 size={12} /> Editar
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-10 space-y-12 custom-scrollbar">
+                {/* EQUIPAMENTOS */}
+                <section className="space-y-4">
+                  <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2"><Tag size={14} className="text-indigo-500" /> Itens Instalados / Contratados</h5>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedClient.items && selectedClient.items.length > 0 ? selectedClient.items.map((item, i) => (
+                      <span key={i} className="px-4 py-2 bg-blue-50 text-blue-700 rounded-xl text-[10px] font-black uppercase border border-blue-100">{item}</span>
+                    )) : (
+                      <span className="text-xs font-bold text-slate-300 italic">Nenhum equipamento vinculado</span>
+                    )}
+                  </div>
+                </section>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+                  {/* ÚLTIMAS LIGAÇÕES */}
+                  <section className="space-y-4">
+                    <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2"><History size={14} className="text-blue-500" /> Histórico de Ligações</h5>
+                    {historyLoading ? (
+                      <div className="flex justify-center p-8"><Loader2 className="animate-spin text-blue-200" /></div>
+                    ) : clientHistory.calls.length > 0 ? (
+                      <div className="space-y-3">
+                        {clientHistory.calls.slice(0, 5).map(call => (
+                          <div key={call.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
+                            <div className="flex justify-between items-start">
+                              <span className="text-[8px] font-black uppercase px-2 py-0.5 bg-slate-200 text-slate-600 rounded">{call.type}</span>
+                              <span className="text-[8px] font-black text-slate-400 uppercase">{new Date(call.startTime).toLocaleDateString()}</span>
+                            </div>
+                            <p className="text-xs font-bold text-slate-700 italic line-clamp-2">"{call.responses?.written_report || 'Sem resumo'}"</p>
+                            <div className="flex justify-between items-center pt-2 border-t border-slate-200/50">
+                              <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1"><Clock size={10} /> {Math.floor(call.duration / 60)}m {call.duration % 60}s</span>
+                              <span className="text-[8px] font-black text-blue-500 uppercase tracking-widest">ID Operador: {call.operatorId.substring(0, 6)}</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[10px] font-black uppercase text-slate-300 py-10 text-center tracking-widest">Nenhuma ligação registrada</p>
+                    )}
+                  </section>
+
+                  {/* PROTOCOLOS DO CLIENTE */}
+                  <section className="space-y-4">
+                    <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2"><ClipboardList size={14} className="text-red-500" /> Protocolos Vinculados</h5>
+                    {historyLoading ? (
+                      <div className="flex justify-center p-8"><Loader2 className="animate-spin text-red-100" /></div>
+                    ) : clientHistory.protocols.length > 0 ? (
+                      <div className="space-y-3">
+                        {clientHistory.protocols.map(proto => (
+                          <div key={proto.id} className="p-4 bg-white border border-slate-200 rounded-2xl shadow-sm space-y-2">
+                            <div className="flex justify-between items-center">
+                              <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded text-white ${proto.status === ProtocolStatus.FECHADO ? 'bg-slate-500' : 'bg-red-600'}`}>
+                                {proto.status}
+                              </span>
+                              <span className="text-[9px] font-black text-slate-300 uppercase">#{proto.protocolNumber || proto.id.substring(0, 8)}</span>
+                            </div>
+                            <h6 className="text-sm font-black text-slate-800 leading-tight">{proto.title}</h6>
+                            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Aberto em: {new Date(proto.openedAt).toLocaleDateString()}</p>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-[10px] font-black uppercase text-slate-300 py-10 text-center tracking-widest">Nenhum protocolo aberto</p>
+                    )}
+                  </section>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="h-full bg-slate-50 border-4 border-dashed border-slate-100 rounded-[56px] flex flex-col items-center justify-center p-20 text-center gap-6 opacity-40">
+              <Users size={64} className="text-slate-300" />
+              <p className="text-sm font-black uppercase text-slate-400 tracking-widest">Selecione um cliente para auditar o histórico completo</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -270,25 +365,46 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
               </h3>
               <button onClick={() => setIsModalOpen(false)} className="hover:bg-white/10 p-2 rounded-full transition-all"><X size={24} /></button>
             </div>
-            
+
             <form onSubmit={handleSaveClient} className="p-10 space-y-6">
               <div className="space-y-1.5">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nome Completo</label>
-                <input type="text" required value={clientData.name} onChange={e => setClientData({...clientData, name: e.target.value})} className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:ring-4 focus:ring-blue-500/10 transition-all" />
+                <input type="text" required value={clientData.name} onChange={e => setClientData({ ...clientData, name: e.target.value })} className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:ring-4 focus:ring-blue-500/10 transition-all" />
               </div>
               <div className="grid grid-cols-2 gap-4">
-                 <div className="space-y-1.5">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Telefone</label>
-                    <input type="text" required value={clientData.phone} onChange={e => setClientData({...clientData, phone: e.target.value})} className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:ring-4 focus:ring-blue-500/10 transition-all" />
-                 </div>
-                 <div className="space-y-1.5">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Itens (separados por vírgula)</label>
-                    <input type="text" value={clientData.items} onChange={e => setClientData({...clientData, items: e.target.value})} className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:ring-4 focus:ring-blue-500/10 transition-all" placeholder="Ex: Bomba, Filtro" />
-                 </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Telefone Principal</label>
+                  <input type="text" required value={clientData.phone} onChange={e => setClientData({ ...clientData, phone: e.target.value })} className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:ring-4 focus:ring-blue-500/10 transition-all" />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Telefone Secundário</label>
+                  <input type="text" value={clientData.phone_secondary} onChange={e => setClientData({ ...clientData, phone_secondary: e.target.value })} className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:ring-4 focus:ring-blue-500/10 transition-all" />
+                </div>
               </div>
+
               <div className="space-y-1.5">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Endereço de Atendimento</label>
-                <textarea value={clientData.address} onChange={e => setClientData({...clientData, address: e.target.value})} className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold h-24 resize-none outline-none focus:ring-4 focus:ring-blue-500/10 transition-all" />
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Equipamentos (separados por vírgula)</label>
+                <input type="text" value={clientData.items} onChange={e => setClientData({ ...clientData, items: e.target.value })} className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:ring-4 focus:ring-blue-500/10 transition-all" placeholder="Ex: Bomba, Filtro" />
+              </div>
+
+              <div className="bg-slate-50 p-6 rounded-[32px] border border-slate-100 space-y-4">
+                <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-200 pb-2">Endereço Estruturado</h4>
+                <div className="space-y-3">
+                  <input type="text" placeholder="Rua e Número" value={clientData.street} onChange={e => setClientData({ ...clientData, street: e.target.value })} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl font-bold text-xs outline-none focus:border-blue-500" />
+                  <div className="grid grid-cols-2 gap-3">
+                    <input type="text" placeholder="Bairro" value={clientData.neighborhood} onChange={e => setClientData({ ...clientData, neighborhood: e.target.value })} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl font-bold text-xs outline-none focus:border-blue-500" />
+                    <input type="text" placeholder="Cidade" value={clientData.city} onChange={e => setClientData({ ...clientData, city: e.target.value })} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl font-bold text-xs outline-none focus:border-blue-500" />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <input type="text" placeholder="Estado (UF)" maxLength={2} value={clientData.state} onChange={e => setClientData({ ...clientData, state: e.target.value.toUpperCase() })} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl font-bold text-xs outline-none focus:border-blue-500" />
+                    <input type="text" placeholder="CEP" value={clientData.zip_code} onChange={e => setClientData({ ...clientData, zip_code: e.target.value })} className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl font-bold text-xs outline-none focus:border-blue-500" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-1.5 opacity-50">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Observações / Endereço Completo</label>
+                <textarea value={clientData.address} onChange={e => setClientData({ ...clientData, address: e.target.value })} className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold h-20 resize-none outline-none focus:ring-4 focus:ring-blue-500/10 transition-all" />
               </div>
               <button type="submit" disabled={isProcessing} className="w-full py-6 bg-blue-600 text-white rounded-[32px] font-black uppercase tracking-widest text-[10px] shadow-2xl flex items-center justify-center gap-2 hover:bg-blue-700 transition-all active:scale-95 disabled:opacity-50">
                 {isProcessing ? <Loader2 className="animate-spin" /> : <Save size={18} />} {editMode ? 'Salvar Alterações' : 'Cadastrar Cliente'}

@@ -21,6 +21,7 @@ const mapCallTypeToDb = (type: string): string => {
   if (clean.includes('TENTATIVA')) return 'tentativa';
   if (clean.includes('VENDA')) return 'prospect';
   if (clean.includes('PROTOCOLO')) return 'suporte';
+  if (clean.includes('REATIVACAO')) return 'pos-venda';
   return 'prospect';
 };
 
@@ -77,6 +78,7 @@ export const dataService = {
       'PÓS_VENDA': 'POS_VENDA',
       'PROSPECÇÃO': 'PROSPECCAO',
       'CONFIRMAÇÃO PROTOCOLO': 'CONFIRMACAO_PROTOCOLO',
+      'REATIVAÇÃO': 'REATIVACAO',
       'WHATSAPP': 'WHATSAPP'
     };
     const dbCallType = CALL_TYPE_DB_MAP[schedule.callType || ''] || schedule.callType || 'VENDA';
@@ -98,7 +100,8 @@ export const dataService = {
   bulkCreateScheduleRequest: async (schedules: Partial<CallSchedule>[]): Promise<void> => {
     const CALL_TYPE_DB_MAP: Record<string, string> = {
       'VENDA': 'VENDA', 'PÓS-VENDA': 'POS_VENDA', 'PÓS_VENDA': 'POS_VENDA',
-      'PROSPECÇÃO': 'PROSPECCAO', 'CONFIRMAÇÃO PROTOCOLO': 'CONFIRMACAO_PROTOCOLO', 'WHATSAPP': 'WHATSAPP'
+      'PROSPECÇÃO': 'PROSPECCAO', 'CONFIRMAÇÃO PROTOCOLO': 'CONFIRMACAO_PROTOCOLO',
+      'REATIVAÇÃO': 'REATIVACAO', 'WHATSAPP': 'WHATSAPP'
     };
     const { error } = await supabase.from('call_schedules').insert(
       schedules.map(s => ({
@@ -219,12 +222,12 @@ export const dataService = {
     });
     if (error) throw error;
 
-    // AUTO-CONVERT LEAD TO CLIENT
+    // AUTO-CONVERT LEAD OR INATIVO TO CLIENT
     if (sale.clientId) {
       await supabase.from('clients')
         .update({ status: 'CLIENT', funnel_status: 'QUALIFIED' })
         .eq('id', sale.clientId)
-        .eq('status', 'LEAD');
+        .in('status', ['LEAD', 'INATIVO']);
     }
   },
 
@@ -257,6 +260,12 @@ export const dataService = {
     if (count === 0) {
       throw new Error("Nenhuma venda foi excluída. Verifique se o ID está correto ou se você tem permissão (RLS).");
     }
+  },
+
+  createVisit: async (visitData: any): Promise<void> => {
+    // Stub for creating visit from Prospects view
+    const { error } = await supabase.from('visits').insert(visitData);
+    if (error) throw error;
   },
 
   updateSale: async (saleId: string, updates: Partial<Sale>): Promise<void> => {
@@ -751,7 +760,16 @@ export const dataService = {
       buyer_name: c.buyer_name,
       interest_product: c.interest_product,
       preferred_channel: c.preferred_channel,
-      funnel_status: c.funnel_status
+      funnel_status: c.funnel_status,
+      // Address & Multi-Phone
+      external_id: c.external_id,
+      phone_secondary: c.phone_secondary,
+      street: c.street,
+      neighborhood: c.neighborhood,
+      city: c.city,
+      state: c.state,
+      zip_code: c.zip_code,
+      last_purchase_date: c.last_purchase_date
     }));
   },
 
@@ -838,7 +856,14 @@ export const dataService = {
       buyer_name: c.buyer_name,
       interest_product: c.interest_product,
       preferred_channel: c.preferred_channel,
-      funnel_status: c.funnel_status
+      funnel_status: c.funnel_status,
+      external_id: c.external_id,
+      phone_secondary: c.phone_secondary,
+      street: c.street,
+      neighborhood: c.neighborhood,
+      city: c.city,
+      state: c.state,
+      zip_code: c.zip_code
     }));
   },
 
@@ -861,35 +886,69 @@ export const dataService = {
     const phone = normalizePhone(client.phone || '');
     if (!phone) throw new Error("Telefone obrigatório");
 
-    // 1. Check for existing client by normalized phone
-    const { data: existing } = await supabase.from('clients').select('*').eq('phone', phone).maybeSingle();
+    let existing: any = null;
 
+    // --- 3-step deduplication ---
+    // Step 1: Match by external_id (if provided and already exists in the system)
+    if (client.external_id) {
+      const { data } = await supabase.from('clients').select('*').eq('external_id', client.external_id).maybeSingle();
+      if (data) existing = data;
+    }
+
+    // Step 2: Match by phone (normalized)
+    if (!existing) {
+      const { data } = await supabase.from('clients').select('*').eq('phone', phone).maybeSingle();
+      if (data) existing = data;
+    }
+
+    // Step 3: Match by name + street (fuzzy — ilike for name)
+    if (!existing && client.name && client.street) {
+      const { data } = await supabase.from('clients')
+        .select('*')
+        .ilike('name', client.name)
+        .ilike('street', client.street)
+        .maybeSingle();
+      if (data) existing = data;
+    }
+
+    // Build payload: existing data takes priority, only fill empty fields
     const payload: any = {
-      name: client.name || existing?.name || 'Sem Nome',
-      phone,
-      address: client.address || existing?.address || '',
+      name: existing?.name || client.name || 'Sem Nome',
+      phone: existing?.phone || phone,
+      address: existing?.address || client.address || '',
       items: Array.from(new Set([...(existing?.items || []), ...(client.items || [])])),
       offers: Array.from(new Set([...(existing?.offers || []), ...(client.offers || [])])),
       last_interaction: existing?.last_interaction || new Date().toISOString(),
-      origin: client.origin || existing?.origin || 'MANUAL',
-      email: client.email || existing?.email,
-      website: client.website || existing?.website,
-      // Never downgrade CLIENT to LEAD
-      status: existing?.status === 'CLIENT' ? 'CLIENT' : (client.status || existing?.status || 'CLIENT'),
-      responsible_phone: client.responsible_phone || existing?.responsible_phone,
-      buyer_name: client.buyer_name || existing?.buyer_name,
-      interest_product: client.interest_product || existing?.interest_product,
-      preferred_channel: client.preferred_channel || existing?.preferred_channel,
-      funnel_status: client.funnel_status || existing?.funnel_status || 'NEW'
+      origin: existing?.origin || client.origin || 'MANUAL',
+      email: existing?.email || client.email,
+      website: existing?.website || client.website,
+      // Ensure INATIVO is respected from payload if passed, otherwise existing status is preserved.
+      // If sale happens, saveSale will convert to CLIENT. Never downgrade CLIENT to LEAD.
+      status: client.status === 'INATIVO' ? 'INATIVO' :
+        (existing?.status === 'CLIENT' ? 'CLIENT' : (existing?.status || client.status || 'CLIENT')),
+      responsible_phone: existing?.responsible_phone || client.responsible_phone,
+      buyer_name: existing?.buyer_name || client.buyer_name,
+      interest_product: existing?.interest_product || client.interest_product,
+      preferred_channel: existing?.preferred_channel || client.preferred_channel,
+      funnel_status: existing?.funnel_status || client.funnel_status || 'NEW',
+      // Address & Phone fields — fill only if empty
+      external_id: existing?.external_id || client.external_id,
+      phone_secondary: existing?.phone_secondary || client.phone_secondary,
+      street: existing?.street || client.street,
+      neighborhood: existing?.neighborhood || client.neighborhood,
+      city: existing?.city || client.city,
+      state: existing?.state || client.state,
+      zip_code: existing?.zip_code || client.zip_code,
+      last_purchase_date: existing?.last_purchase_date || client.last_purchase_date
     };
 
     if (existing) {
-      // 2a. UPDATE existing record — never duplicate
+      // UPDATE existing record — never duplicate
       const { data, error } = await supabase.from('clients').update(payload).eq('id', existing.id).select().single();
       if (error) throw error;
       return data;
     } else {
-      // 2b. INSERT new record
+      // INSERT new record
       const { data, error } = await supabase.from('clients').insert(payload).select().single();
       if (error) throw error;
       return data;
@@ -918,7 +977,21 @@ export const dataService = {
 
     const mergedItems = Array.from(new Set([...(keeper.items || []), ...(duplicate.items || [])]));
     const mergedOffers = Array.from(new Set([...(keeper.offers || []), ...(duplicate.offers || [])]));
-    await supabase.from('clients').update({ items: mergedItems, offers: mergedOffers }).eq('id', keeperId);
+
+    const updatePayload: any = {
+      items: mergedItems,
+      offers: mergedOffers,
+      // Merge address/phone fields only if keeper is missing them
+      external_id: keeper.external_id || duplicate.external_id,
+      phone_secondary: keeper.phone_secondary || duplicate.phone_secondary,
+      street: keeper.street || duplicate.street,
+      neighborhood: keeper.neighborhood || duplicate.neighborhood,
+      city: keeper.city || duplicate.city,
+      state: keeper.state || duplicate.state,
+      zip_code: keeper.zip_code || duplicate.zip_code
+    };
+
+    await supabase.from('clients').update(updatePayload).eq('id', keeperId);
 
     // 2. Migrate calls
     const { data: calls } = await supabase.from('calls').select('id').eq('client_id', duplicateId);

@@ -48,9 +48,11 @@ const Prospects: React.FC = () => {
     const [operators, setOperators] = useState<User[]>([]);
     const [loading, setLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
-    const [selectedStage, setSelectedStage] = useState<string>('ALL');
-    const [selectedOrigin, setSelectedOrigin] = useState<string>('ALL');
-    const [selectedInterest, setSelectedInterest] = useState<string>('ALL');
+    const [selectedStage, setSelectedStage] = useState('ALL');
+    const [selectedOrigin, setSelectedOrigin] = useState('ALL');
+    const [selectedInterest, setSelectedInterest] = useState('ALL');
+    const [neighborhoodFilter, setNeighborhoodFilter] = useState('ALL');
+    const [cityFilter, setCityFilter] = useState('ALL');
 
     const [selectedClient, setSelectedClient] = useState<Client | null>(null);
 
@@ -184,12 +186,19 @@ const Prospects: React.FC = () => {
         if (selectedStage !== 'ALL' && (p.funnel_status || 'NEW') !== selectedStage) return false;
         if (selectedOrigin !== 'ALL' && (p.origin || 'MANUAL') !== selectedOrigin) return false;
         if (selectedInterest !== 'ALL' && (p.interest_product || '') !== selectedInterest) return false;
+        if (neighborhoodFilter !== 'ALL' && p.neighborhood !== neighborhoodFilter) return false;
+        if (cityFilter !== 'ALL' && p.city !== cityFilter) return false;
         if (searchTerm) {
             const lower = searchTerm.toLowerCase();
-            return p.name.toLowerCase().includes(lower) || p.phone.includes(lower);
+            return p.name.toLowerCase().includes(lower) ||
+                p.phone.includes(lower) ||
+                (p.phone_secondary || '').includes(lower);
         }
         return true;
     });
+
+    const neighborhoods = Array.from(new Set(prospects.map(p => p.neighborhood).filter(Boolean))).sort() as string[];
+    const cities = Array.from(new Set(prospects.map(p => p.city).filter(Boolean))).sort() as string[];
 
     const totalLeads = prospects.length;
     const novosLeads = prospects.filter(p => ['NEW', 'CONTACT_ATTEMPT'].includes(p.funnel_status || 'NEW')).length;
@@ -256,6 +265,24 @@ const Prospects: React.FC = () => {
                     >
                         <option value="ALL">Todos Interesses</option>
                         {INTEREST_PRODUCTS.map(p => <option key={p} value={p}>{p}</option>)}
+                    </select>
+
+                    <select
+                        className="bg-slate-50 border border-slate-200 text-xs font-black uppercase tracking-widest text-slate-600 rounded-xl py-3 px-4 outline-none cursor-pointer hover:bg-slate-100"
+                        value={neighborhoodFilter}
+                        onChange={e => setNeighborhoodFilter(e.target.value)}
+                    >
+                        <option value="ALL">Todos Bairros</option>
+                        {neighborhoods.map(n => <option key={n} value={n}>{n}</option>)}
+                    </select>
+
+                    <select
+                        className="bg-slate-50 border border-slate-200 text-xs font-black uppercase tracking-widest text-slate-600 rounded-xl py-3 px-4 outline-none cursor-pointer hover:bg-slate-100"
+                        value={cityFilter}
+                        onChange={e => setCityFilter(e.target.value)}
+                    >
+                        <option value="ALL">Todas Cidades</option>
+                        {cities.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                 </div>
             </div>
@@ -393,7 +420,15 @@ const Prospects: React.FC = () => {
                                         )}
                                         <div className="space-y-1 md:col-span-2">
                                             <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Endereço Principal</span>
-                                            <p className="text-sm font-bold text-slate-700 bg-slate-50 p-4 rounded-2xl border border-slate-100">{selectedClient.address || 'Sem endereço registrado na captação.'}</p>
+                                            {selectedClient.neighborhood ? (
+                                                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 flex flex-col gap-1">
+                                                    <p className="text-sm font-bold text-slate-700">{selectedClient.street || '-'}</p>
+                                                    <p className="text-xs font-bold text-slate-500 uppercase">{selectedClient.neighborhood} - {selectedClient.city} / {selectedClient.state}</p>
+                                                    <p className="text-[10px] text-slate-400">CEP: {selectedClient.zip_code || '-'}</p>
+                                                </div>
+                                            ) : (
+                                                <p className="text-sm font-bold text-slate-700 bg-slate-50 p-4 rounded-2xl border border-slate-100">{selectedClient.address || 'Sem endereço registrado na captação.'}</p>
+                                            )}
                                         </div>
                                     </div>
                                 </section>
@@ -495,11 +530,30 @@ const Prospects: React.FC = () => {
                         <form onSubmit={handleSaveProspect} className="space-y-4">
                             <input type="text" placeholder="Nome da Empresa/Cliente" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all" value={newProspect.name || ''} onChange={e => setNewProspect({ ...newProspect, name: e.target.value })} required />
                             <div className="grid grid-cols-2 gap-4">
-                                <input type="text" placeholder="Telefone" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all" value={newProspect.phone || ''} onChange={e => setNewProspect({ ...newProspect, phone: e.target.value })} required />
-                                <input type="text" placeholder="Comprador" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all" value={newProspect.buyer_name || ''} onChange={e => setNewProspect({ ...newProspect, buyer_name: e.target.value })} />
+                                <input type="text" placeholder="Telefone Principal" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all" value={newProspect.phone || ''} onChange={e => setNewProspect({ ...newProspect, phone: e.target.value })} required />
+                                <input type="text" placeholder="Telefone Secundário" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all" value={newProspect.phone_secondary || ''} onChange={e => setNewProspect({ ...newProspect, phone_secondary: e.target.value })} />
                             </div>
-                            <input type="text" placeholder="Produto de Interesse" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all" value={newProspect.interest_product || ''} onChange={e => setNewProspect({ ...newProspect, interest_product: e.target.value })} />
-                            <textarea placeholder="Endereço (opcional)" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all resize-none min-h-[100px]" value={newProspect.address || ''} onChange={e => setNewProspect({ ...newProspect, address: e.target.value })} />
+                            <div className="grid grid-cols-2 gap-4">
+                                <input type="text" placeholder="Comprador" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all" value={newProspect.buyer_name || ''} onChange={e => setNewProspect({ ...newProspect, buyer_name: e.target.value })} />
+                                <input type="text" placeholder="Produto de Interesse" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all" value={newProspect.interest_product || ''} onChange={e => setNewProspect({ ...newProspect, interest_product: e.target.value })} />
+                            </div>
+
+                            <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 space-y-4">
+                                <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-200 pb-2">Endereço Estruturado</h4>
+                                <div className="space-y-3">
+                                    <input type="text" placeholder="Rua e Número" value={newProspect.street || ''} onChange={e => setNewProspect({ ...newProspect, street: e.target.value })} className="w-full p-3 bg-white border border-slate-200 rounded-xl font-bold text-xs outline-none focus:border-blue-500" />
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <input type="text" placeholder="Bairro" value={newProspect.neighborhood || ''} onChange={e => setNewProspect({ ...newProspect, neighborhood: e.target.value })} className="w-full p-3 bg-white border border-slate-200 rounded-xl font-bold text-xs outline-none focus:border-blue-500" />
+                                        <input type="text" placeholder="Cidade" value={newProspect.city || ''} onChange={e => setNewProspect({ ...newProspect, city: e.target.value })} className="w-full p-3 bg-white border border-slate-200 rounded-xl font-bold text-xs outline-none focus:border-blue-500" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <input type="text" placeholder="Estado (UF)" maxLength={2} value={newProspect.state || ''} onChange={e => setNewProspect({ ...newProspect, state: e.target.value.toUpperCase() })} className="w-full p-3 bg-white border border-slate-200 rounded-xl font-bold text-xs outline-none focus:border-blue-500" />
+                                        <input type="text" placeholder="CEP" value={newProspect.zip_code || ''} onChange={e => setNewProspect({ ...newProspect, zip_code: e.target.value })} className="w-full p-3 bg-white border border-slate-200 rounded-xl font-bold text-xs outline-none focus:border-blue-500" />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <textarea placeholder="Observações Gerais (opcional)" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all resize-none min-h-[80px] opacity-60" value={newProspect.address || ''} onChange={e => setNewProspect({ ...newProspect, address: e.target.value })} />
 
                             <div className="flex justify-end pt-4">
                                 <button type="submit" className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all border-b-4 border-blue-800 active:border-b-0 active:translate-y-1">Salvar Lead e Inserir no CRM</button>

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Upload, Plus, ClipboardPaste, Save, Phone, User as UserIcon, AlertCircle, CheckCircle2, UserCheck } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { User, UserRole, CallType } from '../types';
+import { parseAddress } from '../utils/addressParser';
 
 interface Props {
     user: any;
@@ -30,7 +31,7 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
     useEffect(() => {
         const fetchOps = async () => {
             try {
-                const ops = await dataService.listUsers();
+                const ops = await dataService.getUsers();
                 setOperators(ops.filter(o => o.role !== UserRole.ADMIN));
             } catch (e) {
                 console.error(e);
@@ -77,10 +78,10 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
         setMessage(null);
         try {
             const isPosVenda = selectedCallType === CallType.POS_VENDA;
-            const prospect = { 
-                name: manualName, 
-                phone: normalizePhone(manualPhone), 
-                status: 'LEAD' as any, 
+            const prospect = {
+                name: manualName,
+                phone: normalizePhone(manualPhone),
+                status: 'LEAD' as any,
                 origin: 'MANUAL' as const
             };
             const created = await dataService.upsertClient(prospect);
@@ -104,10 +105,10 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
         const result: string[] = [];
         let insideQuotes = false;
         let currentValue = '';
-        
+
         for (let i = 0; i < text.length; i++) {
             const char = text[i];
-            
+
             if (char === '"' || char === "'") {
                 insideQuotes = !insideQuotes;
             } else if ((char === ',' || char === ';' || char === '\t') && !insideQuotes) {
@@ -136,22 +137,37 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
                     return null;
                 }
 
+                const isPosVenda = selectedCallType === CallType.POS_VENDA;
+                const isReativacao = selectedCallType === CallType.REATIVACAO;
+
                 const parts = parseCSVLine(line);
                 let name = 'Sem Nome';
                 let phone = '';
                 let extra = ''; // Equipamento or Oferta
                 let address = '';
+                let lastPurchaseDate: string | undefined = undefined;
 
-                // Expected format based on user's CSV: Name, Phone, Equipment/Offer, Address
-                if (parts.length >= 4) {
+                if (isReativacao && parts.length >= 4) {
+                    // Esperado: Data Última Compra, Endereço, Nome, Telefone
+                    lastPurchaseDate = parts[0];
+                    address = parts[1];
+                    name = parts[2];
+                    phone = parts[3];
+                } else if (!isReativacao && parts.length >= 4) {
                     name = parts[0];
                     phone = parts[1];
                     extra = parts[2];
                     address = parts[3];
-                } else if (parts.length >= 2) {
+                } else if (!isReativacao && parts.length >= 2) {
                     name = parts[0];
                     phone = parts[1];
                     extra = parts[2] || '';
+                } else if (isReativacao && parts.length >= 2) {
+                    // Fallback para reativação caso faltem colunas
+                    name = parts[2] || parts[0] || 'Sem Nome';
+                    phone = parts[3] || parts[1] || '';
+                    address = parts[1] || '';
+                    lastPurchaseDate = parts[0] || undefined;
                 } else {
                     const phoneMatch = line.match(/(?:\+?55|0)?\s?(\(?\d{2}\)?\s?\d{4,5}[-\s]?\d{4})/);
                     if (phoneMatch) {
@@ -164,15 +180,21 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
 
                 if (!name) name = 'Sem Nome';
 
-                const isPosVenda = selectedCallType === CallType.POS_VENDA;
+                const parsedAddress = parseAddress(address);
 
                 return {
                     name,
                     phone: normalizePhone(phone),
                     address,
+                    street: parsedAddress.street,
+                    neighborhood: parsedAddress.neighborhood,
+                    city: parsedAddress.city,
+                    state: parsedAddress.state,
+                    zip_code: parsedAddress.zip_code,
+                    last_purchase_date: lastPurchaseDate,
                     items: isPosVenda && extra ? [extra] : [],
-                    offers: (!isPosVenda) && extra ? [extra] : [],
-                    status: 'LEAD' as any,
+                    offers: (!isPosVenda && !isReativacao) && extra ? [extra] : [],
+                    status: isReativacao ? 'INATIVO' as any : 'LEAD' as any,
                     origin: 'CSV_IMPORT' as const
                 };
             }).filter(p => p !== null && p.phone.length >= 8);
@@ -189,10 +211,10 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
                     const created = await dataService.upsertClient(prospect);
                     createdList.push(created);
                 } catch (e) {
-                   console.error('Failed to upsert client', e);
+                    console.error('Failed to upsert client', e);
                 }
             }
-            
+
             if (createdList.length > 0) {
                 await createInitialTasks(createdList.map(c => c.id), selectedCallType, selectedChannel === 'WHATSAPP');
             }
@@ -249,6 +271,7 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
                                 <option value={CallType.POS_VENDA}>PÓS-VENDA (Equipamento)</option>
                                 <option value={CallType.PROSPECCAO}>PROSPECÇÃO (Oferta)</option>
                                 <option value={CallType.VENDA}>VENDA (Oferta)</option>
+                                <option value={CallType.REATIVACAO}>REATIVAÇÃO (Clientes Inativos)</option>
                             </select>
                         </div>
                         <div>
@@ -323,15 +346,24 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
                     <form onSubmit={handlePasteSubmit} className="space-y-6 animate-in fade-in slide-in-from-right-4">
                         <div>
                             <label className="text-xs font-black uppercase text-slate-400 tracking-widest flex items-center gap-2 mb-2">
-                                <ClipboardPaste size={14} /> Cole sua lista (Nome, Telefone, Equipamento/Oferta, Endereço)
+                                <ClipboardPaste size={14} />
+                                {selectedCallType === CallType.REATIVACAO
+                                    ? 'Cole sua lista (Data Última Compra, Endereço, Nome, Telefone)'
+                                    : 'Cole sua lista (Nome, Telefone, Equipamento/Oferta, Endereço)'}
                             </label>
                             <textarea
                                 value={pasteData} onChange={e => setPasteData(e.target.value)}
-                                placeholder={'Exemplo:\nJoão Silva, (11) 98765-4321, AQUECEDOR, "Rua das flores, 123"'} required
+                                placeholder={selectedCallType === CallType.REATIVACAO
+                                    ? 'Exemplo:\n10/05/2021, "Rua das flores, 123", João Silva, (11) 98765-4321'
+                                    : 'Exemplo:\nJoão Silva, (11) 98765-4321, AQUECEDOR, "Rua das flores, 123"'} required
                                 rows={10}
                                 className="w-full bg-slate-50 border border-slate-200 rounded-3xl px-6 py-4 font-mono text-sm text-slate-700 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all resize-y"
                             />
-                            <p className="text-xs text-slate-400 mt-2 font-medium">Você pode colar do Excel ou CSV usando colunas. Recomenda-se a ordem: Nome, Telefone, Equipamento/Oferta, Endereço.</p>
+                            <p className="text-xs text-slate-400 mt-2 font-medium">
+                                {selectedCallType === CallType.REATIVACAO
+                                    ? 'A ordem para reativação DEVE SER: Data Última Compra, Endereço, Nome, Telefone.'
+                                    : 'Você pode colar do Excel ou CSV usando colunas. Recomenda-se a ordem: Nome, Telefone, Equipamento/Oferta, Endereço.'}
+                            </p>
                         </div>
                         <button
                             type="submit" disabled={loading}

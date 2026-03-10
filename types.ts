@@ -19,6 +19,7 @@ export enum CallType {
   PROSPECCAO = 'PROSPECÇÃO',
   VENDA = 'VENDA',
   CONFIRMACAO_PROTOCOLO = 'CONFIRMAÇÃO PROTOCOLO',
+  REATIVACAO = 'REATIVAÇÃO',
   WHATSAPP = 'WHATSAPP' // Kept for internal logic/channel identification
 }
 
@@ -120,12 +121,22 @@ export interface Client {
   origin?: 'MANUAL' | 'GOOGLE_SEARCH' | 'CSV_IMPORT';
   email?: string;
   website?: string;
-  status?: 'CLIENT' | 'LEAD';
+  status?: 'CLIENT' | 'LEAD' | 'INATIVO';
   responsible_phone?: string;
   buyer_name?: string;
   interest_product?: string;
   preferred_channel?: 'PHONE' | 'WHATSAPP' | 'BOTH';
   funnel_status?: 'NEW' | 'CONTACT_ATTEMPT' | 'CONTACT_MADE' | 'QUALIFIED' | 'PROPOSAL_SENT' | 'PHYSICAL_VISIT';
+
+  // New Fields for Structured Address & Multi-Phone (Legacy Import)
+  external_id?: string;
+  phone_secondary?: string;
+  street?: string;
+  neighborhood?: string;
+  city?: string;
+  state?: string;
+  zip_code?: string;
+  last_purchase_date?: string;
 }
 
 export type ScheduleStatus = 'PENDENTE_APROVACAO' | 'APROVADO' | 'REJEITADO' | 'REPROGRAMADO' | 'CONCLUIDO' | 'CANCELADO';

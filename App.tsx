@@ -16,6 +16,7 @@ import WhatsAppDashboard from './views/WhatsAppDashboard';
 import { ScraperView } from './views/Scraper/ScraperView';
 import Prospects from './views/Prospects';
 import WorkloadUpload from './views/WorkloadUpload';
+import PDFImport from './views/PDFImport';
 // Import updated views
 import { UserRole } from './types';
 
@@ -61,6 +62,9 @@ const App: React.FC = () => {
           <Route path="/prospects" element={<Prospects />} />
           <Route path="/workload" element={
             user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR ? <WorkloadUpload user={user} /> : <Navigate to="/" />
+          } />
+          <Route path="/pdf-import" element={
+            user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR ? <PDFImport user={user} /> : <Navigate to="/" />
           } />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>

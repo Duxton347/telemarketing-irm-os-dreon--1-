@@ -43,7 +43,7 @@ export const ProcessForm: React.FC<ProcessFormProps> = ({ onClose, onSuccess, us
 
             // 2. Verify Location directly using Frontend API Call via Proxy
             const googleUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(locationInput)}&key=${GOOGLE_MAPS_KEY}`;
-            const url = import.meta.env.PROD ? `https://corsproxy.io/?${encodeURIComponent(googleUrl)}` : `/google-proxy/maps/api/geocode/json?address=${encodeURIComponent(locationInput)}&key=${GOOGLE_MAPS_KEY}`;
+            const url = `https://corsproxy.io/?${encodeURIComponent(googleUrl)}`;
             const res = await fetch(url);
             const data = await res.json();
 

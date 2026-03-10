@@ -18,7 +18,8 @@ import {
   MessageCircle,
   Globe,
   Target,
-  Upload
+  Upload,
+  FileUp
 } from 'lucide-react';
 import { UserRole } from '../types';
 
@@ -48,6 +49,7 @@ const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
     { label: 'Gestão', icon: Settings, path: '/admin', roles: [UserRole.ADMIN] },
     { label: 'Relatórios', icon: FileBarChart, path: '/reports', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
     { label: 'Carga de Trab.', icon: Upload, path: '/workload', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
+    { label: 'Importar PDF', icon: FileUp, path: '/pdf-import', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
   ];
 
   const filteredNav = navItems.filter(item => item.roles.includes(user.role));
