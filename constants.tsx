@@ -68,12 +68,17 @@ export const DEFAULT_QUESTIONS = [
   { id: 'pv6', text: 'Recomendaria a empresa', options: ['Sim', 'Talvez', 'Não'], type: CallType.POS_VENDA, order: 6, stageId: 'marca' },
   { id: 'pv7', text: 'Principal ponto de insatisfação do cliente', options: ['NEGOCIAÇÃO', 'GARANTIA', 'ATRASO NA EXECUÇÃO', 'ATRASO NA ENTREGA', 'DEFEITO NO EQUIPAMENTO', 'DEFEITO NA INSTALAÇÃO', 'VENDA INCOMPLETE', 'ATENDIMENTO'], type: CallType.POS_VENDA, order: 7 },
   { id: 'pv8', text: 'O cliente pode ser explorado para comprar algo?', options: ['NÃO, CLIENTE PERDIDO', 'QUIMICOS', 'FOTOVOLTAICO', 'LINHA BANHO', 'LINHA PISCINA', 'AQUECEDORES', 'OUTROS'], type: CallType.POS_VENDA, order: 8 },
-  
+
   // PROSPECCAO
   { id: 'pr1', text: 'Receptividade na abordagem', options: ['Boa', 'Neutra', 'Ruim'], type: CallType.PROSPECCAO, order: 1 },
   { id: 'pr2', text: 'Interesse no produto/serviço', options: ['Alto', 'Médio', 'Baixo'], type: CallType.PROSPECCAO, order: 2 },
   { id: 'pr3', text: 'Momento de compra', options: ['Agora', 'Em breve', 'Sem previsão'], type: CallType.PROSPECCAO, order: 3 },
-  
+
+  // REATIVACAO (Mesmo questionário de prospecção, sem CRM)
+  { id: 're1', text: 'Receptividade na abordagem', options: ['Boa', 'Neutra', 'Ruim'], type: CallType.REATIVACAO, order: 1 },
+  { id: 're2', text: 'Interesse no produto/serviço', options: ['Alto', 'Médio', 'Baixo'], type: CallType.REATIVACAO, order: 2 },
+  { id: 're3', text: 'Momento de compra', options: ['Agora', 'Em breve', 'Sem previsão'], type: CallType.REATIVACAO, order: 3 },
+
   // VENDA
   { id: 'v1', text: 'Interesse inicial', options: ['Alto', 'Médio', 'Baixo'], type: CallType.VENDA, order: 1 },
   { id: 'v2', text: 'Objeção principal', options: ['Preço', 'Prazo', 'Confiança', 'Não precisa', 'Outro'], type: CallType.VENDA, order: 2 },

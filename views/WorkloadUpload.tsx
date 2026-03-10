@@ -67,6 +67,7 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
             }
         } catch (e) {
             console.error('Failed to create initial tasks', e);
+            throw e;
         }
     };
 
@@ -216,11 +217,16 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
             }
 
             if (createdList.length > 0) {
-                await createInitialTasks(createdList.map(c => c.id), selectedCallType, selectedChannel === 'WHATSAPP');
+                try {
+                    await createInitialTasks(createdList.map(c => c.id), selectedCallType, selectedChannel === 'WHATSAPP');
+                    setMessage({ type: 'success', text: `${createdList.length} prospects processados e criados com sucesso na Fila!` });
+                    setPasteData('');
+                } catch (e: any) {
+                    setMessage({ type: 'error', text: `Os clientes foram salvos na base, mas houve erro ao mandar para a Carga de Trabalho: ${e.message || 'Erro de permissão/enum no banco.'}` });
+                }
+            } else {
+                setMessage({ type: 'error', text: 'Nenhum prospect válido foi criado.' });
             }
-
-            setMessage({ type: 'success', text: `${createdList.length} prospects processados e criados com sucesso!` });
-            setPasteData('');
 
         } catch (e: any) {
             setMessage({ type: 'error', text: e.message || 'Erro ao processar lista.' });
