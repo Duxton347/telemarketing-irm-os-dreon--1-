@@ -7,6 +7,7 @@ interface QuestionnaireFormProps {
     responses: Record<string, any>;
     onResponseChange: (questionId: string, value: any) => void;
     type: CallType;
+    proposito?: string | null;
     readOnly?: boolean;
 }
 
@@ -15,11 +16,25 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
     responses,
     onResponseChange,
     type,
+    proposito,
     readOnly = false
 }) => {
-    const filteredQuestions = questions.filter(q => q.type === type || q.type === 'ALL');
+    const filteredQuestions = questions.filter(q => {
+        const matchesType = q.type === type || q.type === 'ALL';
+        if (!matchesType) return false;
+        
+        // Se a pergunta tem um propósito específico, só exibe se a task atual também tiver esse mesmo propósito
+        if (q.proposito) {
+            return q.proposito === proposito;
+        }
+        
+        // Se a pergunta não tem propósito, exibe genéricamente para aquele tipo de chamada
+        return true;
+    });
 
     const renderQuestionInput = (q: Question) => {
+        const key = q.campo_resposta || q.id;
+        
         // Check for special option types
         const hasTextInput = q.options.some(o => o === '__TEXT__');
         const hasTextArea = q.options.some(o => o === '__TEXTAREA__');
@@ -32,8 +47,8 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
             return (
                 <div className="space-y-3">
                     <select
-                        value={responses[q.id] || ''}
-                        onChange={e => !readOnly && onResponseChange(q.id, e.target.value)}
+                        value={responses[key] || ''}
+                        onChange={e => !readOnly && onResponseChange(key, e.target.value)}
                         disabled={readOnly}
                         className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold text-sm text-slate-700 outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
                     >
@@ -41,11 +56,11 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
                         {choices.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                     {/* Allow custom input if "Outros" is selected */}
-                    {responses[q.id] === 'Outros' && (
+                    {responses[key] === 'Outros' && (
                         <input
                             type="text"
-                            value={responses[`${q.id}_note`] || ''}
-                            onChange={e => !readOnly && onResponseChange(`${q.id}_note`, e.target.value)}
+                            value={responses[`${key}_note`] || ''}
+                            onChange={e => !readOnly && onResponseChange(`${key}_note`, e.target.value)}
                             placeholder="Especifique..."
                             className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm text-slate-700 outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
                         />
@@ -64,8 +79,8 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
                                 <button
                                     key={opt}
                                     type="button"
-                                    onClick={() => !readOnly && onResponseChange(q.id, opt)}
-                                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${responses[q.id] === opt ? 'bg-slate-900 text-white shadow-xl' : 'bg-white text-slate-400 border border-slate-200 hover:border-slate-300'} ${readOnly ? 'cursor-default' : ''}`}
+                                    onClick={() => !readOnly && onResponseChange(key, opt)}
+                                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${responses[key] === opt ? 'bg-slate-900 text-white shadow-xl' : 'bg-white text-slate-400 border border-slate-200 hover:border-slate-300'} ${readOnly ? 'cursor-default' : ''}`}
                                 >
                                     {opt}
                                 </button>
@@ -74,13 +89,13 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
                     )}
                     <input
                         type="text"
-                        value={typeof responses[q.id] === 'string' && !regularOptions.includes(responses[q.id]) ? responses[q.id] : (responses[`${q.id}_note`] || '')}
+                        value={typeof responses[key] === 'string' && !regularOptions.includes(responses[key]) ? responses[key] : (responses[`${key}_note`] || '')}
                         onChange={e => {
                             if (!readOnly) {
                                 if (regularOptions.length > 0) {
-                                    onResponseChange(`${q.id}_note`, e.target.value);
+                                    onResponseChange(`${key}_note`, e.target.value);
                                 } else {
-                                    onResponseChange(q.id, e.target.value);
+                                    onResponseChange(key, e.target.value);
                                 }
                             }
                         }}
@@ -96,8 +111,8 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
         if (hasTextArea) {
             return (
                 <textarea
-                    value={responses[q.id] || ''}
-                    onChange={e => !readOnly && onResponseChange(q.id, e.target.value)}
+                    value={responses[key] || ''}
+                    onChange={e => !readOnly && onResponseChange(key, e.target.value)}
                     placeholder="Digite aqui..."
                     disabled={readOnly}
                     rows={3}
@@ -113,8 +128,8 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
                     <button
                         key={opt}
                         type="button"
-                        onClick={() => !readOnly && onResponseChange(q.id, opt)}
-                        className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${responses[q.id] === opt ? 'bg-slate-900 text-white shadow-xl' : 'bg-white text-slate-400 border border-slate-200 hover:border-slate-300'} ${readOnly ? 'cursor-default' : ''}`}
+                        onClick={() => !readOnly && onResponseChange(key, opt)}
+                        className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${responses[key] === opt ? 'bg-slate-900 text-white shadow-xl' : 'bg-white text-slate-400 border border-slate-200 hover:border-slate-300'} ${readOnly ? 'cursor-default' : ''}`}
                     >
                         {opt}
                     </button>
@@ -131,7 +146,7 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {filteredQuestions.map(q => (
                     <div key={q.id} className="p-6 bg-slate-50 rounded-[32px] border border-slate-100 space-y-4">
-                        <p className="font-black text-slate-800 text-sm leading-tight">{q.order}. {q.text}</p>
+                        <p className="font-black text-slate-800 text-sm leading-tight">{q.order || q.text.split('.')[0] + '.'} {q.text}</p>
                         {renderQuestionInput(q)}
                     </div>
                 ))}

@@ -4,8 +4,9 @@ import {
   UserRole, CallType, ProtocolStatus, ProtocolEvent,
   OperatorEventType, OperatorEvent, Sale, SaleStatus, Visit,
   CallSchedule, CallScheduleWithClient, ScheduleStatus, WhatsAppTask, ProductivityMetrics,
-  UnifiedReportRow, Protocol
+  UnifiedReportRow, Protocol, ClientTag, TagStatus
 } from '../types';
+import { TagDecisionEngine } from './tagDecisionEngine';
 import { SCORE_MAP, STAGE_CONFIG } from '../constants';
 
 const normalize = (str: string) =>
@@ -304,14 +305,26 @@ export const dataService = {
   // --- MÉTODOS EXISTENTES ---
   getResponseValue: (responses: any, question: Question) => {
     if (!responses) return undefined;
+    
+    // 1. Try DB mapped field (Dreon Skill v3 logic)
+    if (question.campo_resposta && responses[question.campo_resposta] !== undefined) {
+      return responses[question.campo_resposta];
+    }
+
+    // 2. Try exact UUID id
     if (responses[question.id] !== undefined) return responses[question.id];
+    
+    // 3. Try exact question text normalized
     const questionTextNorm = normalize(question.text);
     const keys = Object.keys(responses);
     for (const key of keys) {
       if (normalize(key) === questionTextNorm) return responses[key];
     }
+    
+    // 4. Try legacy PV format
     const legacyKey = `pv${question.order} `;
     if (responses[legacyKey] !== undefined) return responses[legacyKey];
+    
     return undefined;
   },
 
@@ -385,9 +398,23 @@ export const dataService = {
     };
   },
 
-  getQuestions: async (): Promise<Question[]> => {
+  getQuestions: async (callType?: CallType | 'ALL', proposito?: string): Promise<Question[]> => {
     try {
-      const { data, error } = await supabase.from('questions').select('*').order('order_index', { ascending: true });
+      let query = supabase.from('questions')
+        .select('*')
+        .eq('ativo', true)
+        .order('order_index', { ascending: true });
+        
+      if (callType) {
+        query = query.in('type', [callType, 'ALL']);
+      }
+      
+      if (proposito) {
+        // Get questions specifically for this purpose OR global/generic ones (where proposito is null)
+        query = query.or(`proposito.eq.${proposito},proposito.is.null`);
+      }
+
+      const { data, error } = await query;
       if (error) throw error;
       return (data || []).map(q => ({
         id: q.id,
@@ -395,7 +422,12 @@ export const dataService = {
         options: q.options || [],
         type: q.type as any,
         order: q.order_index,
-        stageId: q.stage_id
+        stageId: q.stage_id,
+        proposito: q.proposito,
+        campo_resposta: q.campo_resposta,
+        tipo_input: q.tipo_input,
+        obrigatoria: q.obrigatoria,
+        ativo: q.ativo
       }));
     } catch (e) { return []; }
   },
@@ -474,8 +506,23 @@ export const dataService = {
       };
     });
 
-    // 3. Merge: Prioritize Schedules
-    return [...scheduledTasks, ...legacyTasks];
+    // 3. Merge and De-duplicate: Prioritize Schedules
+    const combined = [...scheduledTasks, ...legacyTasks];
+    const uniqueTasks: Task[] = [];
+    const seenClients = new Set<string>();
+
+    for (const task of combined) {
+      if (!task.clientId) {
+        uniqueTasks.push(task);
+        continue;
+      }
+      if (!seenClients.has(task.clientId)) {
+        seenClients.add(task.clientId);
+        uniqueTasks.push(task);
+      }
+    }
+
+    return uniqueTasks;
   },
 
 
@@ -500,16 +547,37 @@ export const dataService = {
     if (updates.scheduledFor) payload.scheduled_for = updates.scheduledFor;
     if (updates.scheduleReason) payload.schedule_reason = updates.scheduleReason;
     if (updates.deadline) payload.deadline = updates.deadline;
-    const { error } = await supabase.from('tasks').update(payload).eq('id', taskId);
-    if (error) throw error;
+    
+    // Attempt update on legacy tasks
+    const { data: updatedTasks, error: tError } = await supabase.from('tasks').update(payload).eq('id', taskId).select('id');
+    const count = updatedTasks?.length || 0;
+    
+    // If not found in tasks, try call_schedules
+    if (!tError && (count === 0)) {
+       const schedulePayload: any = {};
+       if (updates.status === 'completed') schedulePayload.status = 'CONCLUIDO';
+       if (updates.status === 'skipped') schedulePayload.status = 'CANCELADO'; // or handled via skip logic
+       if (updates.skipReason) schedulePayload.skip_reason = updates.skipReason;
+       
+       if (Object.keys(schedulePayload).length > 0) {
+         await supabase.from('call_schedules').update(schedulePayload).eq('id', taskId);
+       }
+    }
 
     // Trigger funnel update
-    if (updates.status === 'skipped') {
+    if (updates.status === 'skipped' || updates.status === 'completed') {
       const { data: task } = await supabase.from('tasks').select('client_id').eq('id', taskId).single();
-      if (task?.client_id) await updateClientFunnelStatus(task.client_id, 'CONTACT_ATTEMPT');
-    } else if (updates.status === 'completed') {
-      const { data: task } = await supabase.from('tasks').select('client_id').eq('id', taskId).single();
-      if (task?.client_id) await updateClientFunnelStatus(task.client_id, 'CONTACT_MADE');
+      const clientId = task?.client_id;
+      
+      // Fallback to call_schedules if not in tasks
+      if (!clientId) {
+        const { data: sched } = await supabase.from('call_schedules').select('customer_id').eq('id', taskId).single();
+        if (sched?.customer_id) {
+          await updateClientFunnelStatus(sched.customer_id, updates.status === 'skipped' ? 'CONTACT_ATTEMPT' : 'CONTACT_MADE');
+        }
+      } else {
+        await updateClientFunnelStatus(clientId, updates.status === 'skipped' ? 'CONTACT_ATTEMPT' : 'CONTACT_MADE');
+      }
     }
   },
 
@@ -647,8 +715,7 @@ export const dataService = {
         .from('call_schedules')
         .select('id')
         .eq('assigned_operator_id', operatorId)
-        .eq('status', 'APROVADO')
-        .lte('scheduled_for', new Date().toISOString())
+        .in('status', ['APROVADO', 'PENDENTE_APROVACAO'])
         .limit(50);
         
       if (error) throw error;
@@ -772,8 +839,8 @@ export const dataService = {
     return data && data.length > 0;
   },
 
-  saveCall: async (call: CallRecord): Promise<void> => {
-    await supabase.from('call_logs').insert({
+  saveCall: async (call: CallRecord): Promise<{ id: string, suggestedTags: ClientTag[] }> => {
+    const { data: insertedCall, error } = await supabase.from('call_logs').insert({
       task_id: call.taskId,
       operator_id: call.operatorId,
       client_id: call.clientId,
@@ -783,10 +850,37 @@ export const dataService = {
       report_time: call.reportTime,
       start_time: call.startTime,
       end_time: call.endTime,
-      protocol_id: call.protocolId
-    });
+      protocol_id: call.protocolId,
+      proposito: call.proposito,
+      campanha_indicada_id: call.campanha_indicada_id,
+      campanha_id: call.campanha_id
+    }).select('id').single();
+    
+    if (error) throw error;
 
     await supabase.from('clients').update({ last_interaction: new Date().toISOString() }).eq('id', call.clientId);
+
+    // Dreon Skill v3: Tag Decision Engine Integration
+    try {
+      const callWithId = { ...call, id: insertedCall.id };
+      const decision = TagDecisionEngine.analyzeCall(callWithId, []);
+      
+      if (decision.tagsToCreate && decision.tagsToCreate.length > 0) {
+        const mappedTags = decision.tagsToCreate.map(t => ({
+          ...t,
+          client_id: call.clientId,
+          call_record_id: insertedCall.id,
+          campanha_id: call.campanha_id,
+          criado_em: new Date().toISOString()
+        }));
+        await supabase.from('client_tags').insert(mappedTags);
+        return { id: insertedCall.id, suggestedTags: mappedTags as ClientTag[] };
+      }
+      return { id: insertedCall.id, suggestedTags: [] };
+    } catch (e) { 
+      console.error("Tag engine failed", e);
+      return { id: insertedCall.id, suggestedTags: [] };
+    }
   },
 
   updateCall: async (id: string, updates: Partial<CallRecord>): Promise<void> => {
@@ -802,6 +896,62 @@ export const dataService = {
 
   deleteCall: async (id: string): Promise<void> => {
     const { error } = await supabase.from('call_logs').delete().eq('id', id);
+    if (error) throw error;
+  },
+
+  // Dreon Skill v3: Tags & Interações
+  getClientTags: async (clientId?: string): Promise<ClientTag[]> => {
+    let query = supabase.from('client_tags').select('*');
+    if (clientId) {
+      query = query.eq('client_id', clientId);
+    }
+    const { data, error } = await query.order('criado_em', { ascending: false });
+    if (error) {
+      console.error('Error fetching client tags', error);
+      return [];
+    }
+    return data || [];
+  },
+
+  saveClientTag: async (tag: Partial<ClientTag>): Promise<void> => {
+    const payload = { ...tag, criado_em: new Date().toISOString() };
+    const { error } = await supabase.from('client_tags').insert([payload]);
+    if (error) throw error;
+  },
+
+  confirmTag: async (tagId: string, operatorId: string): Promise<void> => {
+    const { error } = await supabase
+      .from('client_tags')
+      .update({
+        status: 'CONFIRMADA_OPERADOR',
+        confirmado_por: operatorId,
+        confirmado_em: new Date().toISOString()
+      })
+      .eq('id', tagId);
+    if (error) throw error;
+  },
+
+  approveTag: async (tagId: string, supervisorId: string): Promise<void> => {
+    const { error } = await supabase
+      .from('client_tags')
+      .update({
+        status: 'APROVADA_SUPERVISOR',
+        aprovado_por: supervisorId,
+        aprovado_em: new Date().toISOString()
+      })
+      .eq('id', tagId);
+    if (error) throw error;
+  },
+
+  rejectTag: async (tagId: string, operatorId: string, reason: string): Promise<void> => {
+    const { error } = await supabase
+      .from('client_tags')
+      .update({
+        status: 'REJEITADA',
+        rejeitado_por: operatorId,
+        motivo_rejeicao: reason
+      })
+      .eq('id', tagId);
     if (error) throw error;
   },
 
@@ -1651,11 +1801,11 @@ export const dataService = {
     let visitProspects: any[] = [];
     if (!filters.type || filters.type === 'ALL' || filters.type === 'VISIT') {
       // Only fetch if we are not filtering for something else strictly
+      // REMOVED funnel_status check to include ALL leads as requested by user
       const { data: prospects } = await supabase
         .from('clients')
         .select('*')
-        .eq('status', 'LEAD')
-        .eq('funnel_status', 'PHYSICAL_VISIT');
+        .eq('status', 'LEAD');
 
       visitProspects = (prospects || []).map(p => ({
         id: p.id, // Using Client ID as the ID for this "candidate"
@@ -1665,7 +1815,7 @@ export const dataService = {
         address: p.address,
         phone: p.phone,
         date: p.created_at, // or last_interaction
-        description: `Prospecto: Visita Física(${p.interest_product || 'Geral'})`,
+        description: `Prospecto: ${p.funnel_status || 'Novo'} (${p.interest_product || 'Geral'})`,
         operatorId: null, // No specific operator assigned yet
         contactPerson: p.buyer_name || p.responsible_phone
       }));

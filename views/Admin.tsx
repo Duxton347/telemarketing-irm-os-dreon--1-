@@ -1,21 +1,33 @@
 
 import React from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Upload, Users, FileSpreadsheet, X, UserPlus, CheckCircle2,
   Loader2, Info, AlertCircle, Clock, Database, Trash2, Save,
   MessageSquarePlus, ChevronUp, ChevronDown, Trash, Edit3, RotateCcw,
-  PhoneOff, RefreshCw, ListFilter, Plus, UserCheck, UserMinus, Phone, PlayCircle, ChevronRight, LayoutList, Eraser, Sparkles, BarChart3, MessageCircle, Settings, Search, AlertTriangle
+  PhoneOff, RefreshCw, ListFilter, Plus, UserCheck, UserMinus, Phone, PlayCircle, ChevronRight, LayoutList, Eraser, Sparkles, BarChart3, MessageCircle, Settings, Search, AlertTriangle, Calendar
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
-import { User, UserRole, CallType, Question, Task, ScheduleStatus, ProductivityMetrics, WhatsAppTask } from '../types';
+import { User, UserRole, CallType, Question, Task, ScheduleStatus, ProductivityMetrics, WhatsAppTask, ClientTag, Campanha } from '../types';
 import { RepiqueModal, RepiqueData } from '../components/RepiqueModal';
+import { SmartImportModal } from '../components/SmartImportModal';
+import { CampaignPlannerModal } from '../components/CampaignPlannerModal';
+import { TagApprovalCard } from '../components/TagApprovalCard';
+import { HelpTooltip } from '../components/HelpTooltip';
+import { HELP_TEXTS } from '../utils/helpTexts';
+import { CampaignPlannerService } from '../services/campaignPlannerService';
+import { EmailService } from '../services/emailService';
 
 interface AdminProps {
   user?: User;
 }
 
 const Admin: React.FC<AdminProps> = ({ user }) => {
-  const [activeTab, setActiveTab] = React.useState<'import' | 'users' | 'questions' | 'skips' | 'tasks' | 'settings'>('questions');
+  const [searchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab') as any;
+  const [activeTab, setActiveTab] = React.useState<'import' | 'users' | 'questions' | 'skips' | 'tasks' | 'settings' | 'tags'>(
+    ['import', 'users', 'questions', 'skips', 'tasks', 'settings', 'tags'].includes(initialTab) ? initialTab : 'questions'
+  );
   const [googleMapsKey, setGoogleMapsKey] = React.useState('');
   const [users, setUsers] = React.useState<User[]>([]);
   const [questions, setQuestions] = React.useState<Question[]>([]);
@@ -45,7 +57,13 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   const [selectedTaskIds, setSelectedTaskIds] = React.useState<string[]>([]);
   const [isProcessingRepique, setIsProcessingRepique] = React.useState(false);
 
-  // Deduplication State
+  // Dreon Skill v3 State
+  const [isSmartImportOpen, setIsSmartImportOpen] = React.useState(false);
+  const [isCampaignPlannerOpen, setIsCampaignPlannerOpen] = React.useState(false);
+  const [pendingTags, setPendingTags] = React.useState<ClientTag[]>([]);
+  const [campaigns, setCampaigns] = React.useState<Campanha[]>([]);
+  const [emailCoverage, setEmailCoverage] = React.useState({ total: 0, withEmail: 0, coveragePercent: 0 });
+
   const [duplicateClients, setDuplicateClients] = React.useState<any[]>([]);
 
   const [userData, setUserData] = React.useState({ name: '', username: '', password: '', role: UserRole.OPERATOR });
@@ -57,13 +75,16 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   const refreshData = async () => {
     setIsProcessing(true);
     try {
-      const [userList, questionList, taskList, allClients, whatsappList, mapsKey] = await Promise.all([
+      const [userList, questionList, taskList, allClients, whatsappList, mapsKey, tagsList, campaignsList, coverage] = await Promise.all([
         dataService.getUsers(),
         dataService.getQuestions(),
         dataService.getTasks(),
         dataService.getClients(true), // Include LEADs (Prospects)
         dataService.getWhatsAppTasks(),
-        dataService.getSystemSetting('GOOGLE_MAPS_KEY')
+        dataService.getSystemSetting('GOOGLE_MAPS_KEY'),
+        dataService.getClientTags(''), // Empty string for "all" if possible, or we need an Admin method
+        CampaignPlannerService.getCampaigns(),
+        EmailService.getCoverageStats()
       ]);
       setUsers(userList);
       setQuestions(questionList);
@@ -104,6 +125,11 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
       // Load Metrics if on analytics tab (or initial load?)
       // distinct function for metrics to avoid heavy load every refresh?
       // For simplicity, load here or via effect when tab changes.
+      setCampaigns(campaignsList);
+      setEmailCoverage(coverage);
+
+      // Filter tags that need attention (Sugeridas or Confirmadas pelo Operador)
+      setPendingTags((tagsList || []).filter(t => t.status === 'SUGERIDA' || t.status === 'CONFIRMADA_OPERADOR'));
     } catch (e) {
       console.error(e);
     } finally {
@@ -554,6 +580,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
           { id: 'import', label: 'Carga CSV', icon: FileSpreadsheet },
           { id: 'tasks', label: 'Fila de Trabalho', icon: LayoutList },
           { id: 'skips', label: 'Recuperar Pulados', icon: RotateCcw },
+          { id: 'tags', label: 'Tags e IA', icon: Sparkles },
           { id: 'users', label: 'Equipe', icon: Users },
           { id: 'settings', label: 'Configurações', icon: Settings }
         ].map(tab => (
@@ -808,9 +835,25 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
 
       {activeTab === 'import' && (
         <div className="bg-white p-10 rounded-[40px] border border-slate-100 shadow-sm space-y-10 animate-in fade-in duration-300">
-          <div>
-            <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">Carga de Trabalho (CSV)</h3>
-            <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-2">Dica: Números contatados nos últimos 3 dias serão ignorados automaticamente.</p>
+          <div className="flex justify-between items-center">
+            <div>
+              <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">Carga de Trabalho e Campanhas</h3>
+              <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-2">Dica: Use a importação inteligente para Excel/CSV ou crie campanhas personalizadas.</p>
+            </div>
+            <div className="flex gap-4">
+               <button 
+                  onClick={() => setIsCampaignPlannerOpen(true)}
+                  className="px-6 py-3 bg-blue-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg flex items-center gap-2 hover:bg-blue-700 transition-all"
+               >
+                  <Calendar size={16} /> Planejador de Campanha
+               </button>
+               <button 
+                  onClick={() => setIsSmartImportOpen(true)}
+                  className="px-6 py-3 bg-green-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg flex items-center gap-2 hover:bg-green-700 transition-all"
+               >
+                  <FileSpreadsheet size={16} /> Importação Inteligente (Excel)
+               </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
@@ -1446,6 +1489,63 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
           </div>
         </div>
       )}
+      {activeTab === 'tags' && (
+        <div className="bg-white p-10 rounded-[40px] border border-slate-100 shadow-sm space-y-8 animate-in fade-in duration-300">
+          <div className="flex justify-between items-center">
+            <div>
+              <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">Tags e Inteligência <HelpTooltip content={HELP_TEXTS.TAGS_SISTEMA} /></h3>
+              <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-2">Gestão de intenções e ferramentas avançadas Dreon Skill v3.</p>
+            </div>
+            <div className="flex gap-4">
+              <button 
+                onClick={() => setIsCampaignPlannerOpen(true)}
+                className="px-6 py-3 bg-blue-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg shadow-blue-500/20 hover:bg-blue-700 transition-all flex items-center gap-2"
+              >
+                <Calendar size={16} /> Planejador de Campanhas
+              </button>
+              <button 
+                onClick={() => setIsSmartImportOpen(true)}
+                className="px-6 py-3 bg-emerald-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg shadow-emerald-500/20 hover:bg-emerald-700 transition-all flex items-center gap-2"
+              >
+                <FileSpreadsheet size={16} /> Importação Inteligente
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-slate-50 p-6 rounded-[32px] border border-slate-100 mb-8">
+            <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-4 px-2">Aprovação de Tags Pendentes</h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {pendingTags.map(tag => (
+                <TagApprovalCard 
+                  key={tag.id} 
+                  tag={tag} 
+                  onRefresh={refreshData} 
+                  operatorId={user?.id || ''} 
+                  isSupervisor={true} 
+                />
+              ))}
+              {pendingTags.length === 0 && (
+                <div className="col-span-full py-10 text-center text-slate-300 font-black uppercase text-xs tracking-widest">
+                  Nenhuma tag pendente de aprovação.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modals for Dreon Skill v3 */}
+      <SmartImportModal 
+        isOpen={isSmartImportOpen} 
+        onClose={() => setIsSmartImportOpen(false)} 
+        onSuccess={refreshData} 
+      />
+      <CampaignPlannerModal 
+        isOpen={isCampaignPlannerOpen} 
+        onClose={() => setIsCampaignPlannerOpen(false)} 
+        onSuccess={refreshData} 
+        operatorId={user?.id}
+      />
     </div>
   );
 };

@@ -6,8 +6,11 @@ import {
   Loader2, Clock, MapPin, User, FileText, AlertCircle, Save, X, MessageCircle, Copy, Check, ChevronRight, AlertTriangle, ClipboardList, Zap, Calendar, Mail
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
-import { Task, Client, Question, CallType, OperatorEventType, ProtocolStatus, UserRole } from '../types';
+import { Task, Client, Question, CallType, OperatorEventType, ProtocolStatus, UserRole, ClientTag } from '../types';
 import { SKIP_REASONS, PROTOCOL_SLA } from '../constants';
+import { TagApprovalCard } from '../components/TagApprovalCard';
+import { HelpTooltip } from '../components/HelpTooltip';
+import { HELP_TEXTS } from '../utils/helpTexts';
 
 interface QueueProps {
   user: any;
@@ -65,6 +68,10 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     type: CallType.POS_VENDA
   });
 
+  // Dreon Skill v3: Tag Suggestion State
+  const [suggestedTags, setSuggestedTags] = React.useState<ClientTag[]>([]);
+  const [showTagSuccess, setShowTagSuccess] = React.useState(false);
+
   // Sync schedule type with current task
   React.useEffect(() => {
     if (currentTask) {
@@ -89,6 +96,8 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setScheduleData({ isScheduling: false, date: '', time: '', reason: '', type: CallType.POS_VENDA });
     setCrmStatus('');
     setInterestProduct('');
+    setSuggestedTags([]);
+    setShowTagSuccess(false);
   }, []);
 
   // State for upcoming tasks
@@ -97,12 +106,18 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   const fetchQueue = React.useCallback(async () => {
     setIsLoading(true);
     try {
-      const [allTasks, allQuestions, allClients] = await Promise.all([
+      const [allTasks, allQuestionsRaw, allClients] = await Promise.all([
         dataService.getTasks(),
-        dataService.getQuestions(),
+        dataService.getQuestions(), // We'll filter later or fetch specific
         dataService.getClients(true) // Pass TRUE to include LEADS (Prospects)
       ]);
-      setQuestions(allQuestions);
+      
+      // Load purpose-specific questions if we have a current task
+      let filteredQuestions = allQuestionsRaw;
+      if (currentTask) {
+        filteredQuestions = await dataService.getQuestions(currentTask.type as CallType, (currentTask as any).proposito);
+      }
+      setQuestions(filteredQuestions);
 
       const now = new Date();
       // Filter out tasks that are waiting for approval
@@ -469,65 +484,17 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
         responses: { ...responses, written_report: callSummary, call_type: currentTask.type },
         type: currentTask.type,
       };
-      await dataService.saveCall(callData);
+      const result = await dataService.saveCall(callData);
 
-      // 2.5. Update Client CRM Fields + Questionnaire mapped fields
-      const clientUpdates: any = {};
-      let needsClientUpdate = false;
-      if (crmStatus && crmStatus !== client.funnel_status) {
-        clientUpdates.funnel_status = crmStatus;
-        needsClientUpdate = true;
-      }
-      if (interestProduct && interestProduct !== client.interest_product) {
-        clientUpdates.interest_product = interestProduct;
-        needsClientUpdate = true;
-      }
-
-      // Map questionnaire responses to client fields via question.stageId
-      const FIELD_MAPPABLE = ['buyer_name', 'responsible_phone', 'email', 'interest_product', 'notes'];
-      for (const q of questions) {
-        if (q.stageId && FIELD_MAPPABLE.includes(q.stageId)) {
-          const val = responses[q.id] || responses[`${q.id}_note`];
-          if (val && val.trim()) {
-            clientUpdates[q.stageId] = val.trim();
-            needsClientUpdate = true;
-          }
-        }
-      }
-
-      if (needsClientUpdate) {
-        await dataService.updateClientFields(client.id, clientUpdates);
-      }
-
-      // 3. Update Task (Complete or Schedule)
-      if (scheduleData.isScheduling) {
-        // Create Schedule Request
-        const scheduledDateTime = new Date(`${scheduleData.date}T${scheduleData.time}:00`).toISOString();
-
-        await dataService.createScheduleRequest({
-          requestedByOperatorId: user.id,
-          assignedOperatorId: user.id,
-          customerId: client.id,
-          originCallId: currentTask.id,
-          scheduledFor: scheduledDateTime,
-          callType: scheduleData.type,
-          scheduleReason: scheduleData.reason,
-          status: 'PENDENTE_APROVACAO'
-        });
-
-        // Complete current task
-        await dataService.updateTask(currentTask.id, { status: 'completed' });
-        await dataService.logOperatorEvent(user.id, OperatorEventType.FINALIZAR_ATENDIMENTO, currentTask.id, `Finalizado com solicitação de agendamento: ${scheduleData.date}`);
-
+      // Handle Tag Suggestions
+      if (result.suggestedTags && result.suggestedTags.length > 0) {
+        setSuggestedTags(result.suggestedTags);
+        setShowTagSuccess(true);
+        // We don't call fetchQueue yet, we let user interact with tags
       } else {
-        // Just complete
-        await dataService.updateTask(currentTask.id, { status: 'completed' });
-        await dataService.logOperatorEvent(user.id, OperatorEventType.FINALIZAR_ATENDIMENTO, currentTask.id, 'Finalizado sem agendamento');
+        await dataService.logOperatorEvent(user.id, OperatorEventType.FINALIZAR_ATENDIMENTO, currentTask.id);
+        await fetchQueue();
       }
-
-
-      await dataService.logOperatorEvent(user.id, OperatorEventType.FINALIZAR_ATENDIMENTO, currentTask.id);
-      await fetchQueue();
     } catch (e) { alert("Erro ao salvar relatório."); }
     finally { setIsProcessing(false); }
   };
@@ -786,6 +753,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   responses={responses}
                   onResponseChange={(qId, val) => setResponses(prev => ({ ...prev, [qId]: val }))}
                   type={currentTask.type}
+                  proposito={(currentTask as any).proposito}
                 />
 
                 <section className="space-y-4">
@@ -1131,6 +1099,47 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
 
                 <button onClick={() => setIsRescheduleModalOpen(false)} className="w-full text-center text-slate-400 font-bold text-xs hover:text-red-500 uppercase tracking-widest">
                   Cancelar (Voltar)
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* Modal de Sucesso e Tags Sugeridas (Dreon Skill v3) */}
+        {showTagSuccess && (
+          <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md flex items-center justify-center z-[100] p-6">
+            <div className="bg-white rounded-[48px] p-10 max-w-4xl w-full shadow-2xl border border-slate-100 animate-in zoom-in-95 duration-300">
+              <div className="text-center space-y-4 mb-10">
+                <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6">
+                  <CheckCircle2 size={40} />
+                </div>
+                <h3 className="text-3xl font-black text-slate-800 uppercase tracking-tighter">Relatório Salvo com Sucesso!</h3>
+                <p className="text-slate-500 font-bold max-w-md mx-auto">
+                  Detectamos as seguintes intenções (tags) durante a conversa. 
+                  <strong className="text-blue-600"> Confirme as corretas</strong> para ajudar a IA a aprender.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar p-2">
+                {suggestedTags.map(tag => (
+                  <TagApprovalCard 
+                    key={tag.id} 
+                    tag={tag} 
+                    onRefresh={() => {}} // Internal state is enough for confirmation
+                    operatorId={user.id} 
+                    isSupervisor={false} 
+                  />
+                ))}
+              </div>
+
+              <div className="mt-10 flex justify-center">
+                <button 
+                  onClick={() => {
+                    fetchQueue();
+                    resetState();
+                  }}
+                  className="px-12 py-5 bg-slate-900 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl hover:scale-105 active:scale-95 transition-all flex items-center gap-3"
+                >
+                  Próxima Chamada <ChevronRight size={18} />
                 </button>
               </div>
             </div>

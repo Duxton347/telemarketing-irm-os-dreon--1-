@@ -43,6 +43,62 @@ export interface ScraperResult {
 }
 
 export const scraperService = {
+    parseGoogleAddress: (fullAddress: string) => {
+        let neighborhood = null;
+        let city = null;
+        let state = null;
+
+        if (!fullAddress) return { neighborhood, city, state };
+
+        const cleanAddr = fullAddress.trim();
+        const stateMatch = cleanAddr.match(/\b([A-Z]{2})(?:,?\s*Brasil)?$/i);
+        if (stateMatch) state = stateMatch[1].toUpperCase();
+
+        let str = cleanAddr.replace(/(?:CEP:?\s*)?(\d{5}-?\d{3})/i, '').replace(/Brasil\s*$/i, '').trim();
+        str = str.replace(/[,-\s]+$/, '');
+
+        if (state && str.endsWith(state)) {
+            str = str.slice(0, -state.length).trim();
+            str = str.replace(/[,-\s]+$/, '');
+        }
+
+        const partsByComma = str.split(',').map(s => s.trim()).filter(Boolean);
+        
+        if (partsByComma.length > 1) {
+            let potentialCity = partsByComma[partsByComma.length - 1];
+            if (potentialCity.includes('-')) {
+                const subParts = potentialCity.split('-').map(s => s.trim());
+                city = subParts[subParts.length - 1];
+                neighborhood = subParts[subParts.length - 2];
+            } else {
+                city = potentialCity;
+                let beforeCity = partsByComma.slice(0, -1).join(',').trim();
+                if (beforeCity.includes('-')) {
+                    const subParts = beforeCity.split('-').map(s => s.trim());
+                    neighborhood = subParts[subParts.length - 1];
+                }
+            }
+        } else if (str.includes('-')) {
+            const parts = str.split('-').map(s => s.trim());
+            if (parts.length >= 3) {
+                city = parts[parts.length - 1];
+                neighborhood = parts[parts.length - 2];
+            } else if (parts.length === 2) {
+                city = parts[1];
+            }
+        }
+
+        if (city && city.length <= 2) city = null;
+        if (neighborhood && neighborhood.length <= 2) neighborhood = null;
+        if (city?.toUpperCase() === 'ILHABELA') city = 'ILHABELA';
+
+        return { 
+            neighborhood: neighborhood || null, 
+            city: city?.toUpperCase() || null, 
+            state: state || null 
+        };
+    },
+
     verifyLocation: async (input: string) => {
         // A verificação agora é feita no componente para obter a chave dinamicamente
         return null;
@@ -340,11 +396,17 @@ export const scraperService = {
         const phoneCleaner = result.phone.replace(/\D/g, '');
         const originString = processName ? `GOOGLE_SEARCH (${processName})` : 'GOOGLE_SEARCH';
 
+        // Tentar preencher location parts
+        const parsed = scraperService.parseGoogleAddress(result.address);
+
         // Tentamos fazer Upsert baseado no telefone
         const { error: upsertError } = await supabase.from('clients').upsert({
             name: result.name,
             phone: phoneCleaner,
             address: result.address,
+            neighborhood: parsed.neighborhood,
+            city: parsed.city,
+            state: parsed.state,
             website: result.website || null,
             origin: originString,
             status: 'LEAD',

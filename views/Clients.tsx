@@ -6,7 +6,11 @@ import {
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { SATISFACTION_EMOJIS } from '../constants';
-import { Client, CallRecord, UserRole, Protocol, ProtocolStatus } from '../types';
+import { Client, CallRecord, UserRole, Protocol, ProtocolStatus, ClientTag } from '../types';
+import { HelpTooltip } from '../components/HelpTooltip';
+import { HELP_TEXTS } from '../utils/helpTexts';
+import { EmailService } from '../services/emailService';
+import { Mail, ShieldCheck, Tag as TagIcon, Plus, Sparkles, Sparkle } from 'lucide-react';
 
 const Clients: React.FC<{ user: any }> = ({ user }) => {
   const [clients, setClients] = React.useState<Client[]>([]);
@@ -21,6 +25,9 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
 
   const [neighborhoodFilter, setNeighborhoodFilter] = React.useState('');
   const [cityFilter, setCityFilter] = React.useState('');
+  const [clientTags, setClientTags] = React.useState<ClientTag[]>([]);
+  const [isEmailModalOpen, setIsEmailModalOpen] = React.useState(false);
+  const [newEmail, setNewEmail] = React.useState('');
 
   const [clientData, setClientData] = React.useState({
     id: '',
@@ -56,14 +63,16 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
       if (!selectedClient) return;
       setHistoryLoading(true);
       try {
-        const [allCalls, allProtocols] = await Promise.all([
+        const [allCalls, allProtocols, tags] = await Promise.all([
           dataService.getCalls(),
-          dataService.getProtocols()
+          dataService.getProtocols(),
+          dataService.getClientTags(selectedClient.id)
         ]);
         setClientHistory({
           calls: allCalls.filter(c => c.clientId === selectedClient.id),
           protocols: allProtocols.filter(p => p.clientId === selectedClient.id)
         });
+        setClientTags(tags);
       } catch (e) {
         console.error("Erro ao carregar histórico:", e);
       } finally {
@@ -72,7 +81,23 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
       }
     };
     fetchHistory();
+    setNewEmail(selectedClient?.email || '');
   }, [selectedClient]);
+
+  const handleSaveEmail = async () => {
+    if (!selectedClient || !newEmail) return;
+    setIsProcessing(true);
+    try {
+      await EmailService.saveEmail(selectedClient.id, newEmail);
+      setSelectedClient({ ...selectedClient, email: newEmail });
+      setIsEmailModalOpen(false);
+      alert("E-mail salvo com sucesso!");
+    } catch (e) {
+      alert("Erro ao salvar e-mail.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   const handleSaveClient = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -244,6 +269,21 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                   <div className="flex flex-col gap-2">
                     <span className="flex items-center gap-2 text-sm font-black text-blue-600"><Phone size={16} /> Primário: {selectedClient.phone}</span>
                     {selectedClient.phone_secondary && <span className="flex items-center gap-2 text-sm font-black text-blue-600"><Phone size={16} /> Secundário: {selectedClient.phone_secondary}</span>}
+                    
+                    <div className="flex items-center gap-2 text-sm font-black text-slate-600 group cursor-pointer" onClick={() => setIsEmailModalOpen(true)}>
+                      <Mail size={16} className={selectedClient.email ? "text-blue-500" : "text-slate-300"} />
+                      {selectedClient.email ? (
+                        <span className="flex items-center gap-2">
+                          {selectedClient.email}
+                          <Edit2 size={12} className="opacity-0 group-hover:opacity-100 transition-opacity" />
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 font-bold italic flex items-center gap-2">
+                          Clique para adicionar e-mail
+                          <Plus size={12} />
+                        </span>
+                      )}
+                    </div>
 
                     {selectedClient.neighborhood ? (
                       <div className="flex items-start gap-2 text-xs font-bold text-slate-400 uppercase tracking-widest mt-2">
@@ -280,9 +320,31 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
               </div>
 
               <div className="flex-1 overflow-y-auto p-10 space-y-12 custom-scrollbar">
+                {/* TAGS DA INTELIGÊNCIA DREON */}
+                <section className="space-y-4">
+                  <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2">
+                    <Sparkles size={14} className="text-blue-500" /> Tags de Intensidade e Perfil
+                    <HelpTooltip content={HELP_TEXTS.TAGS_SISTEMA} />
+                  </h5>
+                  <div className="flex flex-wrap gap-2">
+                    {clientTags.length > 0 ? clientTags.map((tag, i) => (
+                      <div key={i} className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border ${
+                        tag.status === 'APROVADA_SUPERVISOR' ? 'bg-green-50 text-green-700 border-green-200' : 
+                        tag.status === 'REJEITADA' ? 'bg-red-50 text-red-700 border-red-200 opacity-50' :
+                        'bg-blue-50 text-blue-700 border-blue-200'
+                      }`}>
+                        <span className="text-[10px] font-black uppercase">{tag.label}</span>
+                        {tag.status === 'APROVADA_SUPERVISOR' && <ShieldCheck size={12} />}
+                      </div>
+                    )) : (
+                      <p className="text-xs font-bold text-slate-300 italic">Nenhuma tag identificada para este cliente.</p>
+                    )}
+                  </div>
+                </section>
+
                 {/* EQUIPAMENTOS */}
                 <section className="space-y-4">
-                  <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2"><Tag size={14} className="text-indigo-500" /> Itens Instalados / Contratados</h5>
+                  <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2"><TagIcon size={14} className="text-indigo-500" /> Itens Instalados / Contratados</h5>
                   <div className="flex flex-wrap gap-2">
                     {selectedClient.items && selectedClient.items.length > 0 ? selectedClient.items.map((item, i) => (
                       <span key={i} className="px-4 py-2 bg-blue-50 text-blue-700 rounded-xl text-[10px] font-black uppercase border border-blue-100">{item}</span>
@@ -410,6 +472,37 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                 {isProcessing ? <Loader2 className="animate-spin" /> : <Save size={18} />} {editMode ? 'Salvar Alterações' : 'Cadastrar Cliente'}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+      {isEmailModalOpen && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-md">
+          <div className="bg-white w-full max-w-md rounded-[40px] shadow-2xl animate-in zoom-in duration-200">
+             <div className="p-8 space-y-6">
+                <div className="flex justify-between items-center">
+                   <h3 className="text-lg font-black uppercase text-slate-800 tracking-tighter flex items-center gap-2">
+                      <Mail className="text-blue-600" /> Gerenciar E-mail
+                   </h3>
+                   <button onClick={() => setIsEmailModalOpen(false)} className="text-slate-300 hover:text-slate-600"><X size={20} /></button>
+                </div>
+                <div className="space-y-2">
+                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Endereço de E-mail</label>
+                   <input 
+                      type="email" 
+                      value={newEmail} 
+                      onChange={e => setNewEmail(e.target.value)}
+                      placeholder="email@cliente.com.br"
+                      className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
+                   />
+                </div>
+                <button 
+                  onClick={handleSaveEmail}
+                  disabled={isProcessing}
+                  className="w-full py-5 bg-blue-600 text-white rounded-[24px] font-black uppercase tracking-widest text-[10px] shadow-xl flex items-center justify-center gap-2 hover:bg-blue-700 transition-all"
+                >
+                  {isProcessing ? <Loader2 className="animate-spin" /> : <Save size={16} />} Salvar E-mail
+                </button>
+             </div>
           </div>
         </div>
       )}

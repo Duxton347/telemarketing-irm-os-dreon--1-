@@ -8,10 +8,11 @@ import {
    X, Loader2, AlertCircle, TrendingUp, Target, Filter, PhoneOff, Zap,
    BarChart3, ClipboardList, Timer, Phone, Trophy, Clock, MapPin,
    Download, FileSpreadsheet, Send, MessageSquare, DollarSign, Users,
-   Search, Calendar, ArrowUpRight, ArrowDownRight, ChevronDown, ChevronUp
+   Search, Calendar, ArrowUpRight, ArrowDownRight, ChevronDown, ChevronUp,
+   Smile, Meh, Frown, Tag
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
-import { CallRecord, User, Client, Protocol, Question, Task, OperatorEvent, OperatorEventType, Visit, Sale, SaleStatus, WhatsAppTask, CallType } from '../types';
+import { CallRecord, User, Client, Protocol, Question, Task, OperatorEvent, OperatorEventType, Visit, Sale, SaleStatus, WhatsAppTask, CallType, ClientTag } from '../types';
 import PostSaleRemarketingReport from './PostSaleRemarketingReport';
 import ProspectHistoryDrawer from '../components/ProspectHistoryDrawer';
 
@@ -95,7 +96,17 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
       conversionRate: 0,
       ticketAverage: 0,
       totalContacts: 0,
-      totalSales: 0
+      totalSales: 0,
+      npsScore: 0,
+      npsPromoters: 0,
+      npsDetractors: 0,
+      npsTotal: 0,
+      satisfactionRates: {
+          price: { satisfied: 0, total: 0 },
+          product: { satisfied: 0, total: 0 },
+          speed: { satisfied: 0, total: 0 }
+      },
+      tagDistribution: []
    });
 
    const loadData = React.useCallback(async () => {
@@ -112,7 +123,8 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
             fetchedEvents,
             fetchedQuestions,
             fetchedVisits,
-            fetchedProspects
+            fetchedProspects,
+            fetchedTags
          ] = await Promise.all([
             dataService.getCalls(dateRange.start, dateRange.end),
             dataService.getTasks(), // Tasks history is tricky, might need filter update in future
@@ -124,7 +136,8 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
             dataService.getOperatorEvents(dateRange.start, dateRange.end),
             dataService.getQuestions(),
             dataService.getVisits(),
-            dataService.getProspects()
+            dataService.getProspects(),
+            dataService.getClientTags()
          ]);
 
          setCalls(fetchedCalls);
@@ -173,10 +186,10 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                
                if (task || waTask) {
                    pureSkipCount++;
-                   const assignedTo = task ? task.assignedTo : waTask?.operatorId;
-                   const clientId = task ? task.clientId : waTask?.clientId;
-                   const clientName = task ? (task.clientName || task.clients?.name) : waTask?.clientName;
-                   const note = evt.note || (task ? task.skipReason : waTask?.note) || 'Sem motivo informado';
+                    const assignedTo = task ? task.assignedTo : (waTask as any)?.assignedTo;
+                    const clientId = task ? task.clientId : waTask?.clientId;
+                    const clientName = task ? (task.clientName || task.clients?.name) : waTask?.clientName;
+                    const note = evt.note || (task ? task.skipReason : (waTask as any)?.skipNote) || 'Sem motivo informado';
                    const op = fetchedOps.find(o => o.id === assignedTo);
 
                    skipAuditDetails.push({
@@ -200,16 +213,16 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                  const waTask = fetchedWa.find(w => w.id === evt.taskId || w.sourceId === evt.taskId);
                  if (waTask) {
                      pureSkipCount++;
-                     const op = fetchedOps.find(o => o.id === waTask.operatorId);
-                     skipAuditDetails.push({
-                         id: evt.id,
-                         operatorId: waTask.operatorId,
-                         operatorName: op?.name || 'Desconhecido',
-                         clientId: waTask.clientId,
-                         clientName: waTask.clientName || 'Desconhecido',
-                         timestamp: evt.timestamp,
-                         note: evt.note || waTask.note || 'Sem motivo informado'
-                     });
+                      const op = fetchedOps.find(o => o.id === (waTask as any).assignedTo);
+                      skipAuditDetails.push({
+                          id: evt.id,
+                          operatorId: (waTask as any).assignedTo,
+                          operatorName: op?.name || 'Desconhecido',
+                          clientId: waTask.clientId,
+                          clientName: waTask.clientName || 'Desconhecido',
+                          timestamp: evt.timestamp,
+                          note: evt.note || (waTask as any).skipNote || 'Sem motivo informado'
+                      });
                  }
              }
          });
@@ -218,13 +231,80 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
 
          const totalInteractions = fetchedCalls.length + fetchedWa.filter(w => w.status === 'completed').length + pureSkipCount;
 
+         // --- CALCULATE SATISFACTION METRICS ---
+         let promoters = 0;
+         let detractors = 0;
+         let npsTotal = 0;
+         
+         const satRates = {
+             price: { satisfied: 0, total: 0 },
+             product: { satisfied: 0, total: 0 },
+             speed: { satisfied: 0, total: 0 }
+         };
+
+         // Analyze all responses from calls and WA tasks within date range
+         const allInteractions = [
+             ...fetchedCalls,
+             ...fetchedWa.filter(w => w.status === 'completed')
+         ];
+
+         allInteractions.forEach((interaction: any) => {
+             const responses = interaction.responses || {};
+             
+             // NPS Eval
+             const npsRaw = responses['q_nps'];
+             if (npsRaw !== undefined) {
+                 const npsScoreRaw = parseInt(npsRaw, 10);
+                 if (!isNaN(npsScoreRaw)) {
+                     npsTotal++;
+                     if (npsScoreRaw >= 9) promoters++;
+                     else if (npsScoreRaw <= 6) detractors++;
+                 }
+             }
+
+             // Specific Satisfaction Eval
+             const checkSatisfaction = (key: string, category: keyof typeof satRates) => {
+                 const val = responses[key];
+                 if (val) {
+                     satRates[category].total++;
+                     // Assumes responses like 'Ótimo', 'Sim', etc. are positive
+                     if (['Ótimo', 'Bom', 'Sim', 'Adequado'].includes(String(val))) {
+                         satRates[category].satisfied++;
+                     }
+                 }
+             };
+
+             checkSatisfaction('q_precificacao', 'price');
+             checkSatisfaction('q_produto_estoque', 'product');
+             checkSatisfaction('q_velocidade', 'speed');
+         });
+
+         const npsScore = npsTotal > 0 ? Math.round(((promoters - detractors) / npsTotal) * 100) : 0;
+
+         // --- CALCULATE TAG DISTRIBUTION ---
+         const tagCounts: { [key: string]: number } = {};
+         fetchedTags.filter(t => t.status === 'APROVADA_SUPERVISOR' || t.status === 'SUGERIDA' || t.status === 'CONFIRMADA_OPERADOR').forEach(t => {
+             // Only include tags that might have been applied in this period (or all active if preferrable)
+             tagCounts[t.categoria] = (tagCounts[t.categoria] || 0) + 1;
+         });
+         
+         const tagDistribution = Object.entries(tagCounts)
+            .sort((a,b) => b[1] - a[1])
+            .map(([name, value]) => ({ name, value }));
+
          setMetrics({
             revenue: totalRevenue,
             conversionRate: uniqueContacts > 0 ? (totalSalesCount / uniqueContacts) * 100 : 0,
             ticketAverage: totalSalesCount > 0 ? totalRevenue / totalSalesCount : 0,
             totalContacts: totalInteractions,
             totalSales: totalSalesCount,
-            pureSkips: pureSkipCount // Store to display in subtitle
+            pureSkips: pureSkipCount, // Store to display in subtitle
+            npsScore,
+            npsPromoters: promoters,
+            npsDetractors: detractors,
+            npsTotal,
+            satisfactionRates: satRates,
+            tagDistribution
          });
 
       } catch (e) {
@@ -320,7 +400,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
       // Find related visit (registered equal or after interaction date)
       const relatedVisit = visits.find(v => {
          if (v.clientId !== selectedInteraction.clientId) return false;
-         return new Date((v as any).date || v.createdAt) >= new Date(isCall ? (selectedInteraction as any).startTime : (selectedInteraction as any).createdAt);
+         return new Date((v as any).scheduledDate || v.createdAt) >= new Date(isCall ? (selectedInteraction as any).startTime : (selectedInteraction as any).createdAt);
       });
 
       return (
@@ -390,7 +470,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                         <p className={`text-xl font-black ${relatedVisit ? 'text-amber-600' : 'text-slate-400'}`}>
                            {relatedVisit ? 'SIM' : 'NÃO'}
                         </p>
-                        {relatedVisit && <p className="text-xs text-amber-600 font-bold mt-1 uppercase">{new Date(relatedVisit.date).toLocaleDateString()}</p>}
+                         {relatedVisit && <p className="text-xs text-amber-600 font-bold mt-1 uppercase">{new Date(relatedVisit.scheduledDate).toLocaleDateString()}</p>}
                      </div>
                   </div>
 
@@ -653,6 +733,148 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                            subtitle={`Inclui ${metrics.pureSkips || 0} pulos diretos (Ver)`}
                            onClick={() => setIsSkipAuditModalOpen(true)}
                         />
+                     </div>
+
+                     {/* SATISFACTION (NPS) & TAGS SECTION */}
+                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        {/* NPS CARD */}
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm flex flex-col justify-between">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-6">Net Promoter Score (NPS)</h4>
+                           
+                           <div className="flex items-center justify-center py-6">
+                              <div className="relative">
+                                 <svg className="w-32 h-32 transform -rotate-90">
+                                    <circle cx="64" cy="64" r="56" fill="transparent" stroke="#f1f5f9" strokeWidth="12" />
+                                    <circle 
+                                       cx="64" cy="64" r="56" fill="transparent" 
+                                       stroke={metrics.npsScore > 50 ? '#10b981' : metrics.npsScore > 0 ? '#f59e0b' : '#ef4444'} 
+                                       strokeWidth="12" 
+                                       strokeDasharray={2 * Math.PI * 56} 
+                                       strokeDashoffset={Math.max(0, (2 * Math.PI * 56) * (1 - (Math.max(0, metrics.npsScore) / 100)))} 
+                                       strokeLinecap="round" 
+                                    />
+                                 </svg>
+                                 <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 text-center">
+                                    <span className="text-3xl font-black text-slate-800">{metrics.npsScore}</span>
+                                 </div>
+                              </div>
+                           </div>
+                           
+                           <div className="flex justify-between items-center bg-slate-50 p-4 rounded-2xl">
+                              <div className="text-center">
+                                 <p className="text-[10px] font-black uppercase text-emerald-500 mb-1 flex justify-center gap-1"><Smile size={12}/> Promotores</p>
+                                 <p className="text-sm font-black text-slate-800">{metrics.npsTotal > 0 ? Math.round((metrics.npsPromoters/metrics.npsTotal)*100) : 0}%</p>
+                              </div>
+                              <div className="h-6 w-px bg-slate-200" />
+                              <div className="text-center">
+                                 <p className="text-[10px] font-black uppercase text-amber-500 mb-1 flex justify-center gap-1"><Meh size={12}/> Neutros</p>
+                                 <p className="text-sm font-black text-slate-800">{metrics.npsTotal > 0 ? Math.round(((metrics.npsTotal - metrics.npsPromoters - metrics.npsDetractors)/metrics.npsTotal)*100) : 0}%</p>
+                              </div>
+                              <div className="h-6 w-px bg-slate-200" />
+                              <div className="text-center">
+                                 <p className="text-[10px] font-black uppercase text-rose-500 mb-1 flex justify-center gap-1"><Frown size={12}/> Detratores</p>
+                                 <p className="text-sm font-black text-slate-800">{metrics.npsTotal > 0 ? Math.round((metrics.npsDetractors/metrics.npsTotal)*100) : 0}%</p>
+                              </div>
+                           </div>
+                           <p className="text-[9px] font-bold text-slate-400 text-center mt-4">Base: {metrics.npsTotal} avaliações</p>
+                        </div>
+
+                        {/* SPECIFIC SATISFACTION */}
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm flex flex-col justify-center">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-6">Satisfação por Área</h4>
+                           <div className="space-y-6">
+                              
+                              {/* Price */}
+                              <div>
+                                 <div className="flex justify-between text-xs font-bold mb-2">
+                                    <span className="text-slate-600 uppercase">Preço / Condições</span>
+                                    <span className="text-blue-600 font-black">
+                                      {metrics.satisfactionRates?.price?.total > 0 ? Math.round((metrics.satisfactionRates.price.satisfied / metrics.satisfactionRates.price.total) * 100) : 0}% Positivo
+                                    </span>
+                                 </div>
+                                 <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                                    <div className="h-full bg-blue-500 rounded-full" style={{ width: `${metrics.satisfactionRates?.price?.total > 0 ? (metrics.satisfactionRates.price.satisfied / metrics.satisfactionRates.price.total) * 100 : 0}%` }} />
+                                 </div>
+                                 <p className="text-[9px] text-right font-bold text-slate-400 mt-1">{metrics.satisfactionRates?.price?.total || 0} respostas</p>
+                              </div>
+
+                              {/* Product / Stock */}
+                              <div>
+                                 <div className="flex justify-between text-xs font-bold mb-2">
+                                    <span className="text-slate-600 uppercase">Produto / Estoque</span>
+                                    <span className="text-emerald-600 font-black">
+                                       {metrics.satisfactionRates?.product?.total > 0 ? Math.round((metrics.satisfactionRates.product.satisfied / metrics.satisfactionRates.product.total) * 100) : 0}% Positivo
+                                    </span>
+                                 </div>
+                                 <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                                    <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${metrics.satisfactionRates?.product?.total > 0 ? (metrics.satisfactionRates.product.satisfied / metrics.satisfactionRates.product.total) * 100 : 0}%` }} />
+                                 </div>
+                                 <p className="text-[9px] text-right font-bold text-slate-400 mt-1">{metrics.satisfactionRates?.product?.total || 0} respostas</p>
+                              </div>
+
+                              {/* Speed */}
+                              <div>
+                                 <div className="flex justify-between text-xs font-bold mb-2">
+                                    <span className="text-slate-600 uppercase">Velocidade de Retorno</span>
+                                    <span className="text-amber-600 font-black">
+                                       {metrics.satisfactionRates?.speed?.total > 0 ? Math.round((metrics.satisfactionRates.speed.satisfied / metrics.satisfactionRates.speed.total) * 100) : 0}% Positivo
+                                    </span>
+                                 </div>
+                                 <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                                    <div className="h-full bg-amber-500 rounded-full" style={{ width: `${metrics.satisfactionRates?.speed?.total > 0 ? (metrics.satisfactionRates.speed.satisfied / metrics.satisfactionRates.speed.total) * 100 : 0}%` }} />
+                                 </div>
+                                 <p className="text-[9px] text-right font-bold text-slate-400 mt-1">{metrics.satisfactionRates?.speed?.total || 0} respostas</p>
+                              </div>
+                           </div>
+                        </div>
+
+                        {/* TAG DISTRIBUTION */}
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm flex flex-col justify-between">
+                            <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-6 flex items-center justify-between">
+                                 Distribuição de Tags (IA)
+                                 <Tag size={16} className="text-indigo-400" />
+                            </h4>
+                            <div className="h-[200px] flex-1">
+                                {metrics.tagDistribution?.length > 0 ? (
+                                   <ResponsiveContainer width="100%" height="100%">
+                                       <PieChart>
+                                           <Pie
+                                               data={metrics.tagDistribution}
+                                               innerRadius={50}
+                                               outerRadius={80}
+                                               paddingAngle={2}
+                                               dataKey="value"
+                                           >
+                                               {metrics.tagDistribution.map((entry: any, index: number) => {
+                                                   // Map tag names to specific colors based on constants definition if desired
+                                                   const colors: Record<string, string> = {
+                                                       'RECUPERACAO': '#ef4444', 
+                                                       'OPORTUNIDADE': '#f59e0b', 
+                                                       'REATIVACAO': '#8b5cf6',
+                                                       'CONFIRMACAO': '#3b82f6',
+                                                       'CLIENTE_PERDIDO': '#64748b'
+                                                   };
+                                                   return <Cell key={`cell-${index}`} fill={colors[entry.name] || '#94a3b8'} />;
+                                               })}
+                                           </Pie>
+                                           <Tooltip />
+                                       </PieChart>
+                                   </ResponsiveContainer>
+                                ) : (
+                                    <div className="h-full flex items-center justify-center text-slate-300 font-bold text-xs uppercase tracking-widest">
+                                        Sem Tags
+                                    </div>
+                                )}
+                            </div>
+                            <div className="mt-4 space-y-2">
+                                {metrics.tagDistribution?.slice(0,3).map((tag: any) => (
+                                    <div key={tag.name} className="flex justify-between text-xs font-bold items-center">
+                                        <span className="text-slate-600 truncate mr-2">{tag.name}</span>
+                                        <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md shrink-0">{tag.value}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
                      </div>
 
                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -1011,7 +1233,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                                           {item.relatedVisit ? (
                                              <div>
                                                 <p className="font-bold text-slate-800">Detalhes da Visita</p>
-                                                <p className="text-sm text-slate-600">Data: {new Date((item.relatedVisit as any).date || item.relatedVisit.createdAt).toLocaleDateString()}</p>
+                                                <p className="text-sm text-slate-600">Data: {new Date((item.relatedVisit as any).scheduledDate || item.relatedVisit.createdAt).toLocaleDateString()}</p>
                                                 <p className="text-sm text-slate-600">Status: {item.relatedVisit.status}</p>
                                                 {item.relatedVisit.notes && <p className="text-sm text-slate-500 italic mt-2">"{item.relatedVisit.notes}"</p>}
                                              </div>
@@ -1137,12 +1359,12 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                                       return acc;
                                   }, {} as Record<string, number>);
 
-                                  const sortedReasons = Object.entries(reasonCounts).sort((a,b) => b[1] - a[1]);
+                                   const sortedReasons = Object.entries(reasonCounts).sort((a,b) => (b[1] as number) - (a[1] as number));
 
                                   return sortedReasons.map(([reason, count]) => (
                                       <div key={reason} className="flex justify-between items-start gap-4 p-5 bg-slate-50 rounded-[24px] border border-slate-100">
                                           <span className="text-xs font-bold text-slate-700 leading-relaxed">{reason}</span>
-                                          <span className="text-xs font-black text-slate-900 bg-white px-3 py-1 rounded-full shadow-sm shrink-0">{count}</span>
+                                           <span className="text-xs font-black text-slate-900 bg-white px-3 py-1 rounded-full shadow-sm shrink-0">{count as number}</span>
                                       </div>
                                   ));
                               })()}

@@ -90,3 +90,55 @@ export const DEFAULT_QUESTIONS = [
   { id: 'cp4', text: 'Comunicação/Clareza sobre a solução', options: ['Atendeu', 'Parcial', 'Não atendeu'], type: CallType.CONFIRMACAO_PROTOCOLO, order: 4 },
   { id: 'cp5', text: 'Recomendaria a empresa após a solução?', options: ['Sim', 'Talvez', 'Não'], type: CallType.CONFIRMACAO_PROTOCOLO, order: 5 }
 ];
+
+export const TAG_CATEGORIES = {
+  RECUPERACAO: 'Recuperação',
+  OPORTUNIDADE: 'Oportunidade',
+  REATIVACAO: 'Reativação',
+  CONFIRMACAO: 'Confirmação',
+  CLIENTE_PERDIDO: 'Cliente Perdido'
+};
+
+export const TAG_STATUS = {
+  SUGERIDA: 'Sugerida',
+  CONFIRMADA_OPERADOR: 'Confirmada (Op)',
+  APROVADA_SUPERVISOR: 'Aprovada (Sup)',
+  REJEITADA: 'Rejeitada'
+};
+
+// Simplified Engine Rules for Tag Decision
+export const TAG_RULES = {
+  RECUPERACAO: [
+    // 1. RECLAMAÇÃO DO EQUIPAMENTO
+    { campo: 'equipamento_defeito', equals: 'Sim', motivo: 'PRODUTO_DEFEITO', peso: 5 },
+    { campo: 'equipamento_defeito_detalhe', required: true, motivo: 'PRODUTO_DEFEITO', peso: 2 },
+    // 2. RECLAMAÇÃO SOBRE EXECUÇÃO/INSTALAÇÃO
+    { campo: 'reclamacao_instalacao', equals: 'Sim', motivo: 'EXECUCAO_RUIM', peso: 5 },
+    { campo: 'reclamacao_instalacao_ocorrencia', required: true, motivo: 'EXECUCAO_RUIM', peso: 2 },
+    // 3. RECLAMAÇÃO DE ATRASOS
+    { campo: 'atraso_entrega', equals: 'Sim', motivo: 'ATRASO', peso: 5 },
+    { campo: 'atraso_entrega_dias', required: true, motivo: 'ATRASO', peso: 2 },
+    // 4. ATENDIMENTO E NEGOCIAÇÃO
+    { campo: 'insatisfacao_atendimento', in: ['Ruim', 'Precisa melhorar', 'Demorou pra responder'], motivo: 'ATENDIMENTO_RUIM', peso: 5 }
+  ],
+  OPORTUNIDADE: [
+    // 5. NOVA INDICAÇÃO E OPORTUNIDADE DE VENDA
+    { campo: 'receber_ofertas', equals: 'Sim', motivo: 'UPSELL', peso: 5 },
+    { campo: 'interesse_outro_produto', required: true, motivo: 'UPSELL', peso: 3 },
+    { campo: 'indicacao_nome', required: true, motivo: 'NOVA_INDICACAO', peso: 5 }
+  ],
+  CLIENTE_PERDIDO: [
+    // 7. CLIENTE PERDIDO
+    { campo: 'motivo_perda', required: true, motivo: 'INSATISFEITO', peso: 10 },
+    { campo: 'aceitacao_retorno', equals: 'Não quer mais contato', motivo: 'INSATISFEITO', peso: 10 }
+  ],
+  CONFIRMACAO: [
+    // 6. CONFIRMAÇÃO E VALIDAÇÃO DE SERVIÇIOS FINALIZADOS
+    { campo: 'servico_concluido', equals: 'Sim', motivo: 'SATISFEITO', peso: 5 },
+    { campo: 'protocolo_resolvido', in: ['Sim', 'Excelente', 'Bom'], motivo: 'SATISFEITO', peso: 5 }
+  ],
+  REATIVACAO: [
+    { campo: 'reativacao_motivo_saida', required: true, motivo: 'VOLTOU_COMPRAR', peso: 3 },
+    { campo: 'tem_interesse', equals: 'Sim', motivo: 'VOLTOU_COMPRAR', peso: 5 }
+  ]
+};

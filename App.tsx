@@ -17,6 +17,8 @@ import { ScraperView } from './views/Scraper/ScraperView';
 import Prospects from './views/Prospects';
 import WorkloadUpload from './views/WorkloadUpload';
 import PDFImport from './views/PDFImport';
+import { CampaignPlanner } from './views/CampaignPlanner';
+import { ProductImport } from './views/ProductImport';
 // Import updated views
 import { UserRole } from './types';
 
@@ -65,6 +67,12 @@ const App: React.FC = () => {
           } />
           <Route path="/pdf-import" element={
             user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR ? <PDFImport user={user} /> : <Navigate to="/" />
+          } />
+          <Route path="/campaigns" element={
+            user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR ? <CampaignPlanner /> : <Navigate to="/" />
+          } />
+          <Route path="/product-import" element={
+            user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR ? <ProductImport /> : <Navigate to="/" />
           } />
           <Route path="*" element={<Navigate to="/" />} />
         </Routes>

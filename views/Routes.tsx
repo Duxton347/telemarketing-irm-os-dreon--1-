@@ -156,9 +156,9 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
 
     // --- MANUAL ADDITION ---
     const handleSearchManualClient = async () => {
-        if (manualClientSearch.length < 3) return;
-        // Fetch all clients then filter locally for responsiveness
-        const res = await dataService.getClients();
+        if (manualClientSearch.length < 2) return; // Lowered to 2 for better UX
+        // Fetch all clients (including LEADS) then filter locally for responsiveness
+        const res = await dataService.getClients(true); 
         const filtered = res.filter(c =>
             c.name.toLowerCase().includes(manualClientSearch.toLowerCase()) ||
             (c.phone && c.phone.includes(manualClientSearch))
@@ -785,10 +785,15 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                                                     <div
                                                         key={c.id}
                                                         onClick={() => handleSelectManualClient(c)}
-                                                        className="p-3 hover:bg-blue-50 cursor-pointer border-b border-slate-50 last:border-0"
+                                                        className="p-3 hover:bg-blue-50 cursor-pointer border-b border-slate-50 last:border-0 flex justify-between items-center"
                                                     >
-                                                        <p className="font-bold text-sm text-slate-800">{c.name}</p>
-                                                        <p className="text-xs text-slate-500">{c.phone} • {c.address}</p>
+                                                        <div className="flex flex-col">
+                                                            <p className="font-bold text-sm text-slate-800">{c.name}</p>
+                                                            <p className="text-xs text-slate-500">{c.phone} • {c.address}</p>
+                                                        </div>
+                                                        {c.status === 'LEAD' && (
+                                                            <span className="bg-pink-100 text-pink-600 px-2 py-0.5 rounded text-[10px] font-black uppercase">Prospecto</span>
+                                                        )}
                                                     </div>
                                                 ))}
                                             </div>

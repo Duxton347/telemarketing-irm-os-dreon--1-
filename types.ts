@@ -1,9 +1,16 @@
-
 export enum UserRole {
   ADMIN = 'ADMIN',
   SUPERVISOR = 'SUPERVISOR',
   OPERATOR = 'OPERATOR'
 }
+
+export type TagCategories = 'RECUPERACAO' | 'OPORTUNIDADE' | 'REATIVACAO' | 'CONFIRMACAO' | 'CLIENTE_PERDIDO';
+export type TagMotivos = 
+  | 'ATENDIMENTO_RUIM' | 'EXECUCAO_RUIM' | 'ATRASO' | 'PRODUTO_DEFEITO' 
+  | 'UPSELL' | 'NOVA_INDICACAO' | 'VOLTOU_COMPRAR' | 'SATISFEITO' | 'INSATISFEITO';
+export type TagStatus = 'SUGERIDA' | 'CONFIRMADA_OPERADOR' | 'APROVADA_SUPERVISOR' | 'REJEITADA';
+export type TagOrigins = 'AUTOMATICA' | 'MANUAL';
+export type InteractionTypes = 'LIGACAO_CAMPANHA' | 'MENSAGEM_WHATSAPP' | 'CONFIRMACAO_TAG' | 'REJEICAO_TAG';
 
 export interface User {
   id: string;
@@ -137,6 +144,10 @@ export interface Client {
   state?: string;
   zip_code?: string;
   last_purchase_date?: string;
+
+  // New Fields for Dreon Skill v3
+  tags?: string[];
+  campanha_atual_id?: string;
 }
 
 export type ScheduleStatus = 'PENDENTE_APROVACAO' | 'APROVADO' | 'REJEITADO' | 'REPROGRAMADO' | 'CONCLUIDO' | 'CANCELADO';
@@ -225,6 +236,10 @@ export interface Task {
   clientName?: string;
   clientPhone?: string;
   clients?: any; // For full object access if needed
+
+  // New Fields for Dreon Skill v3
+  proposito?: string;
+  campanha_id?: string;
 }
 
 export interface Visit {
@@ -266,6 +281,11 @@ export interface CallRecord {
   protocolId?: string;
   clientName?: string;
   clientPhone?: string;
+
+  // New Fields for Dreon Skill v3
+  proposito?: string;
+  campanha_indicada_id?: string;
+  campanha_id?: string;
 }
 
 export interface Protocol {
@@ -309,6 +329,13 @@ export interface Question {
   type: CallType | 'ALL';
   order: number;
   stageId?: string;
+
+  // New Fields for Dreon Skill v3
+  proposito?: string;
+  campo_resposta?: string;
+  tipo_input?: 'text' | 'select' | 'radio' | 'checkbox';
+  obrigatoria?: boolean;
+  ativo?: boolean;
 }
 
 export interface ExternalSalesperson {
@@ -338,6 +365,9 @@ export interface WhatsAppTask {
   // Joined fields
   clientName?: string;
   clientPhone?: string;
+
+  // Dreon Skill v3
+  proposito?: string;
 }
 
 export interface UnifiedReportRow {
@@ -357,4 +387,88 @@ export interface UnifiedReportRow {
   responseStatus: string; // 'Não Contatado', 'Sem Resposta', 'Respondeu'
   conversionStatus: string; // 'Gerou Venda', 'Sem Venda'
   lastSkipReason?: string;
+}
+
+// Dreon Skill v3 New Interfaces
+
+export interface ClientTag {
+  id: string;
+  client_id: string;
+  call_record_id?: string;
+  campanha_id?: string;
+  categoria: TagCategories | string;
+  motivo: TagMotivos | string;
+  label: string;
+  status: TagStatus;
+  origem: TagOrigins;
+  score_confianca?: number;
+  motivo_detalhe?: string;
+  campos_negativos?: string[];
+  criado_em: string;
+  confirmado_por?: string;
+  confirmado_em?: string;
+  aprovado_por?: string;
+  aprovado_em?: string;
+  rejeitado_por?: string;
+  motivo_rejeicao?: string;
+}
+
+export interface Campanha {
+  id: string;
+  nome: string;
+  descricao?: string;
+  proposito_alvo?: string;
+  call_type_alvo?: CallType | 'ALL' | string;
+  tipo_mensagem?: 'voz' | 'whatsapp' | 'email' | 'ambos' | string;
+  publico_alvo?: 'CLIENT' | 'LEAD' | 'INATIVO' | string;
+  prioridade: number;
+  ativa: boolean;
+  data_inicio?: string;
+  data_fim?: string;
+  criado_em: string;
+  criado_pelo_planner?: boolean;
+  filters_usados?: any;
+  total_clientes?: number;
+  operator_destino_id?: string;
+}
+
+export interface CampanhaInteracao {
+  id: string;
+  campanha_id: string;
+  client_id: string;
+  client_tag_id?: string;
+  tipo_interacao: InteractionTypes | string;
+  canal?: 'voz' | 'whatsapp' | 'email' | string;
+  call_record_id?: string;
+  task_id?: string;
+  resultado?: string;
+  notas?: string;
+  operador_id?: string;
+  data_hora: string;
+}
+
+export interface RegrasCampanha {
+  id: string;
+  campanha_id: string;
+  campo_resposta: string;
+  operador: 'EQUALS' | 'CONTAINS' | 'GREATER_THAN' | 'LESS_THAN' | 'NOT_EQUALS' | string;
+  valor_esperado: string;
+  call_type_origem?: string;
+  proposito_origem?: string;
+  peso: number;
+  ativo: boolean;
+}
+
+export interface CampaignPlannerTemplate {
+  id: string;
+  nome: string;
+  filters: any;
+  criado_por?: string;
+  criado_em: string;
+  usado_em?: string;
+}
+
+export interface TagDecisionResult {
+  tagsToCreate: Partial<ClientTag>[];
+  logs: string[];
 }

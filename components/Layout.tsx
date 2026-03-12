@@ -19,7 +19,8 @@ import {
   Globe,
   Target,
   Upload,
-  FileUp
+  FileUp,
+  Sparkles
 } from 'lucide-react';
 import { UserRole } from '../types';
 
@@ -48,8 +49,11 @@ const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
     { label: 'WhatsApp', icon: MessageCircle, path: '/whatsapp', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },
     { label: 'Gestão', icon: Settings, path: '/admin', roles: [UserRole.ADMIN] },
     { label: 'Relatórios', icon: FileBarChart, path: '/reports', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
-    { label: 'Carga de Trab.', icon: Upload, path: '/workload', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
+    { label: 'Exportar/Carga', icon: Upload, path: '/workload', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
     { label: 'Importar PDF', icon: FileUp, path: '/pdf-import', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
+    { label: 'Importar Produtos (CSV)', icon: Sparkles, path: '/product-import', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
+    { label: 'Importação Inteligente', icon: Sparkles, path: '/admin?tab=tags', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
+    { label: 'Planejar Campanhas', icon: Target, path: '/campaigns', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
   ];
 
   const filteredNav = navItems.filter(item => item.roles.includes(user.role));

@@ -73,6 +73,7 @@ export const WhatsAppQuestionnaireModal: React.FC<WhatsAppQuestionnaireModalProp
                                 responses={responses}
                                 onResponseChange={(qId, val) => setResponses(prev => ({ ...prev, [qId]: val }))}
                                 type={task.type}
+                                proposito={(task as any).proposito}
                             />
 
                             <div className="space-y-4 pt-6 border-t border-slate-200">

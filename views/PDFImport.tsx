@@ -92,14 +92,29 @@ const PDFImport: React.FC<{ user: any }> = ({ user }) => {
                 'id': 'id', 'nome': 'name', 'rua': 'street', 'endereço': 'street', 'endereco': 'street',
                 'telefone principal': 'phone', 'telefone': 'phone', 'tel principal': 'phone', 'tel': 'phone',
                 'telefone secundário': 'phone2', 'telefone secundario': 'phone2',
-                'tel secundário': 'phone2', 'tel secundario': 'phone2',
+                'whatsapp': 'phone', 'celular': 'phone', 'contato': 'phone',
                 'bairro': 'neighborhood', 'cep': 'zip', 'cidade': 'city',
                 'estado': 'state', 'uf': 'state', 'status': '_ignore',
             };
 
+            const isStrictMatch = (text: string, keyword: string) => {
+                const cleanText = text.toLowerCase().trim();
+                const cleanKeyword = keyword.toLowerCase().trim();
+                
+                // For very short keywords, require exact or clear boundary
+                if (cleanKeyword.length <= 3) {
+                    if (cleanText === cleanKeyword) return true;
+                    // Word boundary check: "ID Ext" or "UF (Brasil)"
+                    const regex = new RegExp(`(^|\\s)${cleanKeyword}(\\s|$)`, 'i');
+                    return regex.test(cleanText);
+                }
+                
+                return cleanText.includes(cleanKeyword);
+            };
+
             let headerRowIdx = -1;
             // Column boundaries: { field: string, xStart: number, xEnd: number }
-            interface ColBoundary { field: string; xCenter: number; }
+            interface ColBoundary { field: string; xCenter: number; originalHeader: string; }
             let colBoundaries: ColBoundary[] = [];
 
             for (let ri = 0; ri < rows.length; ri++) {
@@ -129,17 +144,27 @@ const PDFImport: React.FC<{ user: any }> = ({ user }) => {
 
                         // Exact match first
                         if (HEADER_KEYWORDS[cellLower]) {
-                            colBoundaries.push({ field: HEADER_KEYWORDS[cellLower], xCenter: cell.x });
+                            colBoundaries.push({ field: HEADER_KEYWORDS[cellLower], xCenter: cell.x, originalHeader: cell.text });
                             matched = true;
                         }
 
                         if (!matched) {
-                            // Partial match
+                            // Partial match logic refined
                             for (const [keyword, field] of Object.entries(HEADER_KEYWORDS)) {
-                                if (cellLower.includes(keyword)) {
-                                    // Don't duplicate fields
+                                if (isStrictMatch(cellLower, keyword)) {
+                                    // CRITICAL BUG FIX: If we matched 'name', check if it's actually a street column
+                                    if (field === 'name') {
+                                        const looksLikeStreet = cellLower.includes('rua') || cellLower.includes('endereço') || cellLower.includes('endereco');
+                                        if (looksLikeStreet) continue; 
+                                    }
+
+                                    // Prevenção de falso positivo para 'id' em 'cidade' ou 'estado'
+                                    if (field === 'id' && (cellLower.includes('cidade') || cellLower.includes('estado'))) {
+                                        continue;
+                                    }
+
                                     if (!colBoundaries.find(cb => cb.field === field)) {
-                                        colBoundaries.push({ field, xCenter: cell.x });
+                                        colBoundaries.push({ field, xCenter: cell.x, originalHeader: cell.text });
                                     }
                                     break;
                                 }
@@ -157,26 +182,9 @@ const PDFImport: React.FC<{ user: any }> = ({ user }) => {
                 }
             }
 
-            // Step 4: Build midpoint-based column ranges
-            // Each column owns the range from its left midpoint to its right midpoint
-            interface ColRange { field: string; xStart: number; xEnd: number; }
-            const colRanges: ColRange[] = [];
+            console.log('[PDF Import] Column boundaries final:', colBoundaries.map(cb => `${cb.field}: x=${cb.xCenter}`));
 
-            for (let ci = 0; ci < colBoundaries.length; ci++) {
-                const prev = ci > 0 ? colBoundaries[ci - 1].xCenter : 0;
-                const curr = colBoundaries[ci].xCenter;
-                const next = ci < colBoundaries.length - 1 ? colBoundaries[ci + 1].xCenter : 99999;
-
-                colRanges.push({
-                    field: colBoundaries[ci].field,
-                    xStart: ci === 0 ? 0 : Math.round((prev + curr) / 2),
-                    xEnd: ci === colBoundaries.length - 1 ? 99999 : Math.round((curr + next) / 2)
-                });
-            }
-
-            console.log('[PDF Import] Column ranges:', colRanges.map(cr => `${cr.field}: ${cr.xStart}-${cr.xEnd}`));
-
-            // Parse data rows using column ranges
+            // Parse data rows using Proximity logic
             const cleanPhone = (raw: string): string => {
                 let cleaned = raw.replace(/\D/g, '');
                 if (cleaned.startsWith('0') && cleaned.length > 10) cleaned = cleaned.substring(1);
@@ -184,11 +192,19 @@ const PDFImport: React.FC<{ user: any }> = ({ user }) => {
             };
 
             const assignToColumn = (x: number): string => {
-                if (colRanges.length === 0) return '';
-                for (const cr of colRanges) {
-                    if (x >= cr.xStart && x < cr.xEnd) return cr.field;
+                if (colBoundaries.length === 0) return '';
+                // Find column with closest center to the item's X
+                let closest = colBoundaries[0];
+                let minDiff = Math.abs(x - closest.xCenter);
+
+                for (let i = 1; i < colBoundaries.length; i++) {
+                    const diff = Math.abs(x - colBoundaries[i].xCenter);
+                    if (diff < minDiff) {
+                        minDiff = diff;
+                        closest = colBoundaries[i];
+                    }
                 }
-                return colRanges[colRanges.length - 1].field; // fallback to last column
+                return closest.field;
             };
 
             const extractedRows: ParsedClientRow[] = [];
@@ -209,13 +225,24 @@ const PDFImport: React.FC<{ user: any }> = ({ user }) => {
                     }
                 }
 
-                const nameVal = record['name'] || '';
-                if (!nameVal || nameVal.toLowerCase() === 'nome') continue;
-
                 const idVal = record['id'] || '';
                 if (idVal.toLowerCase() === 'id') continue;
 
-                const streetVal = record['street'] || '';
+                let nameVal = record['name'] || '';
+                let streetVal = record['street'] || '';
+
+                // HEURISTIC: If "Nome" contains address keywords, it's likely misassigned
+                const streetKeywords = ['rua', 'alameda', 'avenida', 'av.', 'estrada', 'travessa', 'praça', 'bloco', 'apartamento', 'apto', 'casa', 'nº'];
+                const nameLower = nameVal.toLowerCase();
+                
+                if (streetKeywords.some(kw => nameLower.includes(kw) && !nameLower.includes('empresa') && !nameLower.includes('ltda'))) {
+                    // If street is empty or shorter, swap or append
+                    if (!streetVal) {
+                        streetVal = nameVal;
+                        nameVal = 'Nome não identificado';
+                    }
+                }
+
                 const phoneRaw = record['phone'] || '';
                 const phone2Raw = record['phone2'] || '';
                 const neighborhoodVal = record['neighborhood'] || '';
@@ -260,13 +287,15 @@ const PDFImport: React.FC<{ user: any }> = ({ user }) => {
             }
 
             // Build debug text
-            let dbg = `Colunas detectadas (${colRanges.length}):\n`;
-            colRanges.forEach(cr => { dbg += `  ${cr.field} → X range: ${cr.xStart} - ${cr.xEnd}\n`; });
-            dbg += `\nLinhas de dados: ${dataRows.length}\nLinhas válidas: ${extractedRows.length}\n`;
+            let dbg = `Colunas Detectadas (${colBoundaries.length}):\n`;
+            colBoundaries.forEach(cb => { 
+                dbg += `  • ${cb.field.toUpperCase()} → Centralizado em X=${cb.xCenter} (Título: "${cb.originalHeader}")\n`; 
+            });
+            dbg += `\nTotal de Linhas: ${rows.length}\nLinhas de Dados Identificadas: ${extractedRows.length}\n`;
             if (extractedRows.length > 0) {
                 dbg += `\nAmostra (linha 1):\n`;
                 const s = extractedRows[0];
-                dbg += `  ID: ${s.external_id}\n  Nome: ${s.name}\n  Rua: ${s.parsed_address.street || '-'}\n  Bairro: ${s.parsed_address.neighborhood || '-'}\n  Cidade: ${s.parsed_address.city || '-'}\n  Estado: ${s.parsed_address.state || '-'}\n  CEP: ${s.parsed_address.zip_code || '-'}\n  Tel1: ${s.parsed_phones.primary}\n  Tel2: ${s.parsed_phones.secondary || '-'}\n`;
+                dbg += `  ID: ${s.external_id}\n  Nome: ${s.name}\n  Rua: ${s.parsed_address.street || '-'}\n  Bairro: ${s.parsed_address.neighborhood || '-'}\n  Tel1: ${s.parsed_phones.primary}\n`;
             }
             setDebugText(dbg);
 
