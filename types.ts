@@ -213,6 +213,8 @@ export interface Task {
   skipReason?: string;
   scheduledFor?: string; // ISO Date for callback
   scheduleReason?: string;
+  createdAt: string;
+  updatedAt?: string;
 
   // New fields for Scheduling/Approval
   approvalStatus?: 'PENDING' | 'APPROVED' | 'RESOLVED';
@@ -262,6 +264,8 @@ export interface CallRecord {
   responses: Record<string, any>;
   type: CallType;
   protocolId?: string;
+  clientName?: string;
+  clientPhone?: string;
 }
 
 export interface Protocol {

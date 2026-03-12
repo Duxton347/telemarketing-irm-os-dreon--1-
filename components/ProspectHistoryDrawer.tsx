@@ -35,10 +35,12 @@ const ProspectHistoryDrawer: React.FC<Props> = ({ prospectId, onClose }) => {
         return (
             <div className="mt-3 space-y-1">
                 {Object.entries(responses).map(([k, v]) => {
-                    if (k === 'upsell_offer' || k === 'note' || k === 'is_bulk_upsell' || k === 'call_type') return null;
+                    if (k === 'upsell_offer' || k === 'is_bulk_upsell' || k === 'call_type') return null;
+                    if (k === 'note' && !v) return null; // Only hide if empty
+                    const label = k === 'note' ? 'Observação' : k;
                     return (
                         <p key={k} className="text-[10px] text-slate-500 font-medium">
-                            • <span className="font-bold">{v}</span>
+                            • <span className="font-bold">{label}: {v}</span>
                         </p>
                     );
                 })}

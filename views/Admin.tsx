@@ -24,6 +24,10 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   const [pendingWhatsAppTasks, setPendingWhatsAppTasks] = React.useState<WhatsAppTask[]>([]);
   const [skippedWhatsAppTasks, setSkippedWhatsAppTasks] = React.useState<WhatsAppTask[]>([]);
   const [taskFilterChannel, setTaskFilterChannel] = React.useState<'VOICE' | 'WHATSAPP'>('VOICE');
+  const [skipDateFilter, setSkipDateFilter] = React.useState({
+    start: new Date().toISOString().split('T')[0],
+    end: new Date().toISOString().split('T')[0]
+  });
   const [isTypeModalOpen, setIsTypeModalOpen] = React.useState(false);
   const [taskToEditType, setTaskToEditType] = React.useState<any>(null);
   const [csvPreview, setCsvPreview] = React.useState<any[]>([]);
@@ -137,11 +141,54 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
     }
   };
 
+  const handleDeleteSelectedTasks = async () => {
+    if (selectedTaskIds.length === 0) return alert("Selecione pelo menos uma tarefa para excluir.");
+    if (!confirm(`Deseja realmente excluir AS ${selectedTaskIds.length} TAREFAS SELECIONADAS? Essa ação é irreversível.`)) return;
+
+    setIsProcessing(true);
+    try {
+      if (taskFilterChannel === 'WHATSAPP') {
+        setPendingWhatsAppTasks(prev => prev.filter(t => !selectedTaskIds.includes(t.id)));
+        await dataService.deleteMultipleWhatsAppTasks(selectedTaskIds);
+      } else {
+        setPendingTasks(prev => prev.filter(t => !selectedTaskIds.includes(t.id)));
+        await dataService.deleteMultipleTasks(selectedTaskIds);
+      }
+      setSelectedTaskIds([]);
+      alert("Tarefas selecionadas excluídas com sucesso!");
+      await refreshData();
+    } catch (e: any) {
+      alert(`Erro ao excluir tarefas: ${e.message}`);
+      await refreshData();
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleRecoverTask = async (taskId: string) => {
+    setIsProcessing(true);
+    try {
+      if (taskFilterChannel === 'WHATSAPP') {
+        const { error } = await dataService.updateWhatsAppTaskStatus(taskId, 'pending');
+        if (error) throw error;
+      } else {
+        const { error } = await dataService.updateTaskStatus(taskId, 'pending');
+        if (error) throw error;
+      }
+      alert("Tarefa restaurada para a fila de 'Pendentes'!");
+      await refreshData();
+    } catch (e: any) {
+      alert(`Erro ao restaurar tarefa: ${e.message}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleClearOperatorTasks = async () => {
     if (!selectedOperatorId) return alert("Selecione um operador no menu suspenso primeiro.");
 
     const operatorName = users.find(u => u.id === selectedOperatorId)?.name || 'selecionado';
-    if (!confirm(`ATENÇÃO: Deseja apagar TODAS as pendências da fila de ${operatorName}? Esta ação limpará duplicadas e pulados. É irreversível.`)) return;
+    if (!confirm(`ATENÇÃO: Deseja apagar TODAS as pendências da fila de ${operatorName}? (As tarefas "puladas" serão preservadas). É irreversível.`)) return;
 
     setIsProcessing(true);
     // Limpeza imediata local para evitar lag visual
@@ -153,7 +200,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
         await dataService.deleteWhatsAppTasksByOperator(targetOpId);
       } else {
         setPendingTasks(prev => prev.filter(t => t.assignedTo !== targetOpId));
-        setSkippedTasks(prev => prev.filter(t => t.assignedTo !== targetOpId));
+        // setSkippedTasks(prev => prev.filter(t => t.assignedTo !== targetOpId)); // Do not clear skipped tasks locally
         await dataService.deleteTasksByOperator(targetOpId);
       }
       alert("Fila limpa com sucesso no servidor e localmente!");
@@ -449,22 +496,6 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
     } finally { setIsProcessing(false); }
   };
 
-  const handleRecoverTask = async (taskId: string) => {
-    setIsProcessing(true);
-    try {
-      if (taskFilterChannel === 'WHATSAPP') {
-        await dataService.updateWhatsAppTask(taskId, { status: 'pending', skip_reason: null, skip_note: null });
-      } else {
-        await dataService.updateTask(taskId, { status: 'pending' });
-      }
-      await refreshData();
-      alert("Tarefa restaurada!");
-    } catch (e) {
-      alert("Erro ao restaurar.");
-    } finally {
-      setIsProcessing(false);
-    }
-  };
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -487,6 +518,19 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
       if (dups.length === 0) alert("Nenhum cliente duplicado encontrado!");
     } catch (e) {
       alert("Erro ao varrer clientes.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleBackfillSkips = async () => {
+    setIsProcessing(true);
+    try {
+      const { updatedVoice, updatedWA } = await dataService.backfillSkipReasons();
+      alert(`Processamento concluído! Atualizados:\n- ${updatedVoice} Ligações\n- ${updatedWA} WhatsApps`);
+      await refreshData();
+    } catch (e: any) {
+      alert("Erro ao processar histórico: " + e.message);
     } finally {
       setIsProcessing(false);
     }
@@ -544,6 +588,15 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                   <option key={u.id} value={u.id}>{u.name}</option>
                 ))}
               </select>
+              
+              <button
+                onClick={handleDeleteSelectedTasks}
+                disabled={isProcessing || selectedTaskIds.length === 0}
+                className="flex items-center gap-2 px-6 py-3 bg-red-100 text-red-600 rounded-xl font-black uppercase text-[10px] shadow-sm hover:bg-red-200 transition-all disabled:opacity-30"
+              >
+                <Trash2 size={16} /> Excluir Selecionadas ({selectedTaskIds.length})
+              </button>
+
               <button
                 onClick={handleClearOperatorTasks}
                 disabled={isProcessing || !selectedOperatorId}
@@ -900,66 +953,100 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
             <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-2">Recupere contatos que foram ignorados pelos operadores.</p>
           </div>
 
-          <div className="flex gap-4">
-            <button
-              onClick={() => { setTaskFilterChannel('VOICE'); setSelectedTaskIds([]); }}
-              className={`flex-1 p-4 rounded-xl text-[9px] font-black uppercase tracking-widest border transition-all flex items-center justify-center gap-2 ${taskFilterChannel === 'VOICE' ? 'bg-blue-600 text-white border-blue-600 shadow-lg' : 'bg-white text-slate-400 border-slate-100 hover:border-slate-200'}`}
-            >
-              <Phone size={16} /> Fila de Ligações
-            </button>
-            <button
-              onClick={() => { setTaskFilterChannel('WHATSAPP'); setSelectedTaskIds([]); }}
-              className={`flex-1 p-4 rounded-xl text-[9px] font-black uppercase tracking-widest border transition-all flex items-center justify-center gap-2 ${taskFilterChannel === 'WHATSAPP' ? 'bg-green-600 text-white border-green-600 shadow-lg' : 'bg-white text-slate-400 border-slate-100 hover:border-slate-200'}`}
-            >
-              <MessageCircle size={16} /> Fila do WhatsApp
-            </button>
+          <div className="flex flex-col md:flex-row gap-4 mb-6">
+            <div className="flex bg-slate-50 p-1 rounded-xl flex-1">
+              <button
+                onClick={() => { setTaskFilterChannel('VOICE'); setSelectedTaskIds([]); }}
+                className={`flex-1 py-3 px-4 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${taskFilterChannel === 'VOICE' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+              >
+                <Phone size={14} /> Fila de Ligações
+              </button>
+              <button
+                onClick={() => { setTaskFilterChannel('WHATSAPP'); setSelectedTaskIds([]); }}
+                className={`flex-1 py-3 px-4 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${taskFilterChannel === 'WHATSAPP' ? 'bg-white text-green-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'}`}
+              >
+                <MessageCircle size={14} /> Fila do WhatsApp
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between gap-3 bg-slate-50 p-2 rounded-xl">
+               <div className="flex items-center gap-2">
+                 <Calendar size={16} className="text-slate-400 ml-2" />
+                 <input
+                    type="date"
+                    value={skipDateFilter.start}
+                    max={skipDateFilter.end}
+                    onChange={e => setSkipDateFilter(prev => ({ ...prev, start: e.target.value }))}
+                    className="bg-transparent border-none text-xs font-bold text-slate-600 outline-none"
+                 />
+               </div>
+               <span className="text-slate-300 font-bold">-</span>
+               <div className="flex items-center gap-2">
+                 <input
+                    type="date"
+                    value={skipDateFilter.end}
+                    min={skipDateFilter.start}
+                    onChange={e => setSkipDateFilter(prev => ({ ...prev, end: e.target.value }))}
+                    className="bg-transparent border-none text-xs font-bold text-slate-600 outline-none pr-2"
+                 />
+               </div>
+            </div>
           </div>
 
-          {(taskFilterChannel === 'VOICE' ? skippedTasks : skippedWhatsAppTasks).length === 0 ? (
-            <div className="py-20 flex flex-col items-center justify-center gap-6 opacity-30">
-              <RotateCcw size={64} className="text-slate-300" />
-              <p className="font-black uppercase text-xs tracking-widest text-slate-400">Nenhuma tarefa ignorada encontrada.</p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {(taskFilterChannel === 'VOICE' ? skippedTasks : skippedWhatsAppTasks).map((task: any) => (
-                <div key={task.id} className={`p-8 rounded-[32px] border flex flex-col justify-between group transition-all ${selectedTaskIds.includes(task.id) ? 'bg-blue-50 border-blue-300 shadow-md' : 'bg-slate-50 border-slate-100 hover:border-blue-200'}`}>
-                  <div className="space-y-4">
-                    <div className="flex justify-between items-start">
-                      <div className="flex gap-3 items-center">
-                        <input
-                          type="checkbox"
-                          checked={selectedTaskIds.includes(task.id)}
-                          onChange={(e) => {
-                            if (e.target.checked) setSelectedTaskIds(prev => [...prev, task.id]);
-                            else setSelectedTaskIds(prev => prev.filter(id => id !== task.id));
-                          }}
-                          className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                        />
-                        <span className="px-3 py-1 bg-slate-900 text-white rounded-lg text-[8px] font-black uppercase tracking-widest">{task.type}</span>
+          {(() => {
+             const filteredList = (taskFilterChannel === 'VOICE' ? skippedTasks : skippedWhatsAppTasks).filter(task => {
+                const taskDate = (task as any).updatedAt || task.createdAt;
+                if (!taskDate || typeof taskDate !== 'string') return false;
+                const tDateStr = taskDate.split('T')[0];
+                return tDateStr >= skipDateFilter.start && tDateStr <= skipDateFilter.end;
+             });
+
+             return filteredList.length === 0 ? (
+               <div className="py-20 flex flex-col items-center justify-center gap-6 opacity-30">
+                 <RotateCcw size={64} className="text-slate-300" />
+                 <p className="font-black uppercase text-xs tracking-widest text-slate-400">Nenhuma tarefa ignorada encontrada para este período.</p>
+               </div>
+             ) : (
+               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                 {filteredList.map((task: any) => (
+                    <div key={task.id} className={`p-8 rounded-[32px] border flex flex-col justify-between group transition-all ${selectedTaskIds.includes(task.id) ? 'bg-blue-50 border-blue-300 shadow-md' : 'bg-slate-50 border-slate-100 hover:border-blue-200'}`}>
+                      <div className="space-y-4">
+                        <div className="flex justify-between items-start">
+                          <div className="flex gap-3 items-center">
+                            <input
+                              type="checkbox"
+                              checked={selectedTaskIds.includes(task.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) setSelectedTaskIds(prev => [...prev, task.id]);
+                                else setSelectedTaskIds(prev => prev.filter(id => id !== task.id));
+                              }}
+                              className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            <span className="px-3 py-1 bg-slate-900 text-white rounded-lg text-[8px] font-black uppercase tracking-widest">{task.type}</span>
+                          </div>
+                          <span className="text-[10px] font-black text-red-500 uppercase flex items-center gap-1"><AlertCircle size={12} /> Pulado</span>
+                        </div>
+                        <div>
+                          <h4 className="text-lg font-black text-slate-800 tracking-tighter">{task.client?.name || 'Cliente Desconhecido'}</h4>
+                          <p className="text-xs font-bold text-slate-400 flex items-center gap-2 mt-1"><Phone size={14} className="text-blue-500" /> {task.client?.phone}</p>
+                        </div>
+                        <div className="p-4 bg-white rounded-2xl border border-slate-100">
+                          <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Motivo informado:</p>
+                          <p className="text-xs font-bold text-slate-700 italic">"{task.skipReason || 'Não informado'}"</p>
+                        </div>
                       </div>
-                      <span className="text-[10px] font-black text-red-500 uppercase flex items-center gap-1"><AlertCircle size={12} /> Pulado</span>
+                      <button
+                        onClick={() => handleRecoverTask(task.id)}
+                        disabled={isProcessing}
+                        className="mt-8 w-full py-4 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-[9px] shadow-lg flex items-center justify-center gap-2 hover:bg-blue-700 active:scale-95 transition-all disabled:opacity-50"
+                      >
+                        <PlayCircle size={14} /> Restaurar para Fila
+                      </button>
                     </div>
-                    <div>
-                      <h4 className="text-lg font-black text-slate-800 tracking-tighter">{task.client?.name || 'Cliente Desconhecido'}</h4>
-                      <p className="text-xs font-bold text-slate-400 flex items-center gap-2 mt-1"><Phone size={14} className="text-blue-500" /> {task.client?.phone}</p>
-                    </div>
-                    <div className="p-4 bg-white rounded-2xl border border-slate-100">
-                      <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Motivo informado:</p>
-                      <p className="text-xs font-bold text-slate-700 italic">"{task.skipReason || 'Não informado'}"</p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => handleRecoverTask(task.id)}
-                    disabled={isProcessing}
-                    className="mt-8 w-full py-4 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-[9px] shadow-lg flex items-center justify-center gap-2 hover:bg-blue-700 active:scale-95 transition-all disabled:opacity-50"
-                  >
-                    <PlayCircle size={14} /> Restaurar para Fila
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+                 ))}
+               </div>
+             );
+          })()}
         </div>
       )}
 
@@ -1009,6 +1096,30 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                   </p>
                 </div>
               </form>
+            </div>
+
+            <div className="p-8 bg-slate-50 border border-slate-200 rounded-[32px] space-y-6 mt-8">
+              <div className="flex items-start gap-4">
+                <div className="p-3 bg-orange-100 text-orange-600 rounded-xl">
+                  <RotateCcw size={24} />
+                </div>
+                <div className="flex-1">
+                  <h4 className="text-lg font-black text-slate-800">Sincronizar Histórico de Tarefas Puladas</h4>
+                  <p className="text-xs text-slate-500 font-medium mt-1">
+                    Varre todo o histórico da base de dados e marca todas as tarefas puladas 
+                    antigas com as novas tags de <b>[ANTES DA CHAMADA]</b> ou <b>[APÓS INICIAR]</b> 
+                    automaticamente.
+                  </p>
+                  <button
+                    onClick={handleBackfillSkips}
+                    disabled={isProcessing}
+                    className="mt-6 px-8 py-3 bg-orange-600 text-white rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-lg hover:bg-orange-500 transition-all disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <RotateCcw size={16} />}
+                    Processar Todo o Histórico
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>

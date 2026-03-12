@@ -24,7 +24,8 @@ const MetricCard: React.FC<{
    icon: React.ElementType;
    trend?: { value: number; isUp: boolean };
    color?: 'blue' | 'emerald' | 'amber' | 'rose' | 'slate';
-}> = ({ title, value, subtitle, icon: Icon, trend, color = 'slate' }) => {
+   onClick?: () => void;
+}> = ({ title, value, subtitle, icon: Icon, trend, color = 'slate', onClick }) => {
    const colorMap = {
       blue: 'bg-blue-50 text-blue-600 border-blue-100',
       emerald: 'bg-emerald-50 text-emerald-600 border-emerald-100',
@@ -34,7 +35,7 @@ const MetricCard: React.FC<{
    };
 
    return (
-      <div className={`p-6 rounded-[32px] border ${colorMap[color]} relative overflow-hidden group hover:shadow-md transition-all`}>
+      <div onClick={onClick} className={`p-6 rounded-[32px] border ${colorMap[color]} relative overflow-hidden group transition-all ${onClick ? 'cursor-pointer hover:shadow-xl hover:-translate-y-1 active:scale-95' : 'hover:shadow-md'}`}>
          <div className="flex justify-between items-start mb-4">
             <div className={`p-3 bg-white rounded-2xl shadow-sm`}>
                <Icon size={20} className={color === 'slate' ? 'text-slate-900' : `text-${color}-500`} />
@@ -71,6 +72,9 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
    const [filterOperator, setFilterOperator] = React.useState<string>('all');
    const [filterType, setFilterType] = React.useState<'all' | 'call' | 'whatsapp'>('all');
    const [selectedInteraction, setSelectedInteraction] = React.useState<any>(null);
+   const [selectedGapAudit, setSelectedGapAudit] = React.useState<{ op: User, gaps: any[] } | null>(null);
+   const [isSkipAuditModalOpen, setIsSkipAuditModalOpen] = React.useState(false);
+   const [skipAuditData, setSkipAuditData] = React.useState<any[]>([]);
 
    // Data State
    const [calls, setCalls] = React.useState<CallRecord[]>([]);
@@ -147,14 +151,80 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
             ...fetchedWa.filter(w => w.status === 'completed').map(w => w.clientId)
          ]).size;
 
-         const totalInteractions = fetchedCalls.length + fetchedWa.filter(w => w.status === 'completed' || w.status === 'skipped').length;
+         // Use OperatorEvents for accurate timing of skips today
+         const skippedEvents = fetchedEvents.filter(e => e.eventType === OperatorEventType.PULAR_ATENDIMENTO);
+
+         const completedTaskIds = new Set([
+            ...fetchedCalls.map(c => c.taskId),
+            ...fetchedWa.filter(w => w.status === 'completed').map(w => w.sourceId || w.id) 
+         ]);
+         
+         let pureSkipCount = 0;
+         const skipAuditDetails: any[] = [];
+         const processedSkipTaskIds = new Set<string>();
+
+         skippedEvents.forEach(evt => {
+            if (evt.taskId && !completedTaskIds.has(evt.taskId) && !processedSkipTaskIds.has(evt.taskId)) {
+               processedSkipTaskIds.add(evt.taskId);
+               
+               // Look up task details
+               const task = fetchedTasks.find(t => t.id === evt.taskId);
+               const waTask = fetchedWa.find(w => w.id === evt.taskId || w.sourceId === evt.taskId);
+               
+               if (task || waTask) {
+                   pureSkipCount++;
+                   const assignedTo = task ? task.assignedTo : waTask?.operatorId;
+                   const clientId = task ? task.clientId : waTask?.clientId;
+                   const clientName = task ? (task.clientName || task.clients?.name) : waTask?.clientName;
+                   const note = evt.note || (task ? task.skipReason : waTask?.note) || 'Sem motivo informado';
+                   const op = fetchedOps.find(o => o.id === assignedTo);
+
+                   skipAuditDetails.push({
+                       id: evt.id,
+                       operatorId: assignedTo,
+                       operatorName: op?.name || 'Desconhecido',
+                       clientId: clientId,
+                       clientName: clientName || 'Desconhecido',
+                       timestamp: evt.timestamp,
+                       note: note
+                   });
+               }
+            }
+         });
+
+         // Also count any WhatsApp specific skip events if they weren't caught by PULAR_ATENDIMENTO
+         const waSkipEvents = fetchedEvents.filter(e => e.eventType === OperatorEventType.WHATSAPP_SKIP);
+         waSkipEvents.forEach(evt => {
+             if (evt.taskId && !completedTaskIds.has(evt.taskId) && !processedSkipTaskIds.has(evt.taskId)) {
+                 processedSkipTaskIds.add(evt.taskId);
+                 const waTask = fetchedWa.find(w => w.id === evt.taskId || w.sourceId === evt.taskId);
+                 if (waTask) {
+                     pureSkipCount++;
+                     const op = fetchedOps.find(o => o.id === waTask.operatorId);
+                     skipAuditDetails.push({
+                         id: evt.id,
+                         operatorId: waTask.operatorId,
+                         operatorName: op?.name || 'Desconhecido',
+                         clientId: waTask.clientId,
+                         clientName: waTask.clientName || 'Desconhecido',
+                         timestamp: evt.timestamp,
+                         note: evt.note || waTask.note || 'Sem motivo informado'
+                     });
+                 }
+             }
+         });
+
+         setSkipAuditData(skipAuditDetails.sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
+
+         const totalInteractions = fetchedCalls.length + fetchedWa.filter(w => w.status === 'completed').length + pureSkipCount;
 
          setMetrics({
             revenue: totalRevenue,
             conversionRate: uniqueContacts > 0 ? (totalSalesCount / uniqueContacts) * 100 : 0,
             ticketAverage: totalSalesCount > 0 ? totalRevenue / totalSalesCount : 0,
             totalContacts: totalInteractions,
-            totalSales: totalSalesCount
+            totalSales: totalSalesCount,
+            pureSkips: pureSkipCount // Store to display in subtitle
          });
 
       } catch (e) {
@@ -221,7 +291,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
       if (searchTerm) {
          const lower = searchTerm.toLowerCase();
          data = data.filter(d => {
-            const client = clients.find(c => c.id === d.clientId);
+            const client = clients.find(c => c.id === d.clientId) || prospects.find(p => p.id === d.clientId);
             const clientName = client?.name || (d as any).clientName || '';
             const clientPhone = client?.phone || (d as any).clientPhone || '';
             return clientName.toLowerCase().includes(lower) || clientPhone.includes(lower);
@@ -236,7 +306,8 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
       if (!selectedInteraction) return null;
 
       const isCall = selectedInteraction._type === 'call';
-      const client = clients.find(c => c.id === selectedInteraction.clientId);
+      const isWhatsApp = selectedInteraction.type === CallType.WHATSAPP || selectedInteraction._type === 'whatsapp';
+      const client = clients.find(c => c.id === selectedInteraction.clientId) || prospects.find(p => p.id === selectedInteraction.clientId);
       const op = operators.find(o => o.id === (isCall ? selectedInteraction.operatorId : selectedInteraction.assignedTo));
       const date = new Date(selectedInteraction.date);
 
@@ -379,6 +450,84 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
       );
    };
 
+   // --- GAP AUDIT MODAL ---
+   const renderGapAuditModal = () => {
+      if (!selectedGapAudit) return null;
+
+      const { op, gaps } = selectedGapAudit;
+      const longPauses = gaps.filter(g => g.duration >= 3600);
+
+      return (
+         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md" onClick={() => setSelectedGapAudit(null)}>
+            <div className="bg-white rounded-[32px] w-full max-w-2xl max-h-[90vh] overflow-hidden shadow-2xl animate-in zoom-in-95 duration-200 flex flex-col" onClick={e => e.stopPropagation()}>
+               
+               <div className="p-8 border-b border-slate-100 flex justify-between items-start bg-slate-50/80 backdrop-blur-sm">
+                  <div>
+                     <h3 className="text-xl font-black text-slate-800 tracking-tight">Auditoria de Gaps: {op.name}</h3>
+                     <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">Timeline de Inatividade entre Atendimentos</p>
+                  </div>
+                  <button onClick={() => setSelectedGapAudit(null)} className="p-2 hover:bg-slate-200 rounded-full transition-colors">
+                     <X size={24} className="text-slate-400" />
+                  </button>
+               </div>
+
+               <div className="p-8 overflow-y-auto flex-1 space-y-4">
+                  {gaps.length === 0 ? (
+                     <div className="text-center py-20 bg-slate-50 rounded-3xl border border-dashed border-slate-200">
+                        <p className="text-sm font-bold text-slate-400 italic">Nenhum intervalo capturado para este período.</p>
+                     </div>
+                  ) : (
+                     <div className="space-y-3">
+                        {gaps.map((gap, idx) => (
+                           <div key={idx} className={`p-4 rounded-2xl border flex items-center justify-between transition-all hover:shadow-sm ${gap.duration >= 3600 ? 'bg-rose-50 border-rose-100' : 'bg-white border-slate-100'}`}>
+                              <div className="flex items-center gap-4">
+                                 <div className={`p-2 rounded-xl ${gap.duration >= 3600 ? 'bg-rose-100 text-rose-600' : 'bg-slate-100 text-slate-500'}`}>
+                                    <Clock size={16} />
+                                 </div>
+                                 <div>
+                                    <div className="flex items-center gap-2">
+                                       <span className="text-xs font-black text-slate-700">{new Date(gap.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                       <span className="text-[10px] font-black text-slate-300">➜</span>
+                                       <span className="text-xs font-black text-slate-700">{new Date(gap.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                    </div>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase mt-0.5">
+                                       {gap.duration >= 3600 ? 'Pausa Longa Determinada' : 'Intervalo entre atendimentos'}
+                                    </p>
+                                 </div>
+                              </div>
+                              <div className="text-right">
+                                 <span className={`text-sm font-black ${gap.duration >= 3600 ? 'text-rose-600' : 'text-slate-700'}`}>
+                                    {gap.duration >= 3600 
+                                       ? `${Math.floor(gap.duration / 3600)}h ${Math.floor((gap.duration % 3600) / 60)}m` 
+                                       : `${Math.floor(gap.duration / 60)}m ${Math.round(gap.duration % 60)}s`}
+                                 </span>
+                              </div>
+                           </div>
+                        ))}
+                     </div>
+                  )}
+               </div>
+
+               <div className="p-6 bg-slate-50 border-t border-slate-100 flex justify-between items-center">
+                  <div className="flex gap-4">
+                     <div className="flex flex-col">
+                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Total Gaps</span>
+                        <span className="text-sm font-black text-slate-700">{gaps.length}</span>
+                     </div>
+                     <div className="flex flex-col">
+                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Pausas &gt;1h</span>
+                        <span className="text-sm font-black text-rose-600">{longPauses.length}</span>
+                     </div>
+                  </div>
+                  <button onClick={() => setSelectedGapAudit(null)} className="px-6 py-2 bg-slate-900 text-white text-xs font-black uppercase rounded-xl hover:bg-slate-800 transition-colors">
+                     Fechar
+                  </button>
+               </div>
+            </div>
+         </div>
+      );
+   };
+
    // --- HELPER CALCULATIONS ---
    const getMedian = (values: number[]) => {
       if (values.length === 0) return 0;
@@ -501,6 +650,8 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                            title="Contatos Totais"
                            value={metrics.totalContacts}
                            icon={Phone} color="slate"
+                           subtitle={`Inclui ${metrics.pureSkips || 0} pulos diretos (Ver)`}
+                           onClick={() => setIsSkipAuditModalOpen(true)}
                         />
                      </div>
 
@@ -686,50 +837,96 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                               <th className="pb-6 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">WhatsApp</th>
                               <th className="pb-6 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">Vendas</th>
                               <th className="pb-6 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">TMA</th>
-                              <th className="pb-6 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">Gap Mediano</th>
+                              <th className="pb-6 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">Gap Médio</th>
+                              <th className="pb-6 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">Pausas (&gt;1h)</th>
                               <th className="pb-6 pr-4 text-[10px] font-black uppercase text-slate-400 tracking-widest text-right">Score</th>
                            </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-50">
                            {operators.filter(op => op.role !== 'ADMIN').map(op => {
-                              const opCalls = calls.filter(c => c.operatorId === op.id && c.type !== CallType.WHATSAPP);
-                              const opWaCount = whatsappTasks.filter(w => w.assignedTo === op.id && w.status === 'completed').length + calls.filter(c => c.operatorId === op.id && c.type === CallType.WHATSAPP).length;
+                                                            const opEvents = events.filter(e => e.operatorId === op.id);
+                              const isWhatsAppEvent = (e: any) => 
+                                 e.eventType === OperatorEventType.WHATSAPP_COMPLETE || 
+                                 e.eventType === OperatorEventType.WHATSAPP_START || 
+                                 e.eventType === OperatorEventType.WHATSAPP_SKIP || 
+                                 ((e.eventType === OperatorEventType.PULAR_ATENDIMENTO || e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO) && e.note?.toLowerCase().includes('whatsapp'));
+
+                              const opCallsCount = opEvents.filter(e => e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO && !e.note?.toLowerCase().includes('whatsapp')).length;
+                              const opCalls = opCallsCount;
+                                                            const opWaCount = opEvents.filter(isWhatsAppEvent).length;
                               const opSales = sales.filter(s => s.operatorId === op.id && s.status === SaleStatus.ENTREGUE);
 
-                              const totalTime = opCalls.reduce((acc, c) => acc + (c.duration || 0), 0);
-                              const tma = opCalls.length > 0 ? totalTime / opCalls.length : 0;
+                              const opCallsRecords = calls.filter(c => c.operatorId === op.id && c.type !== CallType.WHATSAPP);
+                              const totalTime = opCallsRecords.reduce((acc, c) => acc + (c.duration || 0), 0);
+                              const tma = opCallsCount > 0 ? totalTime / opCallsCount : 0;
 
                               // Gap Calculation
-                              const opEvents = events.filter(e => e.operatorId === op.id).sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-                              const gaps: number[] = [];
-                              let lastEnd = 0;
+                                                            const sortedOpEvents = [...opEvents].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+                              const allGaps: any[] = [];
+                              let lastEnd: number = 0;
 
-                              opEvents.forEach(e => {
+                              sortedOpEvents.forEach(e => {
                                  const time = new Date(e.timestamp).getTime();
-                                 if (e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO || e.eventType === OperatorEventType.WHATSAPP_COMPLETE) {
-                                    lastEnd = time;
-                                 } else if (lastEnd > 0 && (e.eventType === OperatorEventType.INICIAR_PROXIMO_ATENDIMENTO || e.eventType === OperatorEventType.WHATSAPP_START)) {
+                                 const note = (e.note || '').toUpperCase();
+                                 const isPuloAntes = e.eventType === OperatorEventType.PULAR_ATENDIMENTO && note.includes('[ANTES DA CHAMADA]');
+                                 const isPuloDepois = e.eventType === OperatorEventType.PULAR_ATENDIMENTO && note.includes('[APÓS INICIAR]');
+
+                                 const isEndEvent = [
+                                    OperatorEventType.FINALIZAR_ATENDIMENTO, 
+                                    OperatorEventType.WHATSAPP_COMPLETE, 
+                                    OperatorEventType.WHATSAPP_SKIP
+                                 ].includes(e.eventType) || isPuloDepois || isPuloAntes; // Both types of pulo "end" an active state (or the attempt)
+
+                                 const isStartEvent = [
+                                    OperatorEventType.INICIAR_PROXIMO_ATENDIMENTO, 
+                                    OperatorEventType.WHATSAPP_START
+                                 ].includes(e.eventType) || isPuloAntes; // Pulo antes also "ends" the gap state
+
+                                 // 1. If it's a start event, record the gap since last end
+                                 if (lastEnd > 0 && isStartEvent) {
                                     const diff = (time - lastEnd) / 1000;
-                                    if (diff > 0 && diff < 3600) gaps.push(diff); // Filter unrealistic gaps
-                                    lastEnd = 0;
+                                    if (diff > 0) {
+                                       allGaps.push({
+                                          start: lastEnd,
+                                          end: time,
+                                          duration: diff,
+                                          isLong: diff >= 3600
+                                       });
+                                    }
+                                    lastEnd = 0; // Clear it so we don't count the same end twice
+                                 }
+
+                                 // 2. If it's an end event, mark the timestamp for the next gap
+                                 if (isEndEvent) {
+                                    lastEnd = time;
                                  }
                               });
 
-                              const medianGap = getMedian(gaps);
+                              const filteredGaps = allGaps.filter(g => !g.isLong).map(g => g.duration);
+                              const medianGap = getMedian(filteredGaps);
+                              const longPausesCount = allGaps.filter(g => g.isLong).length;
 
                               // Simple Score: (Calls + WA) + (Sales * 5) - (Gap > 60s penalties)
-                              const score = (opCalls.length + opWaCount) + (opSales.length * 5) - (medianGap > 60 ? (medianGap - 60) * 0.1 : 0);
+                                                            const score = (opCalls + opWaCount) + (opSales.length * 5) - (medianGap > 60 ? (medianGap - 60) * 0.1 : 0);
 
                               return (
                                  <tr key={op.id} className="group hover:bg-slate-50 transition-colors">
                                     <td className="py-6 pl-4 font-black text-slate-700 text-sm">{op.name}</td>
-                                    <td className="py-6 text-center text-xs font-bold text-slate-600">{opCalls.length}</td>
+                                    <td className="py-6 text-center text-xs font-bold text-slate-600">{opCalls}</td>
                                     <td className="py-6 text-center text-xs font-bold text-slate-600">{opWaCount}</td>
                                     <td className="py-6 text-center text-xs font-black text-emerald-600">{opSales.length}</td>
                                     <td className="py-6 text-center text-xs font-mono text-slate-500">{Math.floor(tma / 60)}m {Math.round(tma % 60)}s</td>
+                                    <td className="py-6 text-center" onClick={() => setSelectedGapAudit({ op, gaps: allGaps })}>
+                                       <div className="flex flex-col items-center cursor-pointer hover:scale-105 transition-transform">
+                                          <span className={`px-3 py-1 rounded-full text-[10px] font-black ${medianGap < 30 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                                             {Math.floor(medianGap / 60)}m {Math.round(medianGap % 60)}s
+                                          </span>
+                                          <span className="text-[8px] font-black text-blue-500 uppercase mt-1">Audit GAP</span>
+                                       </div>
+                                    </td>
                                     <td className="py-6 text-center">
-                                       <span className={`px-3 py-1 rounded-full text-[10px] font-black ${medianGap < 30 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-                                          {Math.floor(medianGap / 60)}m {Math.round(medianGap % 60)}s
+                                       <span className={`px-3 py-1 rounded-full text-[10px] font-black ${longPausesCount === 0 ? 'bg-slate-100 text-slate-400' : 'bg-rose-100 text-rose-700'}`}>
+                                          {longPausesCount}
                                        </span>
                                     </td>
                                     <td className="py-6 pr-4 text-right font-black text-blue-600">{Math.max(0, Math.round(score))}</td>
@@ -792,12 +989,13 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                                  <th className="py-4 px-6 text-[10px] font-black uppercase text-slate-400 tracking-widest">Ações</th>
                               </tr>
                            </thead>
-                           <tbody className="divide-y divide-slate-50">
-                              {getFilteredAuditData().slice(0, 100).map((item: any, i) => {
+                            <tbody className="divide-y divide-slate-50">
+                               {getFilteredAuditData().slice(0, 100).map((item: any, i) => {
                                  const isCall = item._type === 'call';
+                                 const isWhatsApp = item.type === CallType.WHATSAPP || item._type === 'whatsapp';
                                  const date = new Date(isCall ? item.startTime : item.createdAt).toLocaleString();
                                  const opName = operators.find(o => o.id === (isCall ? item.operatorId : item.assignedTo))?.name || 'N/A';
-                                 const clientName = clients.find(c => c.id === item.clientId)?.name || item.clientName || 'N/A';
+                                 const clientName = item.clientName || clients.find(c => c.id === item.clientId)?.name || prospects.find(p => p.id === item.clientId)?.name || 'N/A';
 
                                  return (
                                     <tr
@@ -807,8 +1005,8 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                                     >
                                        <td className="py-4 px-6 text-xs font-bold text-slate-600 pl-8">{date}</td>
                                        <td className="py-4 px-6">
-                                          <span className={`px-2 py-1 rounded-md text-[9px] font-black uppercase ${isCall ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                                             {isCall ? 'Ligação' : 'WhatsApp'}
+                                          <span className={`px-2 py-1 rounded-md text-[9px] font-black uppercase ${!isWhatsApp ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                                             {!isWhatsApp ? 'Ligação' : 'WhatsApp'}
                                           </span>
                                           {item.relatedVisit ? (
                                              <div>
@@ -920,6 +1118,38 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                            </div>
                         </div>
                      </div>
+                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        {/* Motivações de Pulo */}
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm col-span-1 lg:col-span-3">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8 flex items-center justify-between">
+                              Principais Motivações de Pulo (Hoje)
+                              <span className="bg-slate-100 text-slate-600 px-3 py-1 rounded-full text-[10px]">{metrics.pureSkips || 0} Pulos Diretos</span>
+                           </h4>
+                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                              {(() => {
+                                  if (skipAuditData.length === 0) {
+                                     return <div className="col-span-1 md:col-span-2 lg:col-span-4 text-slate-400 text-xs font-bold text-center py-10 bg-slate-50 rounded-[32px]">Nenhum pulo registrado hoje.</div>;
+                                  }
+                                  
+                                  const reasonCounts = skipAuditData.reduce((acc, curr) => {
+                                      const reason = curr.note || 'Sem motivo informado';
+                                      acc[reason] = (acc[reason] || 0) + 1;
+                                      return acc;
+                                  }, {} as Record<string, number>);
+
+                                  const sortedReasons = Object.entries(reasonCounts).sort((a,b) => b[1] - a[1]);
+
+                                  return sortedReasons.map(([reason, count]) => (
+                                      <div key={reason} className="flex justify-between items-start gap-4 p-5 bg-slate-50 rounded-[24px] border border-slate-100">
+                                          <span className="text-xs font-bold text-slate-700 leading-relaxed">{reason}</span>
+                                          <span className="text-xs font-black text-slate-900 bg-white px-3 py-1 rounded-full shadow-sm shrink-0">{count}</span>
+                                      </div>
+                                  ));
+                              })()}
+                           </div>
+                        </div>
+                     </div>
+
                   </div>
                )}
 
@@ -937,7 +1167,54 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
          )}
 
          {/* RENDER MODAL */}
+         {/* MODAL DE AUDITORIA DE PULOS */}
+         {isSkipAuditModalOpen && (
+            <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+               <div className="bg-white rounded-[48px] w-full max-w-2xl max-h-[85vh] flex flex-col shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-300">
+                  <div className="p-8 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+                     <div>
+                        <h3 className="text-2xl font-black text-slate-900 tracking-tighter">Pulos Diretos (Hoje)</h3>
+                        <p className="text-xs font-black text-slate-400 uppercase tracking-widest mt-1">Lista de clientes pulados sem mensagem gerada</p>
+                     </div>
+                     <button onClick={() => setIsSkipAuditModalOpen(false)} className="w-12 h-12 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-400 hover:text-slate-900 hover:scale-110 active:scale-95 transition-all shadow-sm">
+                        <X size={20} />
+                     </button>
+                  </div>
+                  <div className="p-8 overflow-y-auto bg-slate-50/30 flex-1">
+                     {skipAuditData.length === 0 ? (
+                        <div className="text-center py-12">
+                           <AlertCircle size={48} className="mx-auto text-slate-300 mb-4" />
+                           <p className="text-slate-500 font-bold">Nenhum pulo direto hoje.</p>
+                        </div>
+                     ) : (
+                        <div className="space-y-4">
+                           {skipAuditData.map((skip, idx) => (
+                              <div key={idx} className="bg-white p-6 rounded-[32px] border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                                 <div>
+                                    <div className="flex items-center gap-2 mb-1">
+                                       <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">{new Date(skip.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+                                       <span className="text-[10px] font-black uppercase tracking-widest bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">{skip.operatorName}</span>
+                                    </div>
+                                    <p className="font-bold text-slate-900 flex items-center gap-2">
+                                       <Users size={16} className="text-slate-400" />
+                                       {skip.clientName}
+                                    </p>
+                                 </div>
+                                 {skip.note && (
+                                    <div className="bg-amber-50 rounded-[16px] p-3 text-xs font-medium text-amber-800 border border-amber-100 flex-1 sm:max-w-[50%]">
+                                       {skip.note}
+                                    </div>
+                                 )}
+                              </div>
+                           ))}
+                        </div>
+                     )}
+                  </div>
+               </div>
+            </div>
+         )}
          {renderInteractionDetails()}
+         {renderGapAuditModal()}
          {drawerProspectId && (
             <ProspectHistoryDrawer
                prospectId={drawerProspectId}

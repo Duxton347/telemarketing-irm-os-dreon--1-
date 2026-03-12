@@ -306,6 +306,9 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setIsProcessing(true);
 
     try {
+      const skipTimingStr = isCalling ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
+      const finalSkipReason = `${skipTimingStr}${skipReasonSelected}`;
+
       let date: Date;
       if (interval === 'manual' && manualDate) {
         date = new Date(`${manualDate}T${manualTime || '09:00'}:00`);
@@ -329,7 +332,11 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
           endTime: new Date().toISOString(),
           duration: 0,
           reportTime: 0,
-          responses: { call_type: CallType.WHATSAPP, note: 'Registrado via Pulo de Atendimento' },
+          responses: { 
+            call_type: CallType.WHATSAPP, 
+            note: `Registrado via Pulo de Atendimento: ${finalSkipReason}`,
+            written_report: `Pulo com WhatsApp - Motivo: ${finalSkipReason}`
+          },
           type: CallType.WHATSAPP,
         });
       }
@@ -342,9 +349,9 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
         originCallId: null, // No call record exists when skipping
         scheduledFor: date.toISOString(),
         callType: currentTask.type,
-        scheduleReason: `Repique: ${skipReasonSelected}`,
+        scheduleReason: `Repique: ${finalSkipReason}`,
         status: 'PENDENTE_APROVACAO',
-        skipReason: skipReasonSelected,
+        skipReason: finalSkipReason,
         whatsappSent: whatsappCheck,
         hasRepick: true
       });
@@ -352,10 +359,10 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       // 3. Mark current task as skipped
       await dataService.updateTask(currentTask.id, {
         status: 'skipped',
-        skipReason: skipReasonSelected,
+        skipReason: finalSkipReason,
       });
 
-      await dataService.logOperatorEvent(user.id, OperatorEventType.PULAR_ATENDIMENTO, currentTask.id, `${skipReasonSelected} (Reagendado para ${date.toLocaleDateString()} - WhatsApp: ${whatsappCheck ? 'Sim' : 'Não'})`);
+      await dataService.logOperatorEvent(user.id, OperatorEventType.PULAR_ATENDIMENTO, currentTask.id, `${finalSkipReason} (Reagendado para ${date.toLocaleDateString()} - WhatsApp: ${whatsappCheck ? 'Sim' : 'Não'})`);
       await fetchQueue();
     } catch (e: any) {
       console.error('Erro no repique:', e);
@@ -379,6 +386,9 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
 
     setIsProcessing(true);
     try {
+      const skipTimingStr = isCalling ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
+      const finalSkipReason = skipReasonSelected ? `${skipTimingStr}${skipReasonSelected}` : `${skipTimingStr}Pulo com WhatsApp`;
+
       // Log WhatsApp
       await dataService.saveCall({
         id: '',
@@ -389,14 +399,18 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
         endTime: new Date().toISOString(),
         duration: 0,
         reportTime: 0,
-        responses: { call_type: CallType.WHATSAPP, note: 'Finalizado via Pulo (Só WhatsApp)' },
+        responses: { 
+          call_type: CallType.WHATSAPP, 
+          note: `Finalizado via Pulo (Só WhatsApp) - ${finalSkipReason}`,
+          written_report: `Pulo com WhatsApp (Direto) - Motivo: ${finalSkipReason}`
+        },
         type: CallType.WHATSAPP,
       });
 
       // Complete Task
-      await dataService.updateTask(currentTask.id, { status: 'completed' });
+      await dataService.updateTask(currentTask.id, { status: 'completed', skipReason: finalSkipReason });
 
-      await dataService.logOperatorEvent(user.id, OperatorEventType.FINALIZAR_ATENDIMENTO, currentTask.id, `Pulo com WhatsApp (Sem Repique) - Motivo: ${skipReasonSelected}`);
+      await dataService.logOperatorEvent(user.id, OperatorEventType.FINALIZAR_ATENDIMENTO, currentTask.id, `Pulo com WhatsApp (Sem Repique) - Motivo: ${finalSkipReason}`);
       await fetchQueue();
     } catch (e) {
       alert("Erro ao finalizar.");

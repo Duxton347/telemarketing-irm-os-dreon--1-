@@ -51,12 +51,13 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
 
   // Constants for Dashboard View
   const fetchBaseData = React.useCallback(async () => {
-    const [calls, protocols, tasks, allUsers, allQuestions] = await Promise.all([
+    const [calls, protocols, tasks, allUsers, allQuestions, waTasks] = await Promise.all([
       dataService.getCalls(),
       dataService.getProtocols(),
       dataService.getTasks(),
       dataService.getUsers(),
-      dataService.getQuestions()
+      dataService.getQuestions(),
+      dataService.getWhatsAppTasks() // Fetch all pending WA tasks
     ]);
 
     setOperators(allUsers.filter(u => u && u.active !== false));
@@ -67,13 +68,20 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
     const todayStr = new Date().toISOString().split('T')[0];
 
     const displayCalls = (filterId === 'all' ? calls : calls.filter(c => c.operatorId === filterId))
-      .filter(c => c.startTime && c.startTime.startsWith(todayStr));
+      .filter(c => c.startTime && c.startTime.startsWith(todayStr))
+      .filter(c => c.type !== CallType.WHATSAPP);
 
     const now = new Date(); // Current time for filtering
     const displayTasks = (filterId === 'all'
       ? tasks.filter(t => t.status === 'pending')
       : tasks.filter(t => t.assignedTo === filterId && t.status === 'pending'))
       .filter(t => !t.scheduledFor || new Date(t.scheduledFor) <= now); // Exclude future tasks
+
+    const displayWaTasks = filterId === 'all' 
+      ? waTasks.filter(w => w.status === 'pending')
+      : waTasks.filter(w => w.assignedTo === filterId && w.status === 'pending');
+
+    const totalPending = displayTasks.length + displayWaTasks.length;
 
     const displayProtocols = filterId === 'all' ? protocols : protocols.filter(p => p.ownerOperatorId === filterId || p.openedByOperatorId === filterId);
 
@@ -90,7 +98,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
 
     setStats({
       totalCalls: displayCalls.length,
-      pendingTasks: displayTasks.length,
+      pendingTasks: totalPending,
       openProtocolsCount: displayProtocols.filter(p => p.status !== ProtocolStatus.FECHADO).length,
       avgCallTime: `${Math.floor(avgSec / 60)}m ${avgSec % 60}s`,
     });

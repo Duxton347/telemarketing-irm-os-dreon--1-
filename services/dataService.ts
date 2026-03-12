@@ -436,7 +436,9 @@ export const dataService = {
           clients: clientObj || null, // Pass embedded client data for fallback
           approvalStatus: t.approval_status as any,
           scheduledFor: t.scheduled_for,
-          scheduleReason: t.schedule_reason
+          scheduleReason: t.schedule_reason,
+          createdAt: t.created_at,
+          updatedAt: t.updated_at
         };
       });
 
@@ -465,9 +467,10 @@ export const dataService = {
         assignedTo: s.assigned_operator_id,
         status: 'pending', // Active in queue
         scheduleReason: s.schedule_reason,
-        // Map fields to preserve context
         originCallId: s.origin_call_id,
-        approvalStatus: 'APPROVED'
+        approvalStatus: 'APPROVED',
+        createdAt: s.created_at,
+        updatedAt: s.updated_at
       };
     });
 
@@ -510,7 +513,18 @@ export const dataService = {
     }
   },
 
+  updateTaskStatus: async (taskId: string, status: 'pending' | 'completed' | 'skipped'): Promise<{ error: any }> => {
+    return await supabase.from('tasks').update({ status, updated_at: new Date().toISOString() }).eq('id', taskId);
+  },
+
+  updateWhatsAppTaskStatus: async (taskId: string, status: 'pending' | 'started' | 'completed' | 'skipped'): Promise<{ error: any }> => {
+    return await supabase.from('whatsapp_tasks').update({ status, updated_at: new Date().toISOString() }).eq('id', taskId);
+  },
+
   deleteTask: async (taskId: string): Promise<void> => {
+    // Delete operator events first to prevent foreign key violation
+    await supabase.from('operator_events').delete().eq('task_id', taskId);
+    
     // 1. Try deleting from tasks table
     const { error, count } = await supabase.from('tasks').delete({ count: 'exact' }).eq('id', taskId);
     if (error) throw error;
@@ -522,26 +536,169 @@ export const dataService = {
     }
   },
 
+  deleteMultipleTasks: async (taskIds: string[]): Promise<void> => {
+    if (!taskIds || taskIds.length === 0) return;
+    const chunkSize = 50;
+    
+    for (let i = 0; i < taskIds.length; i += chunkSize) {
+      const chunk = taskIds.slice(i, i + chunkSize);
+      
+      // Delete events first
+      await supabase.from('operator_events').delete().in('task_id', chunk);
+      
+      // Try to delete from tasks
+      await supabase.from('tasks').delete().in('id', chunk);
+      
+      // Try to delete from call_schedules (in case they are scheduled tasks)
+      await supabase.from('call_schedules').delete().in('id', chunk);
+    }
+  },
+
+  backfillSkipReasons: async (): Promise<{ updatedVoice: number, updatedWA: number }> => {
+    let updatedVoice = 0;
+    let updatedWA = 0;
+
+    // 1. Voice Tasks
+    const { data: vTasks, error: vErr } = await supabase.from('tasks').select('id, skip_reason').eq('status', 'skipped');
+    if (!vErr && vTasks) {
+      for (const t of vTasks) {
+        let rawReason = t.skip_reason || 'Sem Motivo';
+        rawReason = rawReason.replace('[ANTES DA CHAMADA] ', '').replace('[APÓS INICIAR] ', '');
+        
+        const { data: events } = await supabase.from('operator_events').select('event_type').eq('task_id', t.id);
+        const hasStarted = Array.isArray(events) && events.some(e => e.event_type === 'INICIAR_PROXIMO_ATENDIMENTO');
+        const prefix = hasStarted ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
+        
+        const newReason = prefix + rawReason;
+        if (newReason !== t.skip_reason) {
+          await supabase.from('tasks').update({ skip_reason: newReason }).eq('id', t.id);
+          updatedVoice++;
+        }
+      }
+    }
+
+    // 2. WhatsApp Tasks
+    const { data: wTasks, error: wErr } = await supabase.from('whatsapp_tasks').select('id, skip_reason').eq('status', 'skipped');
+    if (!wErr && wTasks) {
+      for (const wt of wTasks) {
+        let rawReason = wt.skip_reason || 'Sem Motivo';
+        rawReason = rawReason.replace('[ANTES DA CHAMADA] ', '').replace('[APÓS INICIAR] ', '');
+        
+        const { data: events } = await supabase.from('operator_events').select('event_type').eq('task_id', wt.id);
+        const hasStarted = Array.isArray(events) && events.some(e => e.event_type === 'INICIAR_PROXIMO_ATENDIMENTO');
+        const prefix = hasStarted ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
+        
+        const newReason = prefix + rawReason;
+        if (newReason !== wt.skip_reason) {
+          await supabase.from('whatsapp_tasks').update({ skip_reason: newReason }).eq('id', wt.id);
+          updatedWA++;
+        }
+      }
+    }
+
+    return { updatedVoice, updatedWA };
+  },
 
   deleteTasksByOperator: async (operatorId: string): Promise<void> => {
-    const { error } = await supabase
-      .from('tasks')
-      .delete()
-      .eq('assigned_to', operatorId)
-      .in('status', ['pending', 'skipped']);
-    if (error) throw error;
+    let hasMore = true;
+    
+    // Determine which tasks to delete
+    while (hasMore) {
+      // Fetch safe HTTP bounds of records (e.g. 50) to avoid Request-URI Too Long
+      const { data, error } = await supabase
+        .from('tasks')
+        .select('id')
+        .eq('assigned_to', operatorId)
+        .eq('status', 'pending')
+        .limit(50);
+
+      if (error) throw error;
+      
+      if (!data || data.length === 0) {
+        hasMore = false;
+        break;
+      }
+      
+      const chunkIds = data.map(t => t.id);
+      
+      // Clean up operator_events for strictly 50 tasks
+      const { error: evError } = await supabase
+        .from('operator_events')
+        .delete()
+        .in('task_id', chunkIds);
+      if (evError) throw evError;
+      
+      // Delete exactly the identical 50 tasks
+      const { error: tError } = await supabase
+        .from('tasks')
+        .delete()
+        .in('id', chunkIds);
+      if (tError) throw tError;
+
+      if (data.length < 50) {
+        hasMore = false;
+      }
+    }
+
+    // ALSO CLEAR SCHEDULINGS THAT ARE PENDING IN THE QUEUE
+    let hasMoreSchedules = true;
+    while(hasMoreSchedules) {
+      const { data, error } = await supabase
+        .from('call_schedules')
+        .select('id')
+        .eq('assigned_operator_id', operatorId)
+        .eq('status', 'APROVADO')
+        .lte('scheduled_for', new Date().toISOString())
+        .limit(50);
+        
+      if (error) throw error;
+      if (!data || data.length === 0) {
+        hasMoreSchedules = false;
+        break;
+      }
+      
+      const chunkIds = data.map(s => s.id);
+      
+      const { error: delError } = await supabase
+        .from('call_schedules')
+        .delete()
+        .in('id', chunkIds);
+        
+      if (delError) throw delError;
+      
+      if (data.length < 50) {
+        hasMoreSchedules = false;
+      }
+    }
   },
 
 
 
 
   deleteDuplicateTasks: async (): Promise<number> => {
-    const { data: tasks, error } = await supabase
-      .from('tasks')
-      .select('id, client_id, assigned_to, type, status')
-      .eq('status', 'pending');
+    let tasks: any[] = [];
+    let hasMore = true;
+    let fromIndex = 0;
+    const limit = 1000;
 
-    if (error || !tasks) return 0;
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('tasks')
+        .select('id, client_id, assigned_to, type, status')
+        .eq('status', 'pending')
+        .order('created_at', { ascending: true }) // make pagination stable
+        .range(fromIndex, fromIndex + limit - 1);
+        
+      if (error || !data) break;
+      tasks.push(...data);
+      if (data.length < limit) {
+        hasMore = false;
+      } else {
+        fromIndex += limit;
+      }
+    }
+
+    if (tasks.length === 0) return 0;
 
     const seen = new Set();
     const toDelete = [];
@@ -556,18 +713,26 @@ export const dataService = {
     }
 
     if (toDelete.length > 0) {
-      const { error: delError } = await supabase
-        .from('tasks')
-        .delete()
-        .in('id', toDelete);
-      if (delError) throw delError;
+      const chunkSize = 50; // Strict limit of 50
+      for (let i = 0; i < toDelete.length; i += chunkSize) {
+        const chunk = toDelete.slice(i, i + chunkSize);
+        
+        // Clean up operator_events first
+        await supabase.from('operator_events').delete().in('task_id', chunk);
+
+        const { error: delError } = await supabase
+          .from('tasks')
+          .delete()
+          .in('id', chunk);
+        if (delError) throw delError;
+      }
     }
 
     return toDelete.length;
   },
 
   getCalls: async (startDate?: string, endDate?: string): Promise<CallRecord[]> => {
-    let query = supabase.from('call_logs').select('*').order('start_time', { ascending: false });
+    let query = supabase.from('call_logs').select('*, clients(name, phone)').order('start_time', { ascending: false });
 
     if (startDate && endDate) {
       query = query.gte('start_time', `${startDate}T00:00:00`).lte('start_time', `${endDate}T23:59:59`);
@@ -586,7 +751,9 @@ export const dataService = {
       reportTime: c.report_time,
       responses: c.responses || {},
       type: (c.call_type as CallType) || CallType.POS_VENDA,
-      protocolId: c.protocol_id
+      protocolId: c.protocol_id,
+      clientName: (c as any).clients?.name || 'Cliente Desconhecido',
+      clientPhone: (c as any).clients?.phone || ''
     }));
   },
 
@@ -644,6 +811,7 @@ export const dataService = {
       .from('call_logs')
       .select('*, clients(*), profiles:operator_id(*)')
       .gte('start_time', `${todayStr}T00:00:00`)
+      .neq('call_type', 'WHATSAPP')
       .order('start_time', { ascending: false });
     if (error) throw error;
     return data || [];
@@ -1547,8 +1715,10 @@ export const dataService = {
     }
 
     if (startDate && endDate) {
-      // For WhatsApp, we use created_at for general volume, but metrics might use started_at/completed_at
-      query = query.gte('created_at', `${startDate}T00:00:00`).lte('created_at', `${endDate}T23:59:59`);
+      const start = `${startDate}T00:00:00`;
+      const end = `${endDate}T23:59:59`;
+      // Fetch if created, started, or completed in the range
+      query = query.or(`and(created_at.gte.${start},created_at.lte.${end}),and(started_at.gte.${start},started_at.lte.${end}),and(completed_at.gte.${start},completed_at.lte.${end}),and(updated_at.gte.${start},updated_at.lte.${end})`);
     }
 
     const { data, error } = await query.order('created_at', { ascending: true });
@@ -1643,6 +1813,15 @@ export const dataService = {
     if (error) throw error;
   },
 
+  deleteMultipleWhatsAppTasks: async (taskIds: string[]): Promise<void> => {
+    if (!taskIds || taskIds.length === 0) return;
+    const chunkSize = 50;
+    for (let i = 0; i < taskIds.length; i += chunkSize) {
+      const chunk = taskIds.slice(i, i + chunkSize);
+      await supabase.from('whatsapp_tasks').delete().in('id', chunk);
+    }
+  },
+
   deleteWhatsAppTasksByOperator: async (operatorId: string): Promise<void> => {
     const { error } = await supabase
       .from('whatsapp_tasks')
@@ -1694,8 +1873,14 @@ export const dataService = {
 
     if (salesError) throw salesError;
 
-    const totalCalls = events.filter(e => e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO).length;
-    const totalWhatsApp = events.filter(e => e.eventType === OperatorEventType.WHATSAPP_COMPLETE).length;
+    const isWhatsAppEvent = (e: any) => 
+        e.eventType === OperatorEventType.WHATSAPP_COMPLETE || 
+        e.eventType === OperatorEventType.WHATSAPP_START || 
+        e.eventType === OperatorEventType.WHATSAPP_SKIP || 
+        ((e.eventType === OperatorEventType.PULAR_ATENDIMENTO || e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO) && e.note?.toLowerCase().includes('whatsapp'));
+
+    const totalCalls = events.filter(e => e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO && !e.note?.toLowerCase().includes('whatsapp')).length;
+    const totalWhatsApp = events.filter(isWhatsAppEvent).length;
     const salesCount = rawSales?.length || 0;
     const conversionRate = totalCalls > 0 ? (salesCount / totalCalls) * 100 : 0;
 
@@ -1703,8 +1888,8 @@ export const dataService = {
       const opEvents = events.filter(e => e.operatorId === op.id);
       const opSales = rawSales?.filter(s => s.operator_id === op.id) || [];
 
-      const opCalls = opEvents.filter(e => e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO).length;
-      const opWhatsapp = opEvents.filter(e => e.eventType === OperatorEventType.WHATSAPP_COMPLETE).length;
+      const opCalls = opEvents.filter(e => e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO && !e.note?.toLowerCase().includes('whatsapp')).length;
+      const opWhatsapp = opEvents.filter(isWhatsAppEvent).length;
 
       return {
         id: op.id,
