@@ -6,6 +6,7 @@ import {
   ClientWithLastCall 
 } from '../services/campaignPlannerService';
 import { CallType } from '../types';
+import { dataService } from '../services/dataService';
 import { Calendar, Filter, Users, Send, Search, Save, X, Settings2, MapPin, Phone, Tag as TagIcon, LayoutGrid, Clock, Mail } from 'lucide-react';
 import { HelpTooltip } from '../components/HelpTooltip';
 import { HELP_TEXTS } from '../utils/helpTexts';
@@ -54,8 +55,9 @@ export const CampaignPlanner: React.FC = () => {
 
   // Initial Load options
   useEffect(() => {
-    supabase.from('users').select('id, username_display').eq('active', true).then(({ data }) => {
-      if (data) setOperadoresList(data);
+    dataService.getUsers().then(users => {
+      const activeOperators = users.filter(u => u.active);
+      setOperadoresList(activeOperators.map(u => ({ id: u.id, username_display: u.name })));
     });
 
     CampaignPlannerService.getDistinctCities().then(setCitiesList);

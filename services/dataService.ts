@@ -858,7 +858,15 @@ export const dataService = {
     
     if (error) throw error;
 
-    await supabase.from('clients').update({ last_interaction: new Date().toISOString() }).eq('id', call.clientId);
+    const clientUpdates: any = { last_interaction: new Date().toISOString() };
+    if (call.responses?.email_cliente) {
+      clientUpdates.email = call.responses.email_cliente;
+    }
+    if (call.responses?.upsell_interesse_produto) {
+      clientUpdates.interest_product = call.responses.upsell_interesse_produto;
+    }
+
+    await supabase.from('clients').update(clientUpdates).eq('id', call.clientId);
 
     // Dreon Skill v3: Tag Decision Engine Integration
     try {
@@ -1172,7 +1180,7 @@ export const dataService = {
   },
 
   getProspects: async (): Promise<Client[]> => {
-    const { data, error } = await supabase.from('clients').select('*').eq('status', 'LEAD').order('name');
+    const { data, error } = await supabase.from('clients').select('*').eq('status', 'LEAD').not('tags', 'cs', '{"JA_CLIENTE"}').order('name');
     if (error) throw error;
     return (data || []).map(c => ({
       id: c.id,

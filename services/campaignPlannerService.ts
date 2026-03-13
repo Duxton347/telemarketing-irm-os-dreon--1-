@@ -148,6 +148,9 @@ export const CampaignPlannerService = {
       if (filters.statusCliente?.length) {
         query = query.in('status', filters.statusCliente);
       }
+      
+      // Exclui prospects que já são clientes (evita duplicidade no disparador)
+      query = query.not('tags', 'cs', '{"JA_CLIENTE"}');
       if (filters.bairros?.length) {
         query = query.in('neighborhood', filters.bairros);
       }

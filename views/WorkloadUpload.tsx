@@ -23,6 +23,7 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
 
     // Paste Form
     const [pasteData, setPasteData] = useState('');
+    const [isClientBase, setIsClientBase] = useState(false);
 
     // Status
     const [loading, setLoading] = useState(false);
@@ -82,7 +83,7 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
             const prospect = {
                 name: manualName,
                 phone: normalizePhone(manualPhone),
-                status: 'LEAD' as any,
+                status: isClientBase ? 'CLIENT' : 'LEAD' as any,
                 origin: 'MANUAL' as const
             };
             const created = await dataService.upsertClient(prospect);
@@ -195,7 +196,7 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
                     last_purchase_date: lastPurchaseDate,
                     items: isPosVenda && extra ? [extra] : [],
                     offers: (!isPosVenda && !isReativacao) && extra ? [extra] : [],
-                    status: isReativacao ? 'INATIVO' as any : 'LEAD' as any,
+                    status: isClientBase ? 'CLIENT' : (isReativacao ? 'INATIVO' as any : 'LEAD' as any),
                     origin: 'CSV_IMPORT' as const
                 };
             }).filter(p => p !== null && p.phone.length >= 8);
@@ -292,6 +293,18 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
                                 <option value="CALL">LIGAÇÃO (Fila de Tarefas)</option>
                                 <option value="WHATSAPP">WHATSAPP (Fila de Mensagens)</option>
                             </select>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                            <label className="text-xs font-black uppercase text-slate-500 tracking-widest flex items-center gap-2 mb-1">
+                                <UserCheck size={14} className="text-blue-500" /> Categoria:
+                            </label>
+                            <label className="flex items-center gap-3 cursor-pointer bg-white p-3 rounded-xl border border-slate-200">
+                                <div className={`w-5 h-5 rounded flex items-center justify-center border transition-all ${isClientBase ? 'bg-blue-600 border-blue-600' : 'bg-slate-50 border-slate-300'}`}>
+                                    {isClientBase && <CheckCircle2 size={14} className="text-white" />}
+                                </div>
+                                <input type="checkbox" className="hidden" checked={isClientBase} onChange={(e) => setIsClientBase(e.target.checked)} />
+                                <span className="text-sm font-bold text-slate-700">Esta lista é de Compradores Base (Já compraram da loja)</span>
+                            </label>
                         </div>
                     </div>
                 </div>

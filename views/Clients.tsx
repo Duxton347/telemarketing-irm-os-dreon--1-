@@ -46,7 +46,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
   const loadClients = async () => {
     setIsLoading(true);
     try {
-      const allClients = await dataService.getClients();
+      const allClients = await dataService.getClients(true);
       setClients(allClients || []);
     } catch (e) {
       console.error(e);
@@ -238,6 +238,11 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                       {c.status === 'INATIVO' && (
                         <span className="px-2 py-0.5 bg-rose-600/20 text-rose-500 border border-rose-500/30 rounded-lg text-[8px] font-black uppercase tracking-widest shrink-0">
                           INATIVO
+                        </span>
+                      )}
+                      {c.status === 'LEAD' && (
+                        <span className="px-2 py-0.5 bg-indigo-600/20 text-indigo-500 border border-indigo-500/30 rounded-lg text-[8px] font-black uppercase tracking-widest shrink-0">
+                          LEAD
                         </span>
                       )}
                     </div>

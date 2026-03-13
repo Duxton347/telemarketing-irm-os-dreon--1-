@@ -36,7 +36,7 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
         const key = q.campo_resposta || q.id;
         
         // Check for special option types
-        const hasTextInput = q.options.some(o => o === '__TEXT__');
+        const hasTextInput = q.tipo_input === 'text' || q.options.some(o => o === '__TEXT__');
         const hasTextArea = q.options.some(o => o === '__TEXTAREA__');
         const dropdownOption = q.options.find(o => o.startsWith('__DROPDOWN__:'));
         const regularOptions = q.options.filter(o => !o.startsWith('__'));

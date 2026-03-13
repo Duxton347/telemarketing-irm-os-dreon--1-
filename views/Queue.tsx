@@ -624,7 +624,18 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                 </div>
               )}
 
-              <p className="font-bold text-slate-400 flex items-start gap-2 mt-4"><MapPin size={18} className="shrink-0" /> {client.address || 'Sem endereço'}</p>
+              {(client.street || client.neighborhood || client.city) ? (
+                <div className="flex items-start gap-2 mt-4 font-bold text-slate-400">
+                  <MapPin size={18} className="shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm">{client.street || ''}</p>
+                    <p className="text-sm">{client.neighborhood || ''}{client.city ? ` - ${client.city}` : ''} {client.state ? `/ ${client.state}` : ''}</p>
+                    <p className="text-xs text-slate-500 mt-1">CEP: {client.zip_code || 'N/A'}</p>
+                  </div>
+                </div>
+              ) : (
+                <p className="font-bold text-slate-400 flex items-start gap-2 mt-4"><MapPin size={18} className="shrink-0" /> {client.address || 'Sem endereço'}</p>
+              )}
               {client.last_purchase_date && (
                 <div className="mt-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
                   <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Última Compra</p>
