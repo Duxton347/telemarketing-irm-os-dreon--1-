@@ -1438,6 +1438,56 @@ export const dataService = {
     if (error) throw error;
   },
 
+  getInvalidClients: async (): Promise<Client[]> => {
+    let allData: any[] = [];
+    let hasMore = true;
+    let fromIndex = 0;
+    const limit = 1000;
+
+    while (hasMore) {
+      const { data, error } = await supabase.from('clients').select('*').eq('invalid', true).order('name').range(fromIndex, fromIndex + limit - 1);
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        allData.push(...data);
+      }
+
+      if (!data || data.length < limit) {
+        hasMore = false;
+      } else {
+        fromIndex += limit;
+      }
+    }
+
+    return allData.map(c => ({
+      id: c.id,
+      name: c.name || 'Sem Nome',
+      phone: c.phone || '',
+      address: c.address || '',
+      items: c.items || [],
+      offers: c.offers || [],
+      acceptance: (c.acceptance as any) || 'medium',
+      satisfaction: (c.satisfaction as any) || 'medium',
+      origin: c.origin,
+      email: c.email,
+      website: c.website,
+      status: c.status || 'CLIENT',
+      responsible_phone: c.responsible_phone,
+      buyer_name: c.buyer_name,
+      interest_product: c.interest_product,
+      preferred_channel: c.preferred_channel,
+      funnel_status: c.funnel_status,
+      external_id: c.external_id,
+      phone_secondary: c.phone_secondary,
+      street: c.street,
+      neighborhood: c.neighborhood,
+      city: c.city,
+      state: c.state,
+      zip_code: c.zip_code,
+      invalid: c.invalid
+    }));
+  },
+
   // --- CLIENT MERGE (Deduplication) ---
   findDuplicatesByName: async (name: string): Promise<any[]> => {
     const { data, error } = await supabase.from('clients').select('*').ilike('name', `%${name}%`);

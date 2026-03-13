@@ -7,7 +7,11 @@ import {
 import { dataService } from '../services/dataService';
 import { Quote, QuoteStatus, Client, SaleStatus, SaleCategory, SaleChannel } from '../types';
 
-export const Quotes: React.FC = () => {
+interface QuotesProps {
+    user: any;
+}
+
+export const Quotes: React.FC<QuotesProps> = ({ user }) => {
     const [quotes, setQuotes] = useState<Quote[]>([]);
     const [clients, setClients] = useState<Client[]>([]);
     const [users, setUsers] = useState<any[]>([]);
@@ -112,7 +116,7 @@ export const Quotes: React.FC = () => {
                 address: clients.find(c => c.id === convertingQuote.client_id)?.address || 'Não informado',
                 category: SaleCategory.OUTROS, // default
                 channel: SaleChannel.WHATSAPP, // default
-                operatorId: users[0]?.id || '', // Default or require selection
+                operatorId: user.id, // Assign to logged-in user
                 status: SaleStatus.PENDENTE,
                 value: convertingQuote.value,
                 registeredAt: new Date().toISOString(),
@@ -300,16 +304,22 @@ export const Quotes: React.FC = () => {
                                 </div>
                             </div>
 
-                            <div className="space-y-1">
-                                <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Cliente / Lead</label>
-                                <input required type="text" list="clientsList" value={newQuote.client_name || ''} onChange={e => {
-                                    const val = e.target.value;
-                                    const matched = clients.find(c => c.name === val);
-                                    setNewQuote({...newQuote, client_name: val, client_id: matched?.id});
-                                }} className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-sm outline-none focus:border-blue-500" placeholder="Nome do cliente (busque ou digite novo)..." />
-                                <datalist id="clientsList">
-                                    {clients.map(c => <option key={c.id} value={c.name} />)}
-                                </datalist>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Cliente / Lead</label>
+                                    <input required type="text" list="clientsList" value={newQuote.client_name || ''} onChange={e => {
+                                        const val = e.target.value;
+                                        const matched = clients.find(c => c.name === val);
+                                        setNewQuote({...newQuote, client_name: val, client_id: matched?.id});
+                                    }} className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-sm outline-none focus:border-blue-500" placeholder="Nome do cliente (busque ou digite novo)..." />
+                                    <datalist id="clientsList">
+                                        {clients.map(c => <option key={c.id} value={c.name} />)}
+                                    </datalist>
+                                </div>
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Produto de Interesse</label>
+                                    <input type="text" value={newQuote.interest_product || ''} onChange={e => setNewQuote({...newQuote, interest_product: e.target.value})} className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-sm outline-none focus:border-blue-500" placeholder="Ex: Kit Fotovoltaico, Bomba..." />
+                                </div>
                             </div>
 
                             <div className="grid grid-cols-3 gap-4">

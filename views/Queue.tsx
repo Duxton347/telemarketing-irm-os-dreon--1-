@@ -308,9 +308,35 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     }
   };
 
-  const handleSelectSkipReason = (reason: string) => {
+  const handleSelectSkipReason = async (reason: string) => {
     setSkipReasonSelected(reason);
     setIsSkipModalOpen(false);
+
+    // If reason implies a wrong or non-existent number, automatically skip and flag as invalid
+    const isInvalidNumber = reason.toLowerCase().includes('não existe') || reason.toLowerCase().includes('errado') || reason.toLowerCase().includes('inválido');
+
+    if (isInvalidNumber && client && currentTask) {
+        setIsProcessing(true);
+        try {
+            await dataService.updateClientFields(client.id, { invalid: true });
+
+            const skipTimingStr = isCalling ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
+            const finalSkipReason = `${skipTimingStr}${reason}`;
+
+            await dataService.updateTask(currentTask.id, { status: 'skipped', skipReason: finalSkipReason });
+            await dataService.logOperatorEvent(user.id, OperatorEventType.PULAR_ATENDIMENTO, currentTask.id, `Marcado como Telefone Inválido: ${finalSkipReason}`);
+
+            alert("Cliente marcado com telefone incorreto. Ele foi removido das filas e enviado para o relatório de revisão.");
+            await fetchQueue();
+        } catch (e) {
+            console.error(e);
+            alert("Erro ao marcar cliente como inválido.");
+        } finally {
+            setIsProcessing(false);
+        }
+        return; // Bypass reschedule modal
+    }
+
     setIsRescheduleModalOpen(true);
     setWhatsappCheck(false); // Reset check
   };

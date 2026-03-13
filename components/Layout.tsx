@@ -21,7 +21,8 @@ import {
   Upload,
   FileUp,
   Sparkles,
-  FileText
+  FileText,
+  Database
 } from 'lucide-react';
 import { UserRole } from '../types';
 
@@ -52,9 +53,7 @@ const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
     { label: 'Gestão', icon: Settings, path: '/admin', roles: [UserRole.ADMIN] },
     { label: 'Relatórios', icon: FileBarChart, path: '/reports', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
     { label: 'Exportar/Carga', icon: Upload, path: '/workload', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
-    { label: 'Importar PDF', icon: FileUp, path: '/pdf-import', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
-    { label: 'Importar Produtos (CSV)', icon: Sparkles, path: '/product-import', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
-    { label: 'Importação Inteligente', icon: Sparkles, path: '/admin?tab=tags', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
+    { label: 'Central de Dados', icon: Database, path: '/data-center', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
     { label: 'Planejar Campanhas', icon: Target, path: '/campaigns', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
   ];
 

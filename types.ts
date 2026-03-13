@@ -85,6 +85,7 @@ export interface Quote {
   win_probability: number;
   status: QuoteStatus;
   justification?: string;
+  interest_product?: string;
   visit_id?: string;
   created_at: string;
   updated_at: string;
