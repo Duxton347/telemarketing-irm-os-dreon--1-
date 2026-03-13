@@ -1351,7 +1351,7 @@ export const dataService = {
       // Ensure INATIVO is respected from payload if passed, otherwise existing status is preserved.
       // If sale happens, saveSale will convert to CLIENT. Never downgrade CLIENT to LEAD.
       status: client.status === 'INATIVO' ? 'INATIVO' :
-        (existing?.status === 'CLIENT' ? 'CLIENT' : (existing?.status || client.status || 'CLIENT')),
+        (client.status === 'CLIENT' ? 'CLIENT' : (existing?.status === 'CLIENT' ? 'CLIENT' : (existing?.status || client.status || 'CLIENT'))),
       responsible_phone: existing?.responsible_phone || client.responsible_phone,
       buyer_name: existing?.buyer_name || client.buyer_name,
       interest_product: existing?.interest_product || client.interest_product,
