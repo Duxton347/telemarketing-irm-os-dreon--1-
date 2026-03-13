@@ -591,7 +591,11 @@ export const dataService = {
 
   deleteTask: async (taskId: string): Promise<void> => {
     // Delete operator events first to prevent foreign key violation
-    await supabase.from('operator_events').delete().eq('task_id', taskId);
+    const { error: evError } = await supabase.from('operator_events').delete().eq('task_id', taskId);
+    if (evError) {
+      console.error("Error deleting operator events:", evError);
+      throw new Error(`Erro ao excluir eventos vinculados à tarefa: ${evError.message}`);
+    }
     
     // 1. Try deleting from tasks table
     const { error, count } = await supabase.from('tasks').delete({ count: 'exact' }).eq('id', taskId);
@@ -612,7 +616,11 @@ export const dataService = {
       const chunk = taskIds.slice(i, i + chunkSize);
       
       // Delete events first
-      await supabase.from('operator_events').delete().in('task_id', chunk);
+      const { error: evError } = await supabase.from('operator_events').delete().in('task_id', chunk);
+      if (evError) {
+        console.error("Error deleting operator events in chunk:", evError);
+        throw new Error(`Erro ao excluir eventos de lote: ${evError.message}`);
+      }
       
       // Try to delete from tasks
       await supabase.from('tasks').delete().in('id', chunk);
@@ -694,7 +702,10 @@ export const dataService = {
         .from('operator_events')
         .delete()
         .in('task_id', chunkIds);
-      if (evError) throw evError;
+      if (evError) {
+        console.error("Error deleting operator events by operator:", evError);
+        throw new Error(`Erro ao limpar eventos do operador: ${evError.message}`);
+      }
       
       // Delete exactly the identical 50 tasks
       const { error: tError } = await supabase
@@ -785,7 +796,11 @@ export const dataService = {
         const chunk = toDelete.slice(i, i + chunkSize);
         
         // Clean up operator_events first
-        await supabase.from('operator_events').delete().in('task_id', chunk);
+        const { error: evError } = await supabase.from('operator_events').delete().in('task_id', chunk);
+        if (evError) {
+          console.error("Error cleaning duplicate operator events:", evError);
+          throw new Error(`Erro ao excluir eventos duplicados: ${evError.message}`);
+        }
 
         const { error: delError } = await supabase
           .from('tasks')
