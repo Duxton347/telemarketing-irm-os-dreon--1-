@@ -4,7 +4,7 @@ import {
   UserRole, CallType, ProtocolStatus, ProtocolEvent,
   OperatorEventType, OperatorEvent, Sale, SaleStatus, Visit,
   CallSchedule, CallScheduleWithClient, ScheduleStatus, WhatsAppTask, ProductivityMetrics,
-  UnifiedReportRow, Protocol, ClientTag, TagStatus
+  UnifiedReportRow, Protocol, ClientTag, TagStatus, Quote
 } from '../types';
 import { TagDecisionEngine } from './tagDecisionEngine';
 import { SCORE_MAP, STAGE_CONFIG } from '../constants';
@@ -1689,6 +1689,30 @@ export const dataService = {
   },
 
   // --- VISITAS ---
+  // --- QUOTES (ORÇAMENTOS) ---
+  getQuotes: async (): Promise<Quote[]> => {
+    const { data, error } = await supabase.from('quotes').select('*').order('created_at', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  },
+
+  saveQuote: async (quote: Partial<Quote>): Promise<Quote> => {
+    const { data, error } = await supabase.from('quotes').insert(quote).select().single();
+    if (error) throw error;
+    return data;
+  },
+
+  updateQuote: async (id: string, updates: Partial<Quote>): Promise<Quote> => {
+    const { data, error } = await supabase.from('quotes').update(updates).eq('id', id).select().single();
+    if (error) throw error;
+    return data;
+  },
+
+  deleteQuote: async (id: string): Promise<void> => {
+    const { error } = await supabase.from('quotes').delete().eq('id', id);
+    if (error) throw error;
+  },
+
   // --- VISITAS ---
   getVisits: async (): Promise<Visit[]> => {
     const { data, error } = await supabase
@@ -1831,12 +1855,19 @@ export const dataService = {
       return undefined;
     };
 
+    const getFullAddress = (client: any) => {
+      if (!client) return '';
+      if (client.address) return client.address;
+      const parts = [client.street, client.neighborhood, client.city, client.state].filter(Boolean);
+      return parts.join(', ');
+    };
+
     const mappedCalls = callsData.map((c: any) => ({
       id: c.id,
       type: 'CALL',
       clientName: c.clients?.name || 'Cliente Desconhecido',
       clientId: c.client_id,
-      address: c.clients?.address || '',
+      address: getFullAddress(c.clients),
       phone: c.clients?.phone || '',
       date: c.start_time,
       description: `Ligação: ${c.call_type} `,
@@ -1849,7 +1880,7 @@ export const dataService = {
       type: 'WHATSAPP',
       clientName: t.clients?.name || 'Cliente Desconhecido',
       clientId: t.client_id,
-      address: t.clients?.address || '',
+      address: getFullAddress(t.clients),
       phone: t.clients?.phone || '',
       date: t.created_at,
       description: `WhatsApp: ${t.type || 'Mensagem'} `,

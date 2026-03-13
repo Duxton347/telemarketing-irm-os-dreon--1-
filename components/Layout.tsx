@@ -20,7 +20,8 @@ import {
   Target,
   Upload,
   FileUp,
-  Sparkles
+  Sparkles,
+  FileText
 } from 'lucide-react';
 import { UserRole } from '../types';
 
@@ -45,6 +46,7 @@ const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
     { label: 'Prospecção', icon: Target, path: '/prospects', roles: [UserRole.ADMIN, UserRole.SUPERVISOR, UserRole.OPERATOR] },
     { label: 'Captação', icon: Globe, path: '/scraper', roles: [UserRole.ADMIN, UserRole.SUPERVISOR, UserRole.OPERATOR] },
 
+    { label: 'Orçamentos', icon: FileText, path: '/quotes', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },
     { label: 'Roteiros', icon: Map, path: '/routes', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },
     { label: 'WhatsApp', icon: MessageCircle, path: '/whatsapp', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },
     { label: 'Gestão', icon: Settings, path: '/admin', roles: [UserRole.ADMIN] },

@@ -19,6 +19,7 @@ import WorkloadUpload from './views/WorkloadUpload';
 import PDFImport from './views/PDFImport';
 import { CampaignPlanner } from './views/CampaignPlanner';
 import { ProductImport } from './views/ProductImport';
+import { Quotes } from './views/Quotes';
 // Import updated views
 import { UserRole } from './types';
 
@@ -62,6 +63,7 @@ const App: React.FC = () => {
           <Route path="/scraper" element={<ScraperView user={user} />} />
           <Route path="/reports" element={<Reports user={user} />} />
           <Route path="/prospects" element={<Prospects />} />
+          <Route path="/quotes" element={<Quotes />} />
           <Route path="/workload" element={
             user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR ? <WorkloadUpload user={user} /> : <Navigate to="/" />
           } />
