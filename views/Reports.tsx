@@ -124,7 +124,8 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
             fetchedQuestions,
             fetchedVisits,
             fetchedProspects,
-            fetchedTags
+            fetchedTags,
+            fetchedInvalid
          ] = await Promise.all([
             dataService.getCalls(dateRange.start, dateRange.end),
             dataService.getTasks(), // Tasks history is tricky, might need filter update in future
@@ -137,7 +138,8 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
             dataService.getQuestions(),
             dataService.getVisits(),
             dataService.getProspects(),
-            dataService.getClientTags()
+            dataService.getClientTags(),
+            dataService.getInvalidClients()
          ]);
 
          setCalls(fetchedCalls);
@@ -152,6 +154,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
          setQuestions(fetchedQuestions);
          setVisits(fetchedVisits);
          setProspects(fetchedProspects);
+         setInvalidClients(fetchedInvalid);
 
          // --- CALCULATE BASE METRICS ---
          // Revenue now counts ALL sales except CANCELADA
@@ -661,6 +664,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                { id: 'operators', label: 'Produtividade', icon: Users },
                { id: 'leads', label: 'Leads (Prospecção)', icon: Target },
                { id: 'post_sale', label: 'Pós-Venda & Remarketing', icon: Timer },
+               { id: 'invalid_phones', label: 'Telefones Inválidos', icon: Search },
                { id: 'audit', label: 'Auditoria', icon: ClipboardList },
             ].map(tab => (
                <button
@@ -1372,6 +1376,59 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                         </div>
                      </div>
 
+                  </div>
+               )}
+
+               {/* INVALID PHONES TAB */}
+               {activeTab === 'invalid_phones' && (
+                  <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm space-y-6">
+                     <div className="flex justify-between items-center mb-6">
+                         <div>
+                             <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">Telefones Inválidos ({invalidClients.length})</h3>
+                             <p className="text-sm font-medium text-slate-500">Clientes sinalizados pelos operadores ou sistema como número inexistente.</p>
+                         </div>
+                     </div>
+                     <table className="w-full text-left">
+                        <thead className="border-b border-slate-100">
+                           <tr>
+                              <th className="pb-4 pl-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Nome</th>
+                              <th className="pb-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Telefone Incorreto</th>
+                              <th className="pb-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Origem / Status</th>
+                              <th className="pb-4 text-right pr-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Ação</th>
+                           </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                           {invalidClients.map(c => (
+                              <tr key={c.id} className="hover:bg-slate-50/50 transition-colors">
+                                 <td className="p-4 font-bold text-slate-800">{c.name}</td>
+                                 <td className="p-4 text-red-500 font-mono text-sm">{c.phone}</td>
+                                 <td className="p-4">
+                                     <span className="text-[9px] font-black uppercase bg-slate-100 px-2 py-1 rounded">{c.origin || 'MANUAL'}</span>
+                                 </td>
+                                 <td className="p-4 text-right">
+                                     <button
+                                         onClick={async () => {
+                                             const newPhone = prompt("Digite o número de telefone correto para " + c.name + ":", c.phone);
+                                             if (newPhone && newPhone !== c.phone) {
+                                                 await dataService.updateClientFields(c.id, { phone: newPhone, invalid: false });
+                                                 alert("Telefone atualizado! O cliente retornará para a fila normal.");
+                                                 loadData();
+                                             }
+                                         }}
+                                         className="px-4 py-2 bg-blue-50 text-blue-600 rounded-lg text-xs font-bold hover:bg-blue-100 transition-colors"
+                                     >
+                                         Corrigir Número
+                                     </button>
+                                 </td>
+                              </tr>
+                           ))}
+                           {invalidClients.length === 0 && (
+                               <tr>
+                                   <td colSpan={4} className="p-8 text-center text-slate-400 font-medium">Nenhum cliente com telefone inválido no momento.</td>
+                               </tr>
+                           )}
+                        </tbody>
+                     </table>
                   </div>
                )}
 

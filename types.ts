@@ -72,6 +72,25 @@ export interface Sale {
   deliveryNote?: string;
 }
 
+export type QuoteStatus = 'OPEN' | 'WON' | 'LOST';
+
+export interface Quote {
+  id: string;
+  quote_number: string;
+  client_id?: string;
+  client_name: string;
+  salesperson_id?: string;
+  salesperson_name: string;
+  value: number;
+  win_probability: number;
+  status: QuoteStatus;
+  justification?: string;
+  interest_product?: string;
+  visit_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export enum ProtocolStatus {
   ABERTO = 'Aberto',
   EM_ANDAMENTO = 'Em andamento',

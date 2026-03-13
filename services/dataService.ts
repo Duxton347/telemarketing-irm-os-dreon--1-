@@ -4,7 +4,7 @@ import {
   UserRole, CallType, ProtocolStatus, ProtocolEvent,
   OperatorEventType, OperatorEvent, Sale, SaleStatus, Visit,
   CallSchedule, CallScheduleWithClient, ScheduleStatus, WhatsAppTask, ProductivityMetrics,
-  UnifiedReportRow, Protocol, ClientTag, TagStatus
+  UnifiedReportRow, Protocol, ClientTag, TagStatus, Quote
 } from '../types';
 import { TagDecisionEngine } from './tagDecisionEngine';
 import { SCORE_MAP, STAGE_CONFIG } from '../constants';
@@ -1054,20 +1054,22 @@ export const dataService = {
 
 
   logOperatorEvent: async (operatorId: string, type: OperatorEventType, taskId?: string, note?: string) => {
-    let finalTaskId = taskId;
-    // Check if the taskId actually belongs to the tasks table (it could be a call_schedules ID)
-    if (taskId) {
-      const { data } = await supabase.from('tasks').select('id').eq('id', taskId).maybeSingle();
-      if (!data) {
-        finalTaskId = undefined; // Don't trigger FK constraint violation if it's not a real task
-      }
-    }
-    await supabase.from('operator_events').insert({
+    const { error } = await supabase.from('operator_events').insert({
       operator_id: operatorId,
       event_type: type,
-      task_id: finalTaskId,
+      task_id: taskId,
       note: note
     });
+
+    // If the task_id does not exist in the tasks table (e.g. it's a schedule ID), it will throw a FK violation (23503)
+    if (error && error.code === '23503') {
+      await supabase.from('operator_events').insert({
+        operator_id: operatorId,
+        event_type: type,
+        task_id: null,
+        note: note ? note + ` (Origem Ref: ${taskId})` : `Origem Ref: ${taskId}`
+      });
+    }
   },
 
   getOperatorEvents: async (startDate: string, endDate: string): Promise<OperatorEvent[]> => {
@@ -1089,22 +1091,35 @@ export const dataService = {
   },
 
   getClients: async (includeLeads: boolean = false): Promise<Client[]> => {
-    let query = supabase.from('clients').select('*').order('name');
+    let allData: any[] = [];
+    let hasMore = true;
+    let fromIndex = 0;
+    const limit = 1000;
 
-    // Default: Return ONLY 'CLIENT' status. 
-    // If includeLeads is true, return ALL (for unified search).
-    if (!includeLeads) {
-      query = query.neq('status', 'LEAD');
-      // Note: We use neq 'LEAD' to include 'CLIENT' and nulls (legacy) as valid clients.
-      // Or better: .or('status.eq.CLIENT,status.is.null') but Supabase syntax is tricky.
-      // Let's assume default is CLIENT if null, but explicit check is safer.
-      // Actually, existing rows have null status. We added default 'CLIENT'.
-      // So .neq('status', 'LEAD') is robust.
+    while (hasMore) {
+      let query = supabase.from('clients').select('*').order('name').range(fromIndex, fromIndex + limit - 1);
+
+      // Default: Return ONLY 'CLIENT' status.
+      // If includeLeads is true, return ALL (for unified search).
+      if (!includeLeads) {
+        query = query.neq('status', 'LEAD');
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        allData.push(...data);
+      }
+
+      if (!data || data.length < limit) {
+        hasMore = false;
+      } else {
+        fromIndex += limit;
+      }
     }
 
-    const { data, error } = await query;
-    if (error) throw error;
-    return (data || []).map(c => ({
+    return allData.map(c => ({
       id: c.id,
       name: c.name || 'Sem Nome',
       phone: c.phone || '',
@@ -1199,9 +1214,27 @@ export const dataService = {
   },
 
   getProspects: async (): Promise<Client[]> => {
-    const { data, error } = await supabase.from('clients').select('*').eq('status', 'LEAD').not('tags', 'cs', '{"JA_CLIENTE"}').order('name');
-    if (error) throw error;
-    return (data || []).map(c => ({
+    let allData: any[] = [];
+    let hasMore = true;
+    let fromIndex = 0;
+    const limit = 1000;
+
+    while (hasMore) {
+      const { data, error } = await supabase.from('clients').select('*').eq('status', 'LEAD').not('tags', 'cs', '{"JA_CLIENTE"}').order('name').range(fromIndex, fromIndex + limit - 1);
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        allData.push(...data);
+      }
+
+      if (!data || data.length < limit) {
+        hasMore = false;
+      } else {
+        fromIndex += limit;
+      }
+    }
+
+    return allData.map(c => ({
       id: c.id,
       name: c.name || 'Prospecto Sem Nome',
       phone: c.phone || '',
@@ -1403,6 +1436,56 @@ export const dataService = {
   updateClientFields: async (clientId: string, updates: Partial<Client>): Promise<void> => {
     const { error } = await supabase.from('clients').update(updates).eq('id', clientId);
     if (error) throw error;
+  },
+
+  getInvalidClients: async (): Promise<Client[]> => {
+    let allData: any[] = [];
+    let hasMore = true;
+    let fromIndex = 0;
+    const limit = 1000;
+
+    while (hasMore) {
+      const { data, error } = await supabase.from('clients').select('*').eq('invalid', true).order('name').range(fromIndex, fromIndex + limit - 1);
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        allData.push(...data);
+      }
+
+      if (!data || data.length < limit) {
+        hasMore = false;
+      } else {
+        fromIndex += limit;
+      }
+    }
+
+    return allData.map(c => ({
+      id: c.id,
+      name: c.name || 'Sem Nome',
+      phone: c.phone || '',
+      address: c.address || '',
+      items: c.items || [],
+      offers: c.offers || [],
+      acceptance: (c.acceptance as any) || 'medium',
+      satisfaction: (c.satisfaction as any) || 'medium',
+      origin: c.origin,
+      email: c.email,
+      website: c.website,
+      status: c.status || 'CLIENT',
+      responsible_phone: c.responsible_phone,
+      buyer_name: c.buyer_name,
+      interest_product: c.interest_product,
+      preferred_channel: c.preferred_channel,
+      funnel_status: c.funnel_status,
+      external_id: c.external_id,
+      phone_secondary: c.phone_secondary,
+      street: c.street,
+      neighborhood: c.neighborhood,
+      city: c.city,
+      state: c.state,
+      zip_code: c.zip_code,
+      invalid: c.invalid
+    }));
   },
 
   // --- CLIENT MERGE (Deduplication) ---
@@ -1656,6 +1739,30 @@ export const dataService = {
   },
 
   // --- VISITAS ---
+  // --- QUOTES (ORÇAMENTOS) ---
+  getQuotes: async (): Promise<Quote[]> => {
+    const { data, error } = await supabase.from('quotes').select('*').order('created_at', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  },
+
+  saveQuote: async (quote: Partial<Quote>): Promise<Quote> => {
+    const { data, error } = await supabase.from('quotes').insert(quote).select().single();
+    if (error) throw error;
+    return data;
+  },
+
+  updateQuote: async (id: string, updates: Partial<Quote>): Promise<Quote> => {
+    const { data, error } = await supabase.from('quotes').update(updates).eq('id', id).select().single();
+    if (error) throw error;
+    return data;
+  },
+
+  deleteQuote: async (id: string): Promise<void> => {
+    const { error } = await supabase.from('quotes').delete().eq('id', id);
+    if (error) throw error;
+  },
+
   // --- VISITAS ---
   getVisits: async (): Promise<Visit[]> => {
     const { data, error } = await supabase
@@ -1798,12 +1905,19 @@ export const dataService = {
       return undefined;
     };
 
+    const getFullAddress = (client: any) => {
+      if (!client) return '';
+      if (client.address) return client.address;
+      const parts = [client.street, client.neighborhood, client.city, client.state].filter(Boolean);
+      return parts.join(', ');
+    };
+
     const mappedCalls = callsData.map((c: any) => ({
       id: c.id,
       type: 'CALL',
       clientName: c.clients?.name || 'Cliente Desconhecido',
       clientId: c.client_id,
-      address: c.clients?.address || '',
+      address: getFullAddress(c.clients),
       phone: c.clients?.phone || '',
       date: c.start_time,
       description: `Ligação: ${c.call_type} `,
@@ -1816,7 +1930,7 @@ export const dataService = {
       type: 'WHATSAPP',
       clientName: t.clients?.name || 'Cliente Desconhecido',
       clientId: t.client_id,
-      address: t.clients?.address || '',
+      address: getFullAddress(t.clients),
       phone: t.clients?.phone || '',
       date: t.created_at,
       description: `WhatsApp: ${t.type || 'Mensagem'} `,

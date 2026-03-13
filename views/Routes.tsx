@@ -60,7 +60,11 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
         generateSale: false,
         saleValue: 0,
         saleNumber: '',
-        saleExternal: ''
+        saleExternal: '',
+        generateQuote: false,
+        quoteValue: 0,
+        quoteNumber: '',
+        quoteWinProb: 50
     });
 
     // Manual Add Form Data
@@ -170,7 +174,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
         setManualSelectedClient(client);
         setManualVisitData({
             ...manualVisitData,
-            address: client.address
+            address: client.address || [client.street, client.neighborhood, client.city, client.state].filter(Boolean).join(', ')
         });
         setManualClientSearch('');
         setManualClients([]);
@@ -301,7 +305,11 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
             generateSale: false,
             saleValue: 0,
             saleNumber: '',
-            saleExternal: visit.externalSalesperson || ''
+            saleExternal: visit.externalSalesperson || '',
+            generateQuote: false,
+            quoteValue: 0,
+            quoteNumber: '',
+            quoteWinProb: 50
         });
         setModalType('FINALIZE');
         setIsModalOpen(true);
@@ -366,6 +374,21 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                         operatorId: user.id, // Current user is the registrar
                         value: Number(finalizeData.saleValue),
                         externalSalesperson: finalizeData.saleExternal // New field linked
+                    });
+                }
+
+                if (finalizeData.generateQuote) {
+                    if (!finalizeData.quoteNumber) throw new Error("Informe o número do orçamento.");
+                    await dataService.saveQuote({
+                        quote_number: finalizeData.quoteNumber,
+                        client_name: finalizeData.newName,
+                        client_id: activeVisit.clientId,
+                        salesperson_name: finalizeData.saleExternal || user.name,
+                        value: Number(finalizeData.quoteValue),
+                        win_probability: Number(finalizeData.quoteWinProb),
+                        status: 'OPEN',
+                        justification: finalizeData.note || 'Gerado via visita presencial',
+                        visit_id: activeVisit.id
                     });
                 }
             }
@@ -909,9 +932,40 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                                                         <input type="number" value={finalizeData.saleValue} onChange={e => setFinalizeData({ ...finalizeData, saleValue: Number(e.target.value) })} className="w-full p-3 bg-white border border-blue-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500" placeholder="R$ 0,00" />
                                                     </div>
                                                     <div>
-                                                        <label className="text-[10px] font-bold uppercase text-blue-700 mb-1 block">Vendedor Externo</label>
+                                                        <label className="text-[10px] font-bold uppercase text-blue-700 mb-1 block">Vendedor Responsável</label>
                                                         <select value={finalizeData.saleExternal} onChange={e => setFinalizeData({ ...finalizeData, saleExternal: e.target.value })} className="w-full p-3 bg-white border border-blue-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500">
                                                             <option value="">Selecione...</option>
+                                                            {externalSalespeople.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        <div className="p-4 bg-orange-50 rounded-2xl border border-orange-100 space-y-4">
+                                            <div className="flex items-center gap-3">
+                                                <input type="checkbox" id="genQuote" checked={finalizeData.generateQuote} onChange={e => setFinalizeData({ ...finalizeData, generateQuote: e.target.checked, generateSale: false })} className="w-5 h-5 rounded border-gray-300 text-orange-600 focus:ring-orange-500" />
+                                                <label htmlFor="genQuote" className="text-sm font-bold text-orange-900">Gerar Orçamento</label>
+                                            </div>
+
+                                            {finalizeData.generateQuote && (
+                                                <div className="grid grid-cols-1 gap-3 pl-8 animate-in mt-2">
+                                                    <div>
+                                                        <label className="text-[10px] font-bold uppercase text-orange-700 mb-1 block">Número do Orçamento</label>
+                                                        <input type="text" value={finalizeData.quoteNumber} onChange={e => setFinalizeData({ ...finalizeData, quoteNumber: e.target.value })} className="w-full p-3 bg-white border border-orange-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-orange-500" placeholder="Ex: ORC-12345" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="text-[10px] font-bold uppercase text-orange-700 mb-1 block">Valor do Orçamento</label>
+                                                        <input type="number" value={finalizeData.quoteValue} onChange={e => setFinalizeData({ ...finalizeData, quoteValue: Number(e.target.value) })} className="w-full p-3 bg-white border border-orange-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-orange-500" placeholder="R$ 0,00" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="text-[10px] font-bold uppercase text-orange-700 mb-1 block">Chance de Fechar (%)</label>
+                                                        <input type="number" min="0" max="100" value={finalizeData.quoteWinProb} onChange={e => setFinalizeData({ ...finalizeData, quoteWinProb: Number(e.target.value) })} className="w-full p-3 bg-white border border-orange-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-orange-500" />
+                                                    </div>
+                                                    <div>
+                                                        <label className="text-[10px] font-bold uppercase text-orange-700 mb-1 block">Vendedor Responsável</label>
+                                                        <select value={finalizeData.saleExternal} onChange={e => setFinalizeData({ ...finalizeData, saleExternal: e.target.value })} className="w-full p-3 bg-white border border-orange-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-orange-500">
+                                                            <option value="">(Selecione ou use o seu)</option>
                                                             {externalSalespeople.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
                                                         </select>
                                                     </div>

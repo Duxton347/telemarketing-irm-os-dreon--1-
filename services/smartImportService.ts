@@ -62,6 +62,16 @@ export const SmartImportService = {
   normalizePhone: (phoneRaw: any): string => {
     if (!phoneRaw) return '';
     const cleaned = String(phoneRaw).replace(/\D/g, '');
+    // Safety lock: if a phone is longer than 11 digits (e.g. 5511999999999), it might be fused.
+    // If it's vastly longer (e.g. 20+ chars), it's definitely two numbers merged.
+    // We truncate to the first 11 characters if it exceeds 11, assuming standard BR format without country code.
+    // E.g. 11999998888 (11 chars).
+    if (cleaned.length > 11 && !cleaned.startsWith('55')) {
+      return cleaned.substring(0, 11);
+    }
+    if (cleaned.length > 13 && cleaned.startsWith('55')) {
+      return cleaned.substring(0, 13);
+    }
     return cleaned; 
   },
 
