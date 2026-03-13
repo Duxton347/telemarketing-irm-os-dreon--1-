@@ -471,6 +471,21 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
         await dataService.saveProtocol(p as any, user.id);
       }
 
+      // 1.5 Schedule Logic
+      if (scheduleData.isScheduling) {
+        const scheduleDate = new Date(`${scheduleData.date}T${scheduleData.time}:00`).toISOString();
+        await dataService.createScheduleRequest({
+          requestedByOperatorId: user.id,
+          assignedOperatorId: user.id,
+          customerId: client.id,
+          originCallId: undefined,
+          scheduledFor: scheduleDate,
+          callType: scheduleData.type || currentTask.type,
+          scheduleReason: scheduleData.reason || 'Agendado durante finalização de chamada',
+          status: 'PENDENTE_APROVACAO',
+        });
+      }
+
       // 2. Save Call Record
       const callData = {
         id: '',
@@ -1102,14 +1117,27 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
               </div>
 
               <div className="pb-10 px-10 space-y-4">
-                {whatsappCheck && (
-                  <button
-                    onClick={handleWhatsappOnly}
-                    className="w-full py-4 bg-emerald-600 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-lg hover:bg-emerald-500 active:scale-95 transition-all"
-                  >
-                    Encerrar sem Agendar (Só WhatsApp)
-                  </button>
-                )}
+                <button
+                  onClick={async () => {
+                    if (whatsappCheck) {
+                      await handleWhatsappOnly();
+                    } else {
+                      if (!confirm("Tem certeza que deseja pular SEM agendar um retorno? O contato poderá ficar perdido.")) return;
+                      setIsProcessing(true);
+                      try {
+                        const skipTimingStr = isCalling ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
+                        const finalSkipReason = skipReasonSelected ? `${skipTimingStr}${skipReasonSelected}` : `${skipTimingStr}Pulo Direto`;
+                        await dataService.updateTask(currentTask.id, { status: 'skipped', skipReason: finalSkipReason });
+                        await dataService.logOperatorEvent(user.id, OperatorEventType.PULAR_ATENDIMENTO, currentTask.id, `Pulo (Sem Repique) - Motivo: ${finalSkipReason}`);
+                        await fetchQueue();
+                      } catch (e) { alert("Erro ao pular."); }
+                      finally { setIsProcessing(false); setIsRescheduleModalOpen(false); }
+                    }
+                  }}
+                  className={`w-full py-4 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-lg active:scale-95 transition-all ${whatsappCheck ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-red-500 hover:bg-red-400'}`}
+                >
+                  {whatsappCheck ? 'Encerrar sem Agendar (Só WhatsApp)' : 'Pular Definitivamente (Sem Retorno)'}
+                </button>
 
                 <button onClick={() => setIsRescheduleModalOpen(false)} className="w-full text-center text-slate-400 font-bold text-xs hover:text-red-500 uppercase tracking-widest">
                   Cancelar (Voltar)
