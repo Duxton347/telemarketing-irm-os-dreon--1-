@@ -590,8 +590,11 @@ export const dataService = {
   },
 
   deleteTask: async (taskId: string): Promise<void> => {
-    // Delete operator events first to prevent foreign key violation
-    await supabase.from('operator_events').delete().eq('task_id', taskId);
+    // Delete operator events first to prevent foreign key violation (if CASCADE is not configured in DB)
+    const { error: evError } = await supabase.from('operator_events').delete().eq('task_id', taskId);
+    if (evError) {
+      console.error("Non-critical: could not delete operator_events (make sure DB has ON DELETE CASCADE):", evError);
+    }
     
     // 1. Try deleting from tasks table
     const { error, count } = await supabase.from('tasks').delete({ count: 'exact' }).eq('id', taskId);
@@ -612,7 +615,10 @@ export const dataService = {
       const chunk = taskIds.slice(i, i + chunkSize);
       
       // Delete events first
-      await supabase.from('operator_events').delete().in('task_id', chunk);
+      const { error: evError } = await supabase.from('operator_events').delete().in('task_id', chunk);
+      if (evError) {
+        console.error("Non-critical: could not delete operator_events batch:", evError);
+      }
       
       // Try to delete from tasks
       await supabase.from('tasks').delete().in('id', chunk);
@@ -694,7 +700,9 @@ export const dataService = {
         .from('operator_events')
         .delete()
         .in('task_id', chunkIds);
-      if (evError) throw evError;
+      if (evError) {
+        console.error("Non-critical: could not delete operator_events by operator:", evError);
+      }
       
       // Delete exactly the identical 50 tasks
       const { error: tError } = await supabase
@@ -785,7 +793,10 @@ export const dataService = {
         const chunk = toDelete.slice(i, i + chunkSize);
         
         // Clean up operator_events first
-        await supabase.from('operator_events').delete().in('task_id', chunk);
+        const { error: evError } = await supabase.from('operator_events').delete().in('task_id', chunk);
+        if (evError) {
+          console.error("Non-critical: could not delete duplicate operator events:", evError);
+        }
 
         const { error: delError } = await supabase
           .from('tasks')
@@ -1043,10 +1054,18 @@ export const dataService = {
 
 
   logOperatorEvent: async (operatorId: string, type: OperatorEventType, taskId?: string, note?: string) => {
+    let finalTaskId = taskId;
+    // Check if the taskId actually belongs to the tasks table (it could be a call_schedules ID)
+    if (taskId) {
+      const { data } = await supabase.from('tasks').select('id').eq('id', taskId).maybeSingle();
+      if (!data) {
+        finalTaskId = undefined; // Don't trigger FK constraint violation if it's not a real task
+      }
+    }
     await supabase.from('operator_events').insert({
       operator_id: operatorId,
       event_type: type,
-      task_id: taskId,
+      task_id: finalTaskId,
       note: note
     });
   },
