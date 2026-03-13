@@ -1091,22 +1091,35 @@ export const dataService = {
   },
 
   getClients: async (includeLeads: boolean = false): Promise<Client[]> => {
-    let query = supabase.from('clients').select('*').order('name');
+    let allData: any[] = [];
+    let hasMore = true;
+    let fromIndex = 0;
+    const limit = 1000;
 
-    // Default: Return ONLY 'CLIENT' status. 
-    // If includeLeads is true, return ALL (for unified search).
-    if (!includeLeads) {
-      query = query.neq('status', 'LEAD');
-      // Note: We use neq 'LEAD' to include 'CLIENT' and nulls (legacy) as valid clients.
-      // Or better: .or('status.eq.CLIENT,status.is.null') but Supabase syntax is tricky.
-      // Let's assume default is CLIENT if null, but explicit check is safer.
-      // Actually, existing rows have null status. We added default 'CLIENT'.
-      // So .neq('status', 'LEAD') is robust.
+    while (hasMore) {
+      let query = supabase.from('clients').select('*').order('name').range(fromIndex, fromIndex + limit - 1);
+
+      // Default: Return ONLY 'CLIENT' status.
+      // If includeLeads is true, return ALL (for unified search).
+      if (!includeLeads) {
+        query = query.neq('status', 'LEAD');
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        allData.push(...data);
+      }
+
+      if (!data || data.length < limit) {
+        hasMore = false;
+      } else {
+        fromIndex += limit;
+      }
     }
 
-    const { data, error } = await query;
-    if (error) throw error;
-    return (data || []).map(c => ({
+    return allData.map(c => ({
       id: c.id,
       name: c.name || 'Sem Nome',
       phone: c.phone || '',
@@ -1201,9 +1214,27 @@ export const dataService = {
   },
 
   getProspects: async (): Promise<Client[]> => {
-    const { data, error } = await supabase.from('clients').select('*').eq('status', 'LEAD').not('tags', 'cs', '{"JA_CLIENTE"}').order('name');
-    if (error) throw error;
-    return (data || []).map(c => ({
+    let allData: any[] = [];
+    let hasMore = true;
+    let fromIndex = 0;
+    const limit = 1000;
+
+    while (hasMore) {
+      const { data, error } = await supabase.from('clients').select('*').eq('status', 'LEAD').not('tags', 'cs', '{"JA_CLIENTE"}').order('name').range(fromIndex, fromIndex + limit - 1);
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        allData.push(...data);
+      }
+
+      if (!data || data.length < limit) {
+        hasMore = false;
+      } else {
+        fromIndex += limit;
+      }
+    }
+
+    return allData.map(c => ({
       id: c.id,
       name: c.name || 'Prospecto Sem Nome',
       phone: c.phone || '',

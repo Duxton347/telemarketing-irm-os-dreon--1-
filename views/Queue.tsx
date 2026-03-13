@@ -486,6 +486,9 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       };
       const result = await dataService.saveCall(callData);
 
+      // Mark task as completed so it leaves the queue
+      await dataService.updateTask(currentTask.id, { status: 'completed' });
+
       // Handle Tag Suggestions
       if (result.suggestedTags && result.suggestedTags.length > 0) {
         setSuggestedTags(result.suggestedTags);
