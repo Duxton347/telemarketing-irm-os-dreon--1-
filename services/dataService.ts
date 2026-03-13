@@ -1054,20 +1054,22 @@ export const dataService = {
 
 
   logOperatorEvent: async (operatorId: string, type: OperatorEventType, taskId?: string, note?: string) => {
-    let finalTaskId = taskId;
-    // Check if the taskId actually belongs to the tasks table (it could be a call_schedules ID)
-    if (taskId) {
-      const { data } = await supabase.from('tasks').select('id').eq('id', taskId).maybeSingle();
-      if (!data) {
-        finalTaskId = undefined; // Don't trigger FK constraint violation if it's not a real task
-      }
-    }
-    await supabase.from('operator_events').insert({
+    const { error } = await supabase.from('operator_events').insert({
       operator_id: operatorId,
       event_type: type,
-      task_id: finalTaskId,
+      task_id: taskId,
       note: note
     });
+
+    // If the task_id does not exist in the tasks table (e.g. it's a schedule ID), it will throw a FK violation (23503)
+    if (error && error.code === '23503') {
+      await supabase.from('operator_events').insert({
+        operator_id: operatorId,
+        event_type: type,
+        task_id: null,
+        note: note ? note + ` (Origem Ref: ${taskId})` : `Origem Ref: ${taskId}`
+      });
+    }
   },
 
   getOperatorEvents: async (startDate: string, endDate: string): Promise<OperatorEvent[]> => {
