@@ -1749,12 +1749,24 @@ export const dataService = {
   saveQuote: async (quote: Partial<Quote>): Promise<Quote> => {
     const { data, error } = await supabase.from('quotes').insert(quote).select().single();
     if (error) throw error;
+
+    // Sync interest_product back to the client so it can be filtered in Campaign Planner
+    if (quote.interest_product && quote.client_id) {
+       await supabase.from('clients').update({ interest_product: quote.interest_product }).eq('id', quote.client_id);
+    }
+
     return data;
   },
 
   updateQuote: async (id: string, updates: Partial<Quote>): Promise<Quote> => {
     const { data, error } = await supabase.from('quotes').update(updates).eq('id', id).select().single();
     if (error) throw error;
+
+    // Sync interest_product back to the client so it can be filtered in Campaign Planner
+    if (updates.interest_product && data?.client_id) {
+       await supabase.from('clients').update({ interest_product: updates.interest_product }).eq('id', data.client_id);
+    }
+
     return data;
   },
 

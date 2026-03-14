@@ -11,11 +11,14 @@ interface QuotesProps {
     user: any;
 }
 
+import { CampaignPlannerService } from '../services/campaignPlannerService';
+
 export const Quotes: React.FC<QuotesProps> = ({ user }) => {
     const [quotes, setQuotes] = useState<Quote[]>([]);
     const [clients, setClients] = useState<Client[]>([]);
     const [users, setUsers] = useState<any[]>([]);
     const [externalSalespeople, setExternalSalespeople] = useState<{id:string, name:string}[]>([]);
+    const [interestProducts, setInterestProducts] = useState<string[]>([]);
 
     const [isLoading, setIsLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
@@ -35,16 +38,18 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
     const loadData = async () => {
         setIsLoading(true);
         try {
-            const [q, c, u, ext] = await Promise.all([
+            const [q, c, u, ext, products] = await Promise.all([
                 dataService.getQuotes(),
                 dataService.getClients(true),
                 dataService.getUsers(),
-                dataService.getExternalSalespeople()
+                dataService.getExternalSalespeople(),
+                CampaignPlannerService.getDistinctInterestProducts()
             ]);
             setQuotes(q);
             setClients(c);
             setUsers(u);
             setExternalSalespeople(ext);
+            setInterestProducts(products);
         } catch (e) {
             console.error(e);
             alert("Erro ao carregar dados de orçamentos.");
@@ -318,7 +323,46 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
                                 </div>
                                 <div className="space-y-1">
                                     <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Produto de Interesse</label>
-                                    <input type="text" value={newQuote.interest_product || ''} onChange={e => setNewQuote({...newQuote, interest_product: e.target.value})} className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-sm outline-none focus:border-blue-500" placeholder="Ex: Kit Fotovoltaico, Bomba..." />
+                                    {newQuote.interest_product === 'ADD_NEW' ? (
+                                        <div className="flex gap-2">
+                                            <input
+                                                autoFocus
+                                                type="text"
+                                                placeholder="Digite o novo produto..."
+                                                className="w-full p-3 bg-white border border-blue-300 rounded-xl font-bold text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all shadow-inner"
+                                                onBlur={(e) => {
+                                                    const val = e.target.value.trim();
+                                                    if (val) {
+                                                        if (!interestProducts.includes(val)) setInterestProducts([...interestProducts, val]);
+                                                        setNewQuote({...newQuote, interest_product: val});
+                                                    } else {
+                                                        setNewQuote({...newQuote, interest_product: ''});
+                                                    }
+                                                }}
+                                                onKeyDown={(e) => {
+                                                    if (e.key === 'Enter') {
+                                                        e.preventDefault();
+                                                        e.currentTarget.blur();
+                                                    }
+                                                }}
+                                            />
+                                        </div>
+                                    ) : (
+                                        <select
+                                            value={newQuote.interest_product || ''}
+                                            onChange={e => setNewQuote({...newQuote, interest_product: e.target.value})}
+                                            className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm text-slate-700 outline-none focus:border-blue-500 focus:bg-white transition-all cursor-pointer appearance-none shadow-sm"
+                                        >
+                                            <option value="">-- Selecione o Produto --</option>
+                                            {interestProducts.map(p => (
+                                                <option key={p} value={p}>{p}</option>
+                                            ))}
+                                            {newQuote.interest_product && !interestProducts.includes(newQuote.interest_product) && newQuote.interest_product !== 'ADD_NEW' && (
+                                                <option value={newQuote.interest_product}>{newQuote.interest_product}</option>
+                                            )}
+                                            <option value="ADD_NEW" className="font-black text-blue-600 bg-blue-50">+ Adicionar Novo Produto...</option>
+                                        </select>
+                                    )}
                                 </div>
                             </div>
 

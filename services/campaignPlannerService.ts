@@ -115,6 +115,24 @@ export const CampaignPlannerService = {
     } catch (e) { console.error(e); return []; }
   },
 
+  getDistinctInterestProducts: async (): Promise<string[]> => {
+    try {
+      // Fetch all interest_product from clients
+      const { data: clientsData, error: err1 } = await supabase.from('clients').select('interest_product').not('interest_product', 'is', null).neq('interest_product', '');
+
+      // Fetch all interest_product from quotes
+      const { data: quotesData, error: err2 } = await supabase.from('quotes').select('interest_product').not('interest_product', 'is', null).neq('interest_product', '');
+
+      const allProducts = [
+        ...(clientsData?.map(c => c.interest_product) || []),
+        ...(quotesData?.map(q => q.interest_product) || [])
+      ];
+
+      const uniqueProducts = Array.from(new Set(allProducts.filter(Boolean)));
+      return uniqueProducts.sort();
+    } catch (e) { console.error(e); return []; }
+  },
+
   getDistinctCallTypes: async (): Promise<string[]> => {
     try {
       const { data, error } = await supabase.from('call_logs').select('call_type').not('call_type', 'is', null);
@@ -139,7 +157,7 @@ export const CampaignPlannerService = {
         .from('clients')
         .select(`
           id, name, phone, status, neighborhood, city,
-          tags, items, offers, campanha_atual_id, email,
+          tags, items, offers, campanha_atual_id, email, interest_product,
           call_logs (
             id, call_type, responses, start_time, operator_id
           )
@@ -171,6 +189,9 @@ export const CampaignPlannerService = {
         for (const eq of filters.equipamentos) {
           query = query.contains('items', [eq]);
         }
+      }
+      if (filters.interesses?.length) {
+        query = query.in('interest_product', filters.interesses);
       }
       if (filters.temEmail === true) {
         query = query.not('email', 'is', null).neq('email', '');

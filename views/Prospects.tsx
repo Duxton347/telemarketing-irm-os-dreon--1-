@@ -24,10 +24,9 @@ const ORIGIN_TYPES = [
     { id: 'CSV_IMPORT', label: 'Planilha CSV' }
 ];
 
-const INTEREST_PRODUCTS = [
-    'Fotovoltaico', 'Bomba', 'Pressurizadora', 'Químicos', 'Gerador de Cloro',
-    'Aquecedor de Piscina', 'Aquecedor a Gás', 'Boiler', 'Placa Solar', 'Manutenção', 'Outros'
-];
+import { CampaignPlannerService } from '../services/campaignPlannerService';
+
+// INTEREST_PRODUCTS is now dynamically loaded from DB
 
 const MetricCard: React.FC<{ title: string; value: string | number; icon: any; color: string }> = ({ title, value, icon: Icon, color }) => {
     return (
@@ -53,6 +52,7 @@ const Prospects: React.FC = () => {
     const [selectedInterest, setSelectedInterest] = useState('ALL');
     const [neighborhoodFilter, setNeighborhoodFilter] = useState('ALL');
     const [cityFilter, setCityFilter] = useState('ALL');
+    const [interestProducts, setInterestProducts] = useState<string[]>([]);
 
     const [selectedClient, setSelectedClient] = useState<Client | null>(null);
 
@@ -76,12 +76,14 @@ const Prospects: React.FC = () => {
     const loadData = async () => {
         setLoading(true);
         try {
-            const [data, ops] = await Promise.all([
+            const [data, ops, products] = await Promise.all([
                 dataService.getProspects(),
-                dataService.getUsers()
+                dataService.getUsers(),
+                CampaignPlannerService.getDistinctInterestProducts()
             ]);
             setProspects(data);
             setOperators(ops.filter(o => o.role !== 'ADMIN'));
+            setInterestProducts(products);
             if (ops.filter(o => o.role !== 'ADMIN').length > 0) {
                 setBulkOperator(ops.filter(o => o.role !== 'ADMIN')[0].id);
             }
@@ -264,7 +266,7 @@ const Prospects: React.FC = () => {
                         onChange={e => setSelectedInterest(e.target.value)}
                     >
                         <option value="ALL">Todos Interesses</option>
-                        {INTEREST_PRODUCTS.map(p => <option key={p} value={p}>{p}</option>)}
+                        {interestProducts.map(p => <option key={p} value={p}>{p}</option>)}
                     </select>
 
                     <select
@@ -535,7 +537,44 @@ const Prospects: React.FC = () => {
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <input type="text" placeholder="Comprador" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all" value={newProspect.buyer_name || ''} onChange={e => setNewProspect({ ...newProspect, buyer_name: e.target.value })} />
-                                <input type="text" placeholder="Produto de Interesse" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all" value={newProspect.interest_product || ''} onChange={e => setNewProspect({ ...newProspect, interest_product: e.target.value })} />
+                                {newProspect.interest_product === 'ADD_NEW' ? (
+                                    <input
+                                        autoFocus
+                                        type="text"
+                                        placeholder="Digite o novo produto..."
+                                        className="w-full p-4 bg-white rounded-2xl outline-none font-bold text-sm border border-blue-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all shadow-inner"
+                                        onBlur={(e) => {
+                                            const val = e.target.value.trim();
+                                            if (val) {
+                                                if (!interestProducts.includes(val)) setInterestProducts([...interestProducts, val]);
+                                                setNewProspect({...newProspect, interest_product: val});
+                                            } else {
+                                                setNewProspect({...newProspect, interest_product: ''});
+                                            }
+                                        }}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                e.preventDefault();
+                                                e.currentTarget.blur();
+                                            }
+                                        }}
+                                    />
+                                ) : (
+                                    <select
+                                        value={newProspect.interest_product || ''}
+                                        onChange={e => setNewProspect({...newProspect, interest_product: e.target.value})}
+                                        className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all cursor-pointer appearance-none text-slate-700"
+                                    >
+                                        <option value="">-- Produto de Interesse --</option>
+                                        {interestProducts.map(p => (
+                                            <option key={p} value={p}>{p}</option>
+                                        ))}
+                                        {newProspect.interest_product && !interestProducts.includes(newProspect.interest_product) && newProspect.interest_product !== 'ADD_NEW' && (
+                                            <option value={newProspect.interest_product}>{newProspect.interest_product}</option>
+                                        )}
+                                        <option value="ADD_NEW" className="font-black text-blue-600 bg-blue-50">+ Adicionar Novo Produto...</option>
+                                    </select>
+                                )}
                             </div>
 
                             <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 space-y-4">
