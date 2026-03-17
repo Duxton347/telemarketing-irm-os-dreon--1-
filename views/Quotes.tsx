@@ -12,6 +12,7 @@ interface QuotesProps {
 }
 
 import { CampaignPlannerService } from '../services/campaignPlannerService';
+import { CurrencyInput } from '../components/CurrencyInput';
 
 export const Quotes: React.FC<QuotesProps> = ({ user }) => {
     const [quotes, setQuotes] = useState<Quote[]>([]);
@@ -369,7 +370,7 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
                             <div className="grid grid-cols-3 gap-4">
                                 <div className="col-span-1 space-y-1">
                                     <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Valor (R$)</label>
-                                    <input required type="number" step="0.01" value={newQuote.value || 0} onChange={e => setNewQuote({...newQuote, value: parseFloat(e.target.value)})} className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-sm outline-none focus:border-blue-500" />
+                                    <CurrencyInput required value={newQuote.value || 0} onChange={val => setNewQuote({...newQuote, value: val})} className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-sm outline-none focus:border-blue-500" />
                                 </div>
                                 <div className="col-span-1 space-y-1">
                                     <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Chance de Fechar (%)</label>
