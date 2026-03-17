@@ -13,6 +13,7 @@ interface QuotesProps {
 
 import { CampaignPlannerService } from '../services/campaignPlannerService';
 import { CurrencyInput } from '../components/CurrencyInput';
+import { AutocompleteInput } from '../components/AutocompleteInput';
 
 export const Quotes: React.FC<QuotesProps> = ({ user }) => {
     const [quotes, setQuotes] = useState<Quote[]>([]);
@@ -355,24 +356,31 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
                                 </div>
                                 <div className="space-y-1">
                                     <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Vendedor Responsável</label>
-                                    <input required type="text" list="salespeople" value={newQuote.salesperson_name || ''} onChange={e => setNewQuote({...newQuote, salesperson_name: e.target.value})} className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-sm outline-none focus:border-blue-500" placeholder="Nome do vendedor..." />
-                                    <datalist id="salespeople">
-                                        {allSalespeopleNames.map(n => <option key={n} value={n} />)}
-                                    </datalist>
+                                    <AutocompleteInput
+                                        value={newQuote.salesperson_name || ''}
+                                        onChange={val => setNewQuote({...newQuote, salesperson_name: val})}
+                                        options={allSalespeopleNames.map(n => ({ id: n, label: n }))}
+                                        placeholder="Nome do vendedor..."
+                                        required
+                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:border-blue-400 focus:ring-4 focus:ring-blue-50 focus:bg-white rounded-xl outline-none transition-all font-bold text-sm text-slate-700 shadow-inner"
+                                    />
                                 </div>
                             </div>
 
                             <div className="grid grid-cols-2 gap-4">
                                 <div className="space-y-1">
                                     <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Cliente / Lead</label>
-                                    <input required type="text" list="clientsList" value={newQuote.client_name || ''} onChange={e => {
-                                        const val = e.target.value;
-                                        const matched = clients.find(c => c.name === val);
-                                        setNewQuote({...newQuote, client_name: val, client_id: matched?.id});
-                                    }} className="w-full p-3 bg-slate-50 border rounded-xl font-bold text-sm outline-none focus:border-blue-500" placeholder="Nome do cliente (busque ou digite novo)..." />
-                                    <datalist id="clientsList">
-                                        {clients.map(c => <option key={c.id} value={c.name} />)}
-                                    </datalist>
+                                    <AutocompleteInput
+                                        value={newQuote.client_name || ''}
+                                        onChange={val => {
+                                            const matched = clients.find(c => c.name === val);
+                                            setNewQuote({...newQuote, client_name: val, client_id: matched?.id});
+                                        }}
+                                        options={clients.map(c => ({ id: c.id, label: c.name }))}
+                                        placeholder="Nome do cliente (busque ou digite novo)..."
+                                        required
+                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:border-blue-400 focus:ring-4 focus:ring-blue-50 focus:bg-white rounded-xl outline-none transition-all font-bold text-sm text-slate-700 shadow-inner"
+                                    />
                                 </div>
                                 <div className="space-y-1">
                                     <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Produto de Interesse</label>
