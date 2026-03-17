@@ -98,13 +98,35 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
             if (newQuote.id) {
                 await dataService.updateQuote(newQuote.id, newQuote);
             } else {
-                await dataService.saveQuote(newQuote);
+                let currentClient = clients.find(c => c.name === newQuote.client_name);
+                let finalClientId = newQuote.client_id;
+
+                // If client doesn't exist, create it first
+                if (!currentClient) {
+                    // upsertClient requires phone, so we'll use a dummy one if we don't have it,
+                    // or ideally prompt the user. For now, we will provide a generic one to satisfy the DB constraint,
+                    // but we should set it to something obvious so they can update it later.
+                    const newClient = await dataService.upsertClient({
+                        name: newQuote.client_name,
+                        phone: '00000000000', // required by upsertClient
+                        status: 'LEAD',
+                        // @ts-ignore
+                        operator_id: user.id
+                    });
+                    finalClientId = newClient.id;
+                }
+
+                await dataService.saveQuote({
+                    ...newQuote,
+                    client_id: finalClientId
+                });
             }
             setIsModalOpen(false);
             setNewQuote({ status: 'OPEN', win_probability: 50, value: 0 });
             loadData();
         } catch (e) {
-            alert("Erro ao salvar orçamento.");
+            console.error("Erro ao salvar orçamento: ", e);
+            alert("Erro ao salvar orçamento. Verifique os logs do console para mais detalhes.");
         }
     };
 
@@ -197,42 +219,70 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
             </div>
 
             {/* FILTERS */}
-            <div className="bg-white p-4 rounded-xl border shadow-sm flex flex-wrap gap-4 items-center">
-                <div className="flex-1 min-w-[200px] relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+            <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100 flex flex-wrap gap-3 items-center mx-auto max-w-full">
+                <div className="flex-1 min-w-[280px] relative group">
+                    <div className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-500 transition-colors">
+                        <Search size={20} strokeWidth={2.5} />
+                    </div>
                     <input
                         type="text"
-                        placeholder="Buscar por cliente ou nº orçamento..."
+                        placeholder="Pesquise por nome do cliente ou número do orçamento..."
                         value={searchTerm}
                         onChange={e => setSearchTerm(e.target.value)}
-                        className="w-full pl-10 pr-4 py-2 bg-slate-50 border-transparent focus:border-blue-500 focus:bg-white rounded-lg outline-none transition-all font-medium"
+                        className="w-full pl-12 pr-10 py-3 bg-slate-50 border border-slate-200 focus:border-blue-400 focus:ring-4 focus:ring-blue-50 focus:bg-white rounded-full outline-none transition-all font-medium text-slate-700 placeholder:text-slate-400 shadow-inner"
                     />
+                    {searchTerm && (
+                        <button
+                            onClick={() => setSearchTerm('')}
+                            className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors bg-slate-100 rounded-full p-1"
+                        >
+                            <X size={14} strokeWidth={3} />
+                        </button>
+                    )}
                 </div>
-                <div className="flex items-center gap-2">
-                    <Filter size={18} className="text-slate-400" />
-                    <select
-                        value={statusFilter}
-                        onChange={e => setStatusFilter(e.target.value as any)}
-                        className="p-2 bg-slate-50 rounded-lg font-medium text-sm outline-none border-transparent focus:border-blue-500 cursor-pointer"
-                    >
-                        <option value="ALL">Todos os Status</option>
-                        <option value="OPEN">Em Aberto</option>
-                        <option value="WON">Fechado (Ganho)</option>
-                        <option value="LOST">Perdido</option>
-                    </select>
-                </div>
-                <div className="flex items-center gap-2">
-                    <User size={18} className="text-slate-400" />
-                    <select
-                        value={salespersonFilter}
-                        onChange={e => setSalespersonFilter(e.target.value)}
-                        className="p-2 bg-slate-50 rounded-lg font-medium text-sm outline-none border-transparent focus:border-blue-500 cursor-pointer max-w-[200px]"
-                    >
-                        <option value="ALL">Todos os Vendedores</option>
-                        {allSalespeopleNames.map(n => (
-                            <option key={n} value={n}>{n}</option>
-                        ))}
-                    </select>
+
+                <div className="flex gap-3">
+                    <div className="relative group">
+                        <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-500 pointer-events-none">
+                            <Filter size={16} strokeWidth={2.5} />
+                        </div>
+                        <select
+                            value={statusFilter}
+                            onChange={e => setStatusFilter(e.target.value as any)}
+                            className="pl-9 pr-8 py-3 bg-slate-50 border border-slate-200 rounded-full font-bold text-sm text-slate-600 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-50 focus:bg-white transition-all cursor-pointer appearance-none"
+                        >
+                            <option value="ALL">Todos Status</option>
+                            <option value="OPEN">Em Aberto</option>
+                            <option value="WON">Ganho</option>
+                            <option value="LOST">Perdido</option>
+                        </select>
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                            <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                            </svg>
+                        </div>
+                    </div>
+
+                    <div className="relative group">
+                        <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-500 pointer-events-none">
+                            <User size={16} strokeWidth={2.5} />
+                        </div>
+                        <select
+                            value={salespersonFilter}
+                            onChange={e => setSalespersonFilter(e.target.value)}
+                            className="pl-9 pr-8 py-3 bg-slate-50 border border-slate-200 rounded-full font-bold text-sm text-slate-600 outline-none focus:border-blue-400 focus:ring-4 focus:ring-blue-50 focus:bg-white transition-all cursor-pointer appearance-none max-w-[200px] truncate"
+                        >
+                            <option value="ALL">Todos Vendedores</option>
+                            {allSalespeopleNames.map(n => (
+                                <option key={n} value={n}>{n}</option>
+                            ))}
+                        </select>
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                            <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                            </svg>
+                        </div>
+                    </div>
                 </div>
             </div>
 
