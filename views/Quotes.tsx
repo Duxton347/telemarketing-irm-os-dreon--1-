@@ -114,6 +114,8 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
                         operator_id: user.id
                     });
                     finalClientId = newClient.id;
+                } else {
+                    finalClientId = currentClient.id;
                 }
 
                 await dataService.saveQuote({
