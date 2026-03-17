@@ -2182,7 +2182,11 @@ export const dataService = {
         e.eventType === OperatorEventType.WHATSAPP_SKIP || 
         ((e.eventType === OperatorEventType.PULAR_ATENDIMENTO || e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO) && e.note?.toLowerCase().includes('whatsapp'));
 
-    const totalCalls = events.filter(e => e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO && !e.note?.toLowerCase().includes('whatsapp')).length;
+    const isCallOrSkipEvent = (e: any) =>
+        (e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO || e.eventType === OperatorEventType.PULAR_ATENDIMENTO) &&
+        !e.note?.toLowerCase().includes('whatsapp');
+
+    const totalCalls = events.filter(isCallOrSkipEvent).length;
     const totalWhatsApp = events.filter(isWhatsAppEvent).length;
     const salesCount = rawSales?.length || 0;
     const conversionRate = totalCalls > 0 ? (salesCount / totalCalls) * 100 : 0;
@@ -2191,7 +2195,7 @@ export const dataService = {
       const opEvents = events.filter(e => e.operatorId === op.id);
       const opSales = rawSales?.filter(s => s.operator_id === op.id) || [];
 
-      const opCalls = opEvents.filter(e => e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO && !e.note?.toLowerCase().includes('whatsapp')).length;
+      const opCalls = opEvents.filter(isCallOrSkipEvent).length;
       const opWhatsapp = opEvents.filter(isWhatsAppEvent).length;
 
       return {
