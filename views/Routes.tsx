@@ -8,7 +8,6 @@ import { dataService } from '../services/dataService';
 import { Visit, Client, User as UserType, CallType, SaleStatus, ExternalSalesperson, SaleCategory, SaleChannel } from '../types';
 import { exportToExcel, exportToPDF } from '../utils/RouteExport';
 import { normalizePhone } from '../lib/supabase';
-import { CurrencyInput } from '../components/CurrencyInput';
 
 const Routes: React.FC<{ user: UserType }> = ({ user }) => {
     // --- STATE ---
@@ -930,7 +929,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                                                     </div>
                                                     <div>
                                                         <label className="text-[10px] font-bold uppercase text-blue-700 mb-1 block">Valor da Venda</label>
-                                                        <CurrencyInput value={finalizeData.saleValue} onChange={value => setFinalizeData({ ...finalizeData, saleValue: value })} className="w-full p-3 bg-white border border-blue-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500" placeholder="R$ 0,00" />
+                                                        <input type="number" value={finalizeData.saleValue} onChange={e => setFinalizeData({ ...finalizeData, saleValue: Number(e.target.value) })} className="w-full p-3 bg-white border border-blue-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500" placeholder="R$ 0,00" />
                                                     </div>
                                                     <div>
                                                         <label className="text-[10px] font-bold uppercase text-blue-700 mb-1 block">Vendedor Responsável</label>
@@ -957,7 +956,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                                                     </div>
                                                     <div>
                                                         <label className="text-[10px] font-bold uppercase text-orange-700 mb-1 block">Valor do Orçamento</label>
-                                                        <CurrencyInput value={finalizeData.quoteValue} onChange={value => setFinalizeData({ ...finalizeData, quoteValue: value })} className="w-full p-3 bg-white border border-orange-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-orange-500" placeholder="R$ 0,00" />
+                                                        <input type="number" value={finalizeData.quoteValue} onChange={e => setFinalizeData({ ...finalizeData, quoteValue: Number(e.target.value) })} className="w-full p-3 bg-white border border-orange-200 rounded-xl text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-orange-500" placeholder="R$ 0,00" />
                                                     </div>
                                                     <div>
                                                         <label className="text-[10px] font-bold uppercase text-orange-700 mb-1 block">Chance de Fechar (%)</label>

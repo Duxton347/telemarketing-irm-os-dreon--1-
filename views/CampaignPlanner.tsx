@@ -10,7 +10,6 @@ import { dataService } from '../services/dataService';
 import { Calendar, Filter, Users, Send, Search, Save, X, Settings2, MapPin, Phone, Tag as TagIcon, LayoutGrid, Clock, Mail } from 'lucide-react';
 import { HelpTooltip } from '../components/HelpTooltip';
 import { HELP_TEXTS } from '../utils/helpTexts';
-import { AutocompleteMultiInput } from '../components/AutocompleteMultiInput';
 
 export const CampaignPlanner: React.FC = () => {
   // Dynamic filter lists from DB
@@ -21,12 +20,6 @@ export const CampaignPlanner: React.FC = () => {
   const [tagCategoriesList, setTagCategoriesList] = useState<string[]>([]);
   const [operadoresList, setOperadoresList] = useState<any[]>([]);
   const [interestProductsList, setInterestProductsList] = useState<string[]>([]);
-
-  // Local state for autocomplete inputs
-  const [interestInput, setInterestInput] = useState('');
-  const [cityInput, setCityInput] = useState('');
-  const [neighborhoodInput, setNeighborhoodInput] = useState('');
-  const [equipmentInput, setEquipmentInput] = useState('');
 
   // Selected filters
   const [filters, setFilters] = useState<CampaignPlannerFilters>({
@@ -250,19 +243,34 @@ export const CampaignPlanner: React.FC = () => {
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
                     <LayoutGrid size={12} /> Produto de Interesse (Orçamentos / Leads)
                   </label>
-                  <AutocompleteMultiInput
-                      value={interestInput}
-                      onChange={setInterestInput}
-                      onAdd={val => {
-                          if (!filters.interesses?.includes(val)) {
-                              setFilters({ ...filters, interesses: [...(filters.interesses || []), val] });
-                          }
-                      }}
-                      options={interestProductsList}
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      list="interest-list"
                       placeholder="Buscar Produto de Interesse..."
-                      icon={<Search size={14} />}
-                      className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-sm text-slate-700 outline-none focus:border-purple-500 focus:ring-4 focus:ring-purple-50 focus:bg-white transition-all shadow-inner"
-                  />
+                      className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-purple-500 focus:bg-white transition-all shadow-inner"
+                      onChange={(e) => {
+                        const val = e.target.value.trim();
+                        if (interestProductsList.includes(val)) {
+                          if (!filters.interesses?.includes(val)) setFilters({ ...filters, interesses: [...(filters.interesses || []), val] });
+                          e.target.value = '';
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const val = e.currentTarget.value.trim();
+                          if (val && !filters.interesses?.includes(val)) {
+                            setFilters({ ...filters, interesses: [...(filters.interesses || []), val] });
+                            e.currentTarget.value = '';
+                          }
+                        }
+                      }}
+                    />
+                    <datalist id="interest-list">
+                      {interestProductsList.map(i => <option key={i} value={i} />)}
+                    </datalist>
+                  </div>
                   {filters.interesses && filters.interesses.length > 0 && (
                      <div className="flex flex-wrap gap-1 mt-2">
                        {filters.interesses.map(int => (
@@ -278,19 +286,34 @@ export const CampaignPlanner: React.FC = () => {
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
                     <MapPin size={12} /> Cidade / Região (Pesquisável)
                   </label>
-                  <AutocompleteMultiInput
-                      value={cityInput}
-                      onChange={setCityInput}
-                      onAdd={val => {
-                          if (!filters.cidades?.includes(val)) {
-                              setFilters({ ...filters, cidades: [...(filters.cidades || []), val] });
-                          }
-                      }}
-                      options={citiesList}
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      list="cities-list"
                       placeholder="Buscar Cidade..."
-                      icon={<Search size={14} />}
-                      className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50 focus:bg-white transition-all shadow-inner"
-                  />
+                      className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-blue-500 focus:bg-white transition-all shadow-inner"
+                      onChange={(e) => {
+                        const val = e.target.value.trim();
+                        if (citiesList.includes(val)) {
+                          if (!filters.cidades?.includes(val)) setFilters({ ...filters, cidades: [...(filters.cidades || []), val] });
+                          e.target.value = '';
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const val = e.currentTarget.value.trim();
+                          if (val && !filters.cidades?.includes(val)) {
+                            setFilters({ ...filters, cidades: [...(filters.cidades || []), val] });
+                            e.currentTarget.value = '';
+                          }
+                        }
+                      }}
+                    />
+                    <datalist id="cities-list">
+                      {citiesList.map(c => <option key={c} value={c} />)}
+                    </datalist>
+                  </div>
                   {filters.cidades && filters.cidades.length > 0 && (
                      <div className="flex flex-wrap gap-1 mt-2">
                        {filters.cidades.map(c => (
@@ -302,19 +325,32 @@ export const CampaignPlanner: React.FC = () => {
                   )}
 
                   <div className="relative mt-3">
-                      <AutocompleteMultiInput
-                          value={neighborhoodInput}
-                          onChange={setNeighborhoodInput}
-                          onAdd={val => {
-                              if (!filters.bairros?.includes(val)) {
-                                  setFilters({ ...filters, bairros: [...(filters.bairros || []), val] });
-                              }
-                          }}
-                          options={neighborhoodsList}
-                          placeholder="Buscar Bairro..."
-                          icon={<Search size={14} />}
-                          className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-sm text-slate-700 outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-50 focus:bg-white transition-all shadow-inner"
-                      />
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      list="neighborhoods-list"
+                      placeholder="Buscar Bairro..."
+                      className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-blue-500 focus:bg-white transition-all shadow-inner"
+                      onChange={(e) => {
+                        const val = e.target.value.trim();
+                        if (neighborhoodsList.includes(val)) {
+                          if (!filters.bairros?.includes(val)) setFilters({ ...filters, bairros: [...(filters.bairros || []), val] });
+                          e.target.value = '';
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const val = e.currentTarget.value.trim();
+                          if (val && !filters.bairros?.includes(val)) {
+                            setFilters({ ...filters, bairros: [...(filters.bairros || []), val] });
+                            e.currentTarget.value = '';
+                          }
+                        }
+                      }}
+                    />
+                    <datalist id="neighborhoods-list">
+                      {neighborhoodsList.map(n => <option key={n} value={n} />)}
+                    </datalist>
                   </div>
                   {filters.bairros && filters.bairros.length > 0 && (
                      <div className="flex flex-wrap gap-1 mt-2">
@@ -331,19 +367,34 @@ export const CampaignPlanner: React.FC = () => {
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
                     <LayoutGrid size={12} /> Equipamentos Conhecidos (Pesquisável)
                   </label>
-                  <AutocompleteMultiInput
-                      value={equipmentInput}
-                      onChange={setEquipmentInput}
-                      onAdd={val => {
-                          if (!filters.equipamentos?.includes(val)) {
-                              setFilters({ ...filters, equipamentos: [...(filters.equipamentos || []), val] });
-                          }
-                      }}
-                      options={itemsList}
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      list="items-list"
                       placeholder="Buscar Equipamento..."
-                      icon={<Search size={14} />}
-                      className="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-sm text-slate-700 outline-none focus:border-teal-500 focus:ring-4 focus:ring-teal-50 focus:bg-white transition-all shadow-inner"
-                  />
+                      className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-teal-500 focus:bg-white transition-all shadow-inner"
+                      onChange={(e) => {
+                        const val = e.target.value.trim();
+                        if (itemsList.includes(val)) {
+                          if (!filters.equipamentos?.includes(val)) setFilters({ ...filters, equipamentos: [...(filters.equipamentos || []), val] });
+                          e.target.value = '';
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const val = e.currentTarget.value.trim();
+                          if (val && !filters.equipamentos?.includes(val)) {
+                            setFilters({ ...filters, equipamentos: [...(filters.equipamentos || []), val] });
+                            e.currentTarget.value = '';
+                          }
+                        }
+                      }}
+                    />
+                    <datalist id="items-list">
+                      {itemsList.map(i => <option key={i} value={i} />)}
+                    </datalist>
+                  </div>
                   {filters.equipamentos && filters.equipamentos.length > 0 && (
                      <div className="flex flex-wrap gap-1 mt-2">
                        {filters.equipamentos.map(eq => (

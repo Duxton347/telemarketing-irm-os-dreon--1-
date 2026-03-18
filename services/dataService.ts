@@ -416,8 +416,7 @@ export const dataService = {
 
       const { data, error } = await query;
       if (error) throw error;
-
-      let result = (data || []).map(q => ({
+      return (data || []).map(q => ({
         id: q.id,
         text: q.text,
         options: q.options || [],
@@ -430,47 +429,6 @@ export const dataService = {
         obrigatoria: q.obrigatoria,
         ativo: q.ativo
       }));
-
-      // Apply specific modifications for PROSPECÇÃO on the fly to fulfill user requests without needing DB access
-      if (callType === 'PROSPECÇÃO' || (result.some(q => q.type === 'PROSPECÇÃO'))) {
-         // 1. Remove Q4 (E-mail do contato)
-         result = result.filter(q => q.id !== '55f73fa2-f1ee-48e0-8d8c-9985ea2d58e3');
-
-         // 2. Change Q5 and Q6 to text inputs and map field names
-         result = result.map(q => {
-             // Qual o nome do contato principal?
-             if (q.id === '8868c7a3-5a0f-4537-9fab-3f61be064e36') {
-                 return { ...q, tipo_input: 'text', campo_resposta: 'contato_nome' };
-             }
-             // WhatsApp direto do contato?
-             if (q.id === '7ed45177-702a-4575-b227-b56c6af80737') {
-                 return { ...q, tipo_input: 'text', campo_resposta: 'contato_whatsapp' };
-             }
-             return q;
-         });
-
-         // 3. Ensure Q999 (Possui e-mail?) is present if not already fetched
-         const q999Id = 'd48d2b9d-2d95-4f98-a71b-aa9d47edec1b';
-         if (!result.some(q => q.id === q999Id)) {
-             // Because Q999 has type 'ALL' it should be fetched, but if it was marked inactive, we'll force add it
-             result.push({
-                 id: q999Id,
-                 text: "Possui e-mail? Se sim, qual?",
-                 options: [],
-                 type: "ALL" as any,
-                 order: 999,
-                 proposito: null,
-                 campo_resposta: "email_cliente",
-                 tipo_input: "text",
-                 obrigatoria: false,
-                 ativo: true
-             });
-             // Resort by order
-             result.sort((a, b) => a.order - b.order);
-         }
-      }
-
-      return result;
     } catch (e) { return []; }
   },
 
@@ -497,10 +455,15 @@ export const dataService = {
       .filter(t => t.client_id) // Only require a valid client_id, don't filter by join result
       .map(t => {
         const clientObj = Array.isArray(t.clients) ? t.clients[0] : t.clients;
+        // Ensure that tasks dispatched with a specific call type (e.g., from Campaign Planner) retain it,
+        // unless it's explicitly a reativation logic condition.
+        // We will prefer the explicitly assigned task type, falling back to logic based on client status.
+        const taskType = t.type ? (t.type as CallType) : (clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : CallType.POS_VENDA);
+
         return {
           id: t.id,
           clientId: t.client_id,
-          type: clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : (t.type as CallType),
+          type: taskType,
           deadline: t.created_at,
           assignedTo: t.assigned_to,
           status: t.status as any,
@@ -2224,11 +2187,7 @@ export const dataService = {
         e.eventType === OperatorEventType.WHATSAPP_SKIP || 
         ((e.eventType === OperatorEventType.PULAR_ATENDIMENTO || e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO) && e.note?.toLowerCase().includes('whatsapp'));
 
-    const isCallOrSkipEvent = (e: any) =>
-        (e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO || e.eventType === OperatorEventType.PULAR_ATENDIMENTO) &&
-        !e.note?.toLowerCase().includes('whatsapp');
-
-    const totalCalls = events.filter(isCallOrSkipEvent).length;
+    const totalCalls = events.filter(e => e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO && !e.note?.toLowerCase().includes('whatsapp')).length;
     const totalWhatsApp = events.filter(isWhatsAppEvent).length;
     const salesCount = rawSales?.length || 0;
     const conversionRate = totalCalls > 0 ? (salesCount / totalCalls) * 100 : 0;
@@ -2237,7 +2196,7 @@ export const dataService = {
       const opEvents = events.filter(e => e.operatorId === op.id);
       const opSales = rawSales?.filter(s => s.operator_id === op.id) || [];
 
-      const opCalls = opEvents.filter(isCallOrSkipEvent).length;
+      const opCalls = opEvents.filter(e => e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO && !e.note?.toLowerCase().includes('whatsapp')).length;
       const opWhatsapp = opEvents.filter(isWhatsAppEvent).length;
 
       return {

@@ -527,24 +527,6 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       };
       const result = await dataService.saveCall(callData);
 
-      // Special logic for Prospecção fields
-      if (currentTask.type === CallType.PROSPECCAO) {
-        const updates: Partial<Client> = {};
-        if (responses['contato_nome']) {
-          updates.name = responses['contato_nome'];
-        }
-        if (responses['contato_whatsapp']) {
-          updates.phone = responses['contato_whatsapp'];
-        }
-        if (responses['email_cliente']) {
-          updates.email = responses['email_cliente'];
-        }
-
-        if (Object.keys(updates).length > 0) {
-          await dataService.updateClientFields(client.id, updates);
-        }
-      }
-
       // Mark task as completed so it leaves the queue
       await dataService.updateTask(currentTask.id, { status: 'completed' });
 
@@ -1090,14 +1072,8 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
         {/* MODAL DE REAGENDAMENTO OBRIGATÓRIO (REPIQUE) */}
         {isRescheduleModalOpen && (
           <div className="fixed inset-0 z-[160] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4">
-            <div className="bg-white w-full max-w-lg rounded-[48px] shadow-2xl overflow-hidden animate-in zoom-in duration-300 relative">
-              <button
-                onClick={() => setIsRescheduleModalOpen(false)}
-                className="absolute top-6 right-6 text-white/70 hover:text-white bg-black/20 hover:bg-black/40 p-2 rounded-full transition-all z-10"
-              >
-                <X size={24} strokeWidth={2.5} />
-              </button>
-              <div className="bg-orange-600 p-8 text-white text-center relative">
+            <div className="bg-white w-full max-w-lg rounded-[48px] shadow-2xl overflow-hidden animate-in zoom-in duration-300">
+              <div className="bg-orange-600 p-8 text-white text-center">
                 <Clock size={48} className="mx-auto mb-4 text-orange-200" />
                 <h3 className="text-2xl font-black uppercase tracking-tighter">Agendar Repique</h3>
                 <p className="text-orange-100 font-bold mt-2">Defina o próximo passo para este atendimento</p>

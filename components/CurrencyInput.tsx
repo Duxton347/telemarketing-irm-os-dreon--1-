@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
 interface CurrencyInputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'value' | 'onChange' | 'type'> {
-    value: number;
+    value: number | string;
     onChange: (value: number) => void;
 }
 
@@ -15,17 +15,19 @@ export function CurrencyInput({ value, onChange, ...props }: CurrencyInputProps)
     };
 
     useEffect(() => {
-        if (value === 0 && (!displayValue || parseCurrency(displayValue) === 0)) {
+        const numValue = typeof value === 'string' ? parseFloat(value.replace(',', '.')) : (value || 0);
+
+        if (numValue === 0 && (!displayValue || parseCurrency(displayValue) === 0)) {
             if (!displayValue) {
                 setDisplayValue('');
             }
-        } else if (value !== undefined && value !== null) {
+        } else if (numValue !== undefined && numValue !== null && !isNaN(numValue)) {
             const formatted = new Intl.NumberFormat('pt-BR', {
                 minimumFractionDigits: 2,
                 maximumFractionDigits: 2
-            }).format(value);
+            }).format(numValue);
 
-            if (parseCurrency(displayValue) !== value) {
+            if (parseCurrency(displayValue) !== numValue) {
                  setDisplayValue(formatted);
             }
         } else {

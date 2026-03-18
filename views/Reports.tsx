@@ -180,59 +180,53 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
          const processedSkipTaskIds = new Set<string>();
 
          skippedEvents.forEach(evt => {
-            // Include skip if it has a taskId and hasn't been processed yet.
-            // We DON'T filter out completedTaskIds here because a task might be skipped initially,
-            // and later completed in a subsequent interaction, but the skip event itself is still a valid action to count.
-            if (evt.taskId && !processedSkipTaskIds.has(evt.taskId)) {
+            if (evt.taskId && !completedTaskIds.has(evt.taskId) && !processedSkipTaskIds.has(evt.taskId)) {
                processedSkipTaskIds.add(evt.taskId);
                
                // Look up task details
                const task = fetchedTasks.find(t => t.id === evt.taskId);
                const waTask = fetchedWa.find(w => w.id === evt.taskId || w.sourceId === evt.taskId);
                
-               // Even if the task isn't in fetchedTasks (e.g. it was deleted or filtered out),
-               // we should still count the event as an interaction for the operator based on the event log.
-               pureSkipCount++;
+               if (task || waTask) {
+                   pureSkipCount++;
+                    const assignedTo = task ? task.assignedTo : (waTask as any)?.assignedTo;
+                    const clientId = task ? task.clientId : waTask?.clientId;
+                    const clientName = task ? (task.clientName || task.clients?.name) : waTask?.clientName;
+                    const note = evt.note || (task ? task.skipReason : (waTask as any)?.skipNote) || 'Sem motivo informado';
+                   const op = fetchedOps.find(o => o.id === assignedTo);
 
-               const assignedTo = evt.operatorId || (task ? task.assignedTo : (waTask as any)?.assignedTo);
-               const clientId = task ? task.clientId : waTask?.clientId;
-               const clientName = task ? (task.clientName || task.clients?.name) : waTask?.clientName;
-               const note = evt.note || (task ? task.skipReason : (waTask as any)?.skipNote) || 'Sem motivo informado';
-               const op = fetchedOps.find(o => o.id === assignedTo);
-
-               skipAuditDetails.push({
-                   id: evt.id,
-                   operatorId: assignedTo,
-                   operatorName: op?.name || 'Desconhecido',
-                   clientId: clientId || 'Desconhecido',
-                   clientName: clientName || 'Desconhecido',
-                   timestamp: evt.timestamp,
-                   note: note
-               });
+                   skipAuditDetails.push({
+                       id: evt.id,
+                       operatorId: assignedTo,
+                       operatorName: op?.name || 'Desconhecido',
+                       clientId: clientId,
+                       clientName: clientName || 'Desconhecido',
+                       timestamp: evt.timestamp,
+                       note: note
+                   });
+               }
             }
          });
 
          // Also count any WhatsApp specific skip events if they weren't caught by PULAR_ATENDIMENTO
          const waSkipEvents = fetchedEvents.filter(e => e.eventType === OperatorEventType.WHATSAPP_SKIP);
          waSkipEvents.forEach(evt => {
-             // Similarly, remove the 'completedTaskIds' check to prevent skips from disappearing
-             // from the count if the operator ends up completing the call later.
-             if (evt.taskId && !processedSkipTaskIds.has(evt.taskId)) {
+             if (evt.taskId && !completedTaskIds.has(evt.taskId) && !processedSkipTaskIds.has(evt.taskId)) {
                  processedSkipTaskIds.add(evt.taskId);
                  const waTask = fetchedWa.find(w => w.id === evt.taskId || w.sourceId === evt.taskId);
-                 const assignedTo = evt.operatorId || (waTask as any)?.assignedTo;
-
-                 pureSkipCount++;
-                 const op = fetchedOps.find(o => o.id === assignedTo);
-                 skipAuditDetails.push({
-                     id: evt.id,
-                     operatorId: assignedTo,
-                     operatorName: op?.name || 'Desconhecido',
-                     clientId: waTask?.clientId || 'Desconhecido',
-                     clientName: waTask?.clientName || 'Desconhecido',
-                     timestamp: evt.timestamp,
-                     note: evt.note || (waTask as any)?.skipNote || 'Sem motivo informado'
-                 });
+                 if (waTask) {
+                     pureSkipCount++;
+                      const op = fetchedOps.find(o => o.id === (waTask as any).assignedTo);
+                      skipAuditDetails.push({
+                          id: evt.id,
+                          operatorId: (waTask as any).assignedTo,
+                          operatorName: op?.name || 'Desconhecido',
+                          clientId: waTask.clientId,
+                          clientName: waTask.clientName || 'Desconhecido',
+                          timestamp: evt.timestamp,
+                          note: evt.note || (waTask as any).skipNote || 'Sem motivo informado'
+                      });
+                 }
              }
          });
 
