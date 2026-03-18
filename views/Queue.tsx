@@ -527,6 +527,24 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       };
       const result = await dataService.saveCall(callData);
 
+      // Special logic for Prospecção fields
+      if (currentTask.type === CallType.PROSPECCAO) {
+        const updates: Partial<Client> = {};
+        if (responses['contato_nome']) {
+          updates.name = responses['contato_nome'];
+        }
+        if (responses['contato_whatsapp']) {
+          updates.phone = responses['contato_whatsapp'];
+        }
+        if (responses['email_cliente']) {
+          updates.email = responses['email_cliente'];
+        }
+
+        if (Object.keys(updates).length > 0) {
+          await dataService.updateClientFields(client.id, updates);
+        }
+      }
+
       // Mark task as completed so it leaves the queue
       await dataService.updateTask(currentTask.id, { status: 'completed' });
 
