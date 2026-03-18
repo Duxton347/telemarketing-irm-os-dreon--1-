@@ -90,7 +90,9 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
                 }
             }
 
-            const saleValue = parseFloat(newSale.value.replace(',', '.'));
+            const saleValue = typeof newSale.value === 'string'
+                ? parseFloat((newSale.value as string).replace(',', '.'))
+                : newSale.value;
 
             // Auto-link Client if name matches existing record
             let finalClientId = newSale.clientId;
