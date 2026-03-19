@@ -20,7 +20,9 @@ import {
   Target,
   Upload,
   FileUp,
-  Sparkles
+  Sparkles,
+  FileText,
+  Database
 } from 'lucide-react';
 import { UserRole } from '../types';
 
@@ -45,14 +47,13 @@ const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
     { label: 'Prospecção', icon: Target, path: '/prospects', roles: [UserRole.ADMIN, UserRole.SUPERVISOR, UserRole.OPERATOR] },
     { label: 'Captação', icon: Globe, path: '/scraper', roles: [UserRole.ADMIN, UserRole.SUPERVISOR, UserRole.OPERATOR] },
 
+    { label: 'Orçamentos', icon: FileText, path: '/quotes', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },
     { label: 'Roteiros', icon: Map, path: '/routes', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },
     { label: 'WhatsApp', icon: MessageCircle, path: '/whatsapp', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },
     { label: 'Gestão', icon: Settings, path: '/admin', roles: [UserRole.ADMIN] },
     { label: 'Relatórios', icon: FileBarChart, path: '/reports', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
     { label: 'Exportar/Carga', icon: Upload, path: '/workload', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
-    { label: 'Importar PDF', icon: FileUp, path: '/pdf-import', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
-    { label: 'Importar Produtos (CSV)', icon: Sparkles, path: '/product-import', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
-    { label: 'Importação Inteligente', icon: Sparkles, path: '/admin?tab=tags', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
+    { label: 'Central de Dados', icon: Database, path: '/data-center', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
     { label: 'Planejar Campanhas', icon: Target, path: '/campaigns', roles: [UserRole.ADMIN, UserRole.SUPERVISOR] },
   ];
 

@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { Sale, SaleCategory, SaleChannel, SaleStatus, User as UserType, UserRole } from '../types';
+import { CurrencyInput } from '../components/CurrencyInput';
 
 const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
     const [sales, setSales] = React.useState<Sale[]>([]);
@@ -89,7 +90,7 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
                 }
             }
 
-            const saleValue = parseFloat(newSale.value.replace(',', '.'));
+            const saleValue = typeof newSale.value === 'number' ? newSale.value : parseFloat(newSale.value.toString().replace(',', '.'));
 
             // Auto-link Client if name matches existing record
             let finalClientId = newSale.clientId;
@@ -559,13 +560,12 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
                                     </div>
                                     <div className="space-y-2">
                                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Valor Venda (R$)</label>
-                                        <input
-                                            type="text"
+                                        <CurrencyInput
                                             required
                                             value={newSale.value}
-                                            onChange={e => setNewSale({ ...newSale, value: e.target.value })}
+                                            onChange={val => setNewSale({ ...newSale, value: val })}
                                             className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-bold outline-none focus:ring-4 focus:ring-emerald-500/10 transition-all text-emerald-600"
-                                            placeholder="0,00"
+                                            placeholder="R$ 0,00"
                                         />
                                     </div>
                                 </div>

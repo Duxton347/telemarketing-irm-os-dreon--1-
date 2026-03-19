@@ -468,9 +468,10 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
       }
 
       let count = 0;
+      let invalidCount = 0;
       for (const row of csvPreview) {
 
-        const isProspecting = selectedCallType.includes('PROSPEC') || isImportingAsLead;
+        const isProspecting = isImportingAsLead; // Only rely on explicit checkbox
         const isReativacao = selectedCallType === CallType.REATIVACAO;
 
         const client = await dataService.upsertClient({
@@ -480,10 +481,15 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
           items: row.equipment ? [row.equipment] : [],
           offers: row.offer ? [row.offer] : [],
           last_purchase_date: row.lastPurchaseDate,
-          origin: isProspecting ? 'CSV_IMPORT' : 'MANUAL',
+          origin: 'CSV_IMPORT', // It's always a CSV import from this modal
           status: isReativacao ? 'INATIVO' : (isProspecting ? 'LEAD' : 'CLIENT'),
           funnel_status: isProspecting ? 'NEW' : undefined
         });
+
+        if (client.invalid) {
+            invalidCount++;
+            continue; // Skip creating tasks for invalid numbers
+        }
 
         // Check duplicate
         const isDuplicateTask = pendingByOpAndType.some(t => t.clientId === client.id);
@@ -513,7 +519,11 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
         count++;
       }
 
-      alert(`${count} tarefas importadas com sucesso para ${selectedChannel === 'VOICE' ? 'Ligação' : 'WhatsApp'}!`);
+      let msg = `${count} tarefas importadas com sucesso para ${selectedChannel === 'VOICE' ? 'Ligação' : 'WhatsApp'}!`;
+      if (invalidCount > 0) {
+        msg += `\n\nAtenção: ${invalidCount} clientes foram ignorados e não geraram tarefas porque o telefone estava marcado como "Inválido".`;
+      }
+      alert(msg);
       setCsvPreview([]);
       await refreshData();
     } catch (e: any) {

@@ -19,6 +19,7 @@ export const CampaignPlanner: React.FC = () => {
   const [callTypesList, setCallTypesList] = useState<string[]>([]);
   const [tagCategoriesList, setTagCategoriesList] = useState<string[]>([]);
   const [operadoresList, setOperadoresList] = useState<any[]>([]);
+  const [interestProductsList, setInterestProductsList] = useState<string[]>([]);
 
   // Selected filters
   const [filters, setFilters] = useState<CampaignPlannerFilters>({
@@ -64,6 +65,7 @@ export const CampaignPlanner: React.FC = () => {
     CampaignPlannerService.getDistinctItems().then(setItemsList);
     CampaignPlannerService.getDistinctCallTypes().then(setCallTypesList);
     CampaignPlannerService.getDistinctTagCategories().then(setTagCategoriesList);
+    CampaignPlannerService.getDistinctInterestProducts().then(setInterestProductsList);
   }, []);
 
   // Update neighborhoods when city filter changes
@@ -134,7 +136,7 @@ export const CampaignPlanner: React.FC = () => {
         proposito: campProposito,
         callType: campCallType,
         canal: campCanal,
-        operatorId: campOperador,
+        operatorId: campOperador || null, // Ensure empty string becomes null for database integrity
         clientIds: Array.from(selectedIds),
         filters
       });
@@ -237,13 +239,56 @@ export const CampaignPlanner: React.FC = () => {
 
               {/* BLOCK 2: Geography & Equipment */}
               <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                    <LayoutGrid size={12} /> Produto de Interesse (Orçamentos / Leads)
+                  </label>
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      list="interest-list"
+                      placeholder="Buscar Produto de Interesse..."
+                      className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-purple-500 focus:bg-white transition-all shadow-inner"
+                      onChange={(e) => {
+                        const val = e.target.value.trim();
+                        if (interestProductsList.includes(val)) {
+                          if (!filters.interesses?.includes(val)) setFilters({ ...filters, interesses: [...(filters.interesses || []), val] });
+                          e.target.value = '';
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const val = e.currentTarget.value.trim();
+                          if (val && !filters.interesses?.includes(val)) {
+                            setFilters({ ...filters, interesses: [...(filters.interesses || []), val] });
+                            e.currentTarget.value = '';
+                          }
+                        }
+                      }}
+                    />
+                    <datalist id="interest-list">
+                      {interestProductsList.map(i => <option key={i} value={i} />)}
+                    </datalist>
+                  </div>
+                  {filters.interesses && filters.interesses.length > 0 && (
+                     <div className="flex flex-wrap gap-1 mt-2">
+                       {filters.interesses.map(int => (
+                         <span key={int} className="inline-flex items-center gap-1 bg-gradient-to-r from-purple-500 to-fuchsia-500 text-white shadow-sm px-2.5 py-1 rounded-lg text-xs font-bold animate-in zoom-in duration-200">
+                           {int} <X size={12} className="cursor-pointer hover:text-purple-200 transition-colors" onClick={() => toggleFilterArray('interesses', int)} />
+                         </span>
+                       ))}
+                     </div>
+                  )}
+                </div>
+
                 <div className="space-y-2 relative">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
                     <MapPin size={12} /> Cidade / Região (Pesquisável)
                   </label>
                   <div className="relative">
                     <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input 
+                    <input
                       list="cities-list"
                       placeholder="Buscar Cidade..."
                       className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-blue-500 focus:bg-white transition-all shadow-inner"
@@ -281,7 +326,7 @@ export const CampaignPlanner: React.FC = () => {
 
                   <div className="relative mt-3">
                     <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input 
+                    <input
                       list="neighborhoods-list"
                       placeholder="Buscar Bairro..."
                       className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-blue-500 focus:bg-white transition-all shadow-inner"
@@ -324,7 +369,7 @@ export const CampaignPlanner: React.FC = () => {
                   </label>
                   <div className="relative">
                     <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input 
+                    <input
                       list="items-list"
                       placeholder="Buscar Equipamento..."
                       className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-teal-500 focus:bg-white transition-all shadow-inner"
@@ -527,8 +572,11 @@ export const CampaignPlanner: React.FC = () => {
                             {c.items?.slice(0, 2).map((item, idx) => (
                               <span key={idx} className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase">{item}</span>
                             ))}
-                            {((c.tags?.length || 0) + (c.items?.length || 0) > 5) && (
-                              <span className="text-[9px] text-slate-400 font-bold bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">+{((c.tags?.length || 0) + (c.items?.length || 0) - 5)} mais</span>
+                            {c.interest_product && (
+                              <span className="bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase" title="Produto de Interesse (Lead/Orçamento)">{c.interest_product}</span>
+                            )}
+                            {((c.tags?.length || 0) + (c.items?.length || 0) + (c.interest_product ? 1 : 0) > 5) && (
+                              <span className="text-[9px] text-slate-400 font-bold bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">+{((c.tags?.length || 0) + (c.items?.length || 0) + (c.interest_product ? 1 : 0) - 5)} mais</span>
                             )}
                           </div>
                         </td>
