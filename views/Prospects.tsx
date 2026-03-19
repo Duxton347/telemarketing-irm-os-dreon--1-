@@ -3,7 +3,7 @@ import {
     Search, Filter, Plus, Phone, MessageCircle, Calendar,
     UserPlus, CheckCircle2, MapPin, Globe, Mail, DollarSign,
     Target, Loader2, Users, ChevronRight, X, Send, BarChart3, Clock, Play, FileText,
-    History, ClipboardList, Map
+    History, ClipboardList, Map, Edit2
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { Client, CallType, User } from '../types';
@@ -100,18 +100,27 @@ const Prospects: React.FC = () => {
 
         try {
             await dataService.upsertClient({
-                ...newProspect,
-                status: 'LEAD',
+                status: 'LEAD', // default but will not overwrite if updating
                 funnel_status: 'NEW',
-                origin: 'MANUAL'
+                origin: 'MANUAL',
+                ...newProspect
             });
             setIsModalOpen(false);
             setNewProspect({});
-            loadData();
-            alert("Prospecto cadastrado!");
+            await loadData();
+            if (selectedClient && selectedClient.id === newProspect.id) {
+                const updated = await dataService.getClients(true);
+                setSelectedClient(updated.find(c => c.id === newProspect.id) || null);
+            }
+            alert("Lead salvo com sucesso!");
         } catch (e) {
             alert("Erro ao salvar prospecto");
         }
+    };
+
+    const handleEditProspect = (client: any) => {
+        setNewProspect(client);
+        setIsModalOpen(true);
     };
 
     const handleUpdateStatus = async (id: string, newStatus: string) => {
@@ -394,7 +403,10 @@ const Prospects: React.FC = () => {
                             <div className="flex-1 overflow-y-auto p-10 space-y-10 custom-scrollbar">
                                 {/* DADOS GERAIS */}
                                 <section className="space-y-6">
-                                    <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2"><FileText size={14} className="text-indigo-500" /> Informações do Lead</h5>
+                                    <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                                        <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2"><FileText size={14} className="text-indigo-500" /> Informações do Lead</h5>
+                                        <button onClick={() => handleEditProspect(selectedClient)} className="text-[10px] font-black uppercase tracking-widest text-blue-500 hover:text-blue-600 flex items-center gap-1 transition-colors"><Edit2 size={12}/> Editar Cadastro</button>
+                                    </div>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                         {selectedClient.email && (
                                             <div className="space-y-1">
