@@ -122,7 +122,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       const now = new Date();
       // Filter out tasks that are waiting for approval
       const myPendingTasks = allTasks.filter(t =>
-        t.assignedTo === effectiveOperatorId &&
+        (t.assignedTo === effectiveOperatorId || !t.assignedTo) && // Allow tasks explicitly assigned or in Fila Geral
         t.status === 'pending' &&
         (t.approvalStatus === 'APPROVED' || !t.approvalStatus)
       );
