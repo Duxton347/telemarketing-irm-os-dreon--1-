@@ -444,7 +444,7 @@ export const dataService = {
 
   getTasks: async (operatorId?: string): Promise<Task[]> => {
     // 1. Fetch Legacy Tasks (standard queue)
-    let tasksQuery = supabase.from('tasks').select('*, clients(*), profiles:assigned_to(*)').in('status', ['pending', 'skipped']);
+    let tasksQuery = supabase.from('tasks').select('*, clients(*)').in('status', ['pending', 'skipped']);
     if (operatorId) {
       tasksQuery = tasksQuery.eq('assigned_to', operatorId);
     }

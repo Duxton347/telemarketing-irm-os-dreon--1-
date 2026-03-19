@@ -136,7 +136,7 @@ export const CampaignPlanner: React.FC = () => {
         proposito: campProposito,
         callType: campCallType,
         canal: campCanal,
-        operatorId: campOperador,
+        operatorId: campOperador || null, // Ensure empty string becomes null for database integrity
         clientIds: Array.from(selectedIds),
         filters
       });
