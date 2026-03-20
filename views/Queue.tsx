@@ -6,15 +6,30 @@ import {
   Loader2, Clock, MapPin, User, FileText, AlertCircle, Save, X, MessageCircle, Copy, Check, ChevronRight, AlertTriangle, ClipboardList, Zap, Calendar, Mail
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
-import { Task, Client, Question, CallType, OperatorEventType, ProtocolStatus, UserRole, ClientTag } from '../types';
+import { Task, Client, Question, CallType, OperatorEventType, ProtocolStatus, UserRole, ClientTag, ClientHistoryData } from '../types';
 import { SKIP_REASONS, PROTOCOL_SLA } from '../constants';
 import { TagApprovalCard } from '../components/TagApprovalCard';
 import { HelpTooltip } from '../components/HelpTooltip';
 import { HELP_TEXTS } from '../utils/helpTexts';
+import { enrichQuestionnaireResponses } from '../utils/questionnaireInsights';
+import { collectPortfolioMetadata, getClientPortfolioEntries } from '../utils/clientPortfolio';
 
 interface QueueProps {
   user: any;
 }
+
+const EMPTY_CLIENT_HISTORY: ClientHistoryData = {
+  calls: [],
+  protocols: [],
+  summary: {
+    totalCalls: 0,
+    totalProtocols: 0,
+    openProtocols: 0,
+    callCountsByType: [],
+    callCountsByPurpose: [],
+    callCountsByTargetProduct: []
+  }
+};
 
 const Queue: React.FC<QueueProps> = ({ user }) => {
   const [effectiveOperatorId, setEffectiveOperatorId] = React.useState<string>(user.id);
@@ -48,8 +63,18 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   const [isCopiedSecondary, setIsCopiedSecondary] = React.useState(false);
   const [hasRecentCall, setHasRecentCall] = React.useState(false);
 
-  const [clientHistory, setClientHistory] = React.useState<{ calls: any[], protocols: any[] }>({ calls: [], protocols: [] });
+  const [clientHistory, setClientHistory] = React.useState<ClientHistoryData>(EMPTY_CLIENT_HISTORY);
   const [historyLoading, setHistoryLoading] = React.useState(false);
+  const [campaignFeedback, setCampaignFeedback] = React.useState({
+    portfolioScope: '',
+    offerInterestLevel: '',
+    offerBlockerReason: ''
+  });
+  const clientPortfolioEntries = React.useMemo(() => getClientPortfolioEntries(client), [client]);
+  const clientPortfolioMetadata = React.useMemo(
+    () => collectPortfolioMetadata(clientPortfolioEntries),
+    [clientPortfolioEntries]
+  );
 
   // Estados para abertura de protocolo no report
   const [needsProtocol, setNeedsProtocol] = React.useState(false);
@@ -76,6 +101,11 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   React.useEffect(() => {
     if (currentTask) {
       setScheduleData(prev => ({ ...prev, type: currentTask.type }));
+      setCampaignFeedback({
+        portfolioScope: currentTask.portfolioScope || (currentTask.targetProduct ? 'somente_linha_alvo' : ''),
+        offerInterestLevel: '',
+        offerBlockerReason: ''
+      });
     }
   }, [currentTask]);
 
@@ -98,6 +128,8 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setInterestProduct('');
     setSuggestedTags([]);
     setShowTagSuccess(false);
+    setClientHistory(EMPTY_CLIENT_HISTORY);
+    setCampaignFeedback({ portfolioScope: '', offerInterestLevel: '', offerBlockerReason: '' });
   }, []);
 
   // State for upcoming tasks
@@ -162,7 +194,11 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
             buyer_name: embeddedClient?.buyer_name,
             interest_product: embeddedClient?.interest_product,
             preferred_channel: embeddedClient?.preferred_channel,
-            funnel_status: embeddedClient?.funnel_status
+            funnel_status: embeddedClient?.funnel_status,
+            customer_profiles: embeddedClient?.customer_profiles || [],
+            product_categories: embeddedClient?.product_categories || [],
+            equipment_models: embeddedClient?.equipment_models || embeddedClient?.items || [],
+            portfolio_entries: embeddedClient?.portfolio_entries || []
           } as Client;
         }
 
@@ -511,6 +547,21 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       }
 
       // 2. Save Call Record
+      const normalizedResponses = enrichQuestionnaireResponses(
+        {
+          ...responses,
+          written_report: callSummary,
+          call_type: currentTask.type,
+          target_product: currentTask.targetProduct,
+          offer_product: currentTask.offerProduct,
+          portfolio_scope: campaignFeedback.portfolioScope || currentTask.portfolioScope,
+          offer_interest_level: campaignFeedback.offerInterestLevel,
+          offer_blocker_reason: campaignFeedback.offerBlockerReason,
+          campaign_name: currentTask.campaignName,
+          call_purpose: currentTask.proposito
+        },
+        questions
+      );
       const callData = {
         id: '',
         taskId: currentTask.id,
@@ -520,8 +571,16 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
         endTime: new Date().toISOString(),
         duration: callDuration,
         reportTime: reportDuration,
-        responses: { ...responses, written_report: callSummary, call_type: currentTask.type },
+        responses: normalizedResponses,
         type: currentTask.type,
+        proposito: currentTask.proposito,
+        campanha_id: currentTask.campanha_id,
+        campaignName: currentTask.campaignName,
+        targetProduct: currentTask.targetProduct,
+        offerProduct: currentTask.offerProduct,
+        portfolioScope: campaignFeedback.portfolioScope || currentTask.portfolioScope,
+        offerInterestLevel: campaignFeedback.offerInterestLevel,
+        offerBlockerReason: campaignFeedback.offerBlockerReason
       };
       const result = await dataService.saveCall(callData);
 
@@ -695,6 +754,22 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
               {(currentTask.type === 'PROSPECÇÃO' || client.status === 'LEAD') && client.email && (
                 <p className="font-bold text-amber-400 flex items-center gap-2 text-sm mt-1"><Mail size={16} className="shrink-0 text-amber-400" /> {client.email}</p>
               )}
+              {!historyLoading && clientHistory.protocols.length > 0 && (
+                <div className="space-y-2 mt-4">
+                  <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Protocolos no nome do cliente</p>
+                  <div className="space-y-2">
+                    {clientHistory.protocols.slice(0, 3).map(protocol => (
+                      <div key={protocol.id} className="rounded-xl border border-slate-700 bg-slate-800/40 p-3 space-y-1">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-[8px] font-black uppercase tracking-widest text-red-300">{protocol.status}</span>
+                          <span className="text-[8px] font-black uppercase tracking-widest text-slate-500">#{protocol.protocolNumber || protocol.id.substring(0, 8)}</span>
+                        </div>
+                        <p className="text-[10px] font-bold text-slate-200">{protocol.title}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {(currentTask.type === 'PROSPECÇÃO' || client.status === 'LEAD') && (
@@ -728,12 +803,33 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
             )}
 
             <div className="pt-6 border-t border-slate-800">
-              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-3">Portfólio de Equipamentos</p>
-              <div className="flex flex-wrap gap-2">
-                {client.items && client.items.length > 0 ? client.items.map((it, i) => (
-                  <span key={i} className="px-3 py-1 bg-slate-800 text-[10px] font-black uppercase text-slate-300 rounded-md border border-slate-700">{it}</span>
-                )) : (
-                  <span className="text-xs text-slate-600 italic">Nenhum equipamento cadastrado</span>
+              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-3">Perfil e Base Técnica do Cliente</p>
+              <div className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  {clientPortfolioMetadata.customer_profiles.map(profile => (
+                    <span key={profile} className="px-3 py-1 bg-amber-900/30 text-[10px] font-black uppercase text-amber-300 rounded-md border border-amber-800/70">{profile}</span>
+                  ))}
+                  {clientPortfolioMetadata.product_categories.map(category => (
+                    <span key={category} className="px-3 py-1 bg-cyan-900/30 text-[10px] font-black uppercase text-cyan-300 rounded-md border border-cyan-800/70">{category}</span>
+                  ))}
+                  {clientPortfolioMetadata.equipment_models.map(equipment => (
+                    <span key={equipment} className="px-3 py-1 bg-slate-800 text-[10px] font-black uppercase text-slate-300 rounded-md border border-slate-700">{equipment}</span>
+                  ))}
+                  {clientPortfolioMetadata.customer_profiles.length === 0 && clientPortfolioMetadata.product_categories.length === 0 && clientPortfolioMetadata.equipment_models.length === 0 && (
+                    <span className="text-xs text-slate-600 italic">Nenhum equipamento cadastrado</span>
+                  )}
+                </div>
+
+                {clientPortfolioEntries.length > 0 && (
+                  <div className="space-y-2">
+                    {clientPortfolioEntries.map((entry, index) => (
+                      <div key={entry.id || `${entry.profile}-${entry.product_category}-${entry.equipment}-${index}`} className="rounded-xl border border-slate-700 bg-slate-800/40 p-3 space-y-1">
+                        {entry.profile && <p className="text-[8px] font-black uppercase tracking-widest text-amber-300">Perfil: <span className="text-slate-200">{entry.profile}</span></p>}
+                        {entry.product_category && <p className="text-[8px] font-black uppercase tracking-widest text-cyan-300">Categoria: <span className="text-slate-200">{entry.product_category}</span></p>}
+                        {entry.equipment && <p className="text-[8px] font-black uppercase tracking-widest text-blue-300">Equipamento: <span className="text-slate-200">{entry.equipment}</span></p>}
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             </div>
@@ -741,6 +837,60 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
             {/* HISTÓRICO DE INTERAÇÕES */}
             <div className="pt-6 border-t border-slate-800">
               <h5 className="text-[9px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2 mb-4"><FileText size={14} className="text-slate-400" /> Histórico de Contatos Recentes</h5>
+              {!historyLoading && (
+                <div className="space-y-4 mb-4">
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-3">
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Ligacoes</p>
+                      <p className="mt-1 text-lg font-black text-white">{clientHistory.summary.totalCalls}</p>
+                    </div>
+                    <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-3">
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Protocolos</p>
+                      <p className="mt-1 text-lg font-black text-white">{clientHistory.summary.totalProtocols}</p>
+                    </div>
+                    <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-3">
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Abertos</p>
+                      <p className="mt-1 text-lg font-black text-white">{clientHistory.summary.openProtocols}</p>
+                    </div>
+                  </div>
+                  {clientHistory.summary.callCountsByType.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Contagem por tipo</p>
+                      <div className="flex flex-wrap gap-2">
+                        {clientHistory.summary.callCountsByType.map(item => (
+                          <span key={item.key} className="px-2 py-1 rounded-lg bg-slate-800 text-[8px] font-black uppercase text-slate-300 border border-slate-700">
+                            {item.label}: {item.total}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {clientHistory.summary.callCountsByPurpose.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Contagem por proposito</p>
+                      <div className="flex flex-wrap gap-2">
+                        {clientHistory.summary.callCountsByPurpose.map(item => (
+                          <span key={item.key} className="px-2 py-1 rounded-lg bg-blue-950/40 text-[8px] font-black uppercase text-blue-300 border border-blue-900/60">
+                            {item.label}: {item.total}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {clientHistory.summary.callCountsByTargetProduct.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Contagem por produto/oferta</p>
+                      <div className="flex flex-wrap gap-2">
+                        {clientHistory.summary.callCountsByTargetProduct.map(item => (
+                          <span key={item.key} className="px-2 py-1 rounded-lg bg-emerald-950/30 text-[8px] font-black uppercase text-emerald-300 border border-emerald-900/50">
+                            {item.label}: {item.total}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
               {historyLoading ? (
                 <div className="flex justify-center py-4"><Loader2 className="animate-spin text-slate-600" size={16} /></div>
               ) : clientHistory.calls.length > 0 ? (
@@ -751,6 +901,13 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                         <span className="text-[8px] font-black uppercase tracking-widest px-2 py-0.5 bg-slate-700 text-slate-300 rounded">{call.type}</span>
                         <span className="text-[8px] font-black text-slate-400 uppercase">{new Date(call.startTime).toLocaleDateString("pt-BR", { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
+                      {(call.proposito || call.targetProduct || call.offerProduct) && (
+                        <div className="flex flex-wrap gap-2">
+                          {call.proposito && <span className="px-2 py-0.5 bg-blue-950/40 text-blue-300 rounded text-[8px] font-black uppercase border border-blue-900/60">{call.proposito}</span>}
+                          {call.targetProduct && <span className="px-2 py-0.5 bg-cyan-950/40 text-cyan-300 rounded text-[8px] font-black uppercase border border-cyan-900/60">{call.targetProduct}</span>}
+                          {call.offerProduct && <span className="px-2 py-0.5 bg-emerald-950/30 text-emerald-300 rounded text-[8px] font-black uppercase border border-emerald-900/50">{call.offerProduct}</span>}
+                        </div>
+                      )}
                       <p className="text-[10px] font-bold text-slate-300 italic">"{call.responses?.written_report || call.responses?.justificativa || call.responses?.note || 'Sem anotações.'}"</p>
                     </div>
                   ))}
@@ -809,6 +966,31 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   proposito={(currentTask as any).proposito}
                 />
 
+                {(currentTask.proposito || currentTask.targetProduct || currentTask.offerProduct) && (
+                  <section className="space-y-4 p-8 bg-slate-50 rounded-[40px] border border-slate-100">
+                    <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
+                      <Zap size={18} className="text-cyan-500" /> Contexto da Campanha
+                    </h5>
+                    <div className="flex flex-wrap gap-3">
+                      {currentTask.proposito && (
+                        <span className="px-4 py-2 bg-blue-100 text-blue-700 rounded-2xl text-[10px] font-black uppercase border border-blue-200">
+                          PropÃ³sito: {currentTask.proposito}
+                        </span>
+                      )}
+                      {currentTask.targetProduct && (
+                        <span className="px-4 py-2 bg-cyan-100 text-cyan-700 rounded-2xl text-[10px] font-black uppercase border border-cyan-200">
+                          Linha alvo: {currentTask.targetProduct}
+                        </span>
+                      )}
+                      {currentTask.offerProduct && (
+                        <span className="px-4 py-2 bg-emerald-100 text-emerald-700 rounded-2xl text-[10px] font-black uppercase border border-emerald-200">
+                          Oferta: {currentTask.offerProduct}
+                        </span>
+                      )}
+                    </div>
+                  </section>
+                )}
+
                 <section className="space-y-4">
                   <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
                     <FileText size={18} className="text-blue-600" /> Resumo da Conversa
@@ -858,6 +1040,55 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                           <option value="Manutenção">Manutenção</option>
                           <option value="Outros">Outros</option>
                         </select>
+                      </div>
+                    </div>
+                  </section>
+                )}
+
+                {isFillingReport && (currentTask.targetProduct || currentTask.offerProduct) && (
+                  <section className="space-y-6 pt-6 border-t border-slate-100">
+                    <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
+                      <ClipboardList size={18} className="text-cyan-500" /> MÃ©tricas da Oferta e da Linha
+                    </h5>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-cyan-50/40 p-8 rounded-[40px] border border-cyan-100/70">
+                      {currentTask.targetProduct && (
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Escopo do retorno no pÃ³s-venda</label>
+                          <select
+                            className="w-full p-4 bg-white rounded-2xl outline-none font-bold text-slate-700 text-sm border border-slate-200 focus:border-cyan-500 transition-all cursor-pointer"
+                            value={campaignFeedback.portfolioScope}
+                            onChange={e => setCampaignFeedback(prev => ({ ...prev, portfolioScope: e.target.value }))}
+                          >
+                            <option value="">Selecione...</option>
+                            <option value="somente_linha_alvo">Somente a linha da ligaÃ§Ã£o</option>
+                            <option value="mais_de_uma_linha">Mais de uma linha do cliente</option>
+                            <option value="todas_as_linhas">Refere-se a todas as linhas</option>
+                          </select>
+                        </div>
+                      )}
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">NÃ­vel de receptividade</label>
+                        <select
+                          className="w-full p-4 bg-white rounded-2xl outline-none font-bold text-slate-700 text-sm border border-slate-200 focus:border-cyan-500 transition-all cursor-pointer"
+                          value={campaignFeedback.offerInterestLevel}
+                          onChange={e => setCampaignFeedback(prev => ({ ...prev, offerInterestLevel: e.target.value }))}
+                        >
+                          <option value="">Selecione...</option>
+                          <option value="ALTO">Alto</option>
+                          <option value="MEDIO">MÃ©dio</option>
+                          <option value="BAIXO">Baixo</option>
+                          <option value="SEM_INTERESSE">Sem interesse</option>
+                        </select>
+                      </div>
+                      <div className="space-y-2 md:col-span-2">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Principal impeditivo para compra/adesÃ£o</label>
+                        <input
+                          type="text"
+                          value={campaignFeedback.offerBlockerReason}
+                          onChange={e => setCampaignFeedback(prev => ({ ...prev, offerBlockerReason: e.target.value }))}
+                          className="w-full p-4 bg-white rounded-2xl outline-none font-bold text-slate-700 text-sm border border-slate-200 focus:border-cyan-500 transition-all"
+                          placeholder="Ex: PreÃ§o, prazo, sem urgÃªncia, jÃ¡ possui estoque..."
+                        />
                       </div>
                     </div>
                   </section>

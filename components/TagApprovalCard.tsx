@@ -55,6 +55,7 @@ export const TagApprovalCard: React.FC<TagApprovalCardProps> = ({ tag, onRefresh
 
       <div className="text-xs space-y-1 opacity-90">
         <p><strong>Categoria:</strong> {tag.categoria}</p>
+        {tag.motivo_detalhe && <p><strong>Detalhe:</strong> {tag.motivo_detalhe}</p>}
         <p><strong>Confiança:</strong> {tag.score_confianca ? `${tag.score_confianca} pts` : '-'}</p>
         <p><strong>Data:</strong> {new Date(tag.criado_em).toLocaleString()}</p>
         {tag.campos_negativos && tag.campos_negativos.length > 0 && (

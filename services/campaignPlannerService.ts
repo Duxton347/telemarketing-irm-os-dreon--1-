@@ -10,11 +10,16 @@ export interface CampaignPlannerFilters {
   statusCliente?: string[];
   tags?: string[];
   interesses?: string[];
+  perfisCliente?: string[];
+  categoriasProduto?: string[];
   equipamentos?: string[];
   bairros?: string[];
   cidades?: string[];
   campanhaAtual?: string;
   temEmail?: boolean;
+  produtoAlvo?: string;
+  ofertaAlvo?: string;
+  escopoLinha?: string;
 }
 
 export interface CampaignDispatch {
@@ -106,12 +111,43 @@ export const CampaignPlannerService = {
 
   getDistinctItems: async (): Promise<string[]> => {
     try {
-      // Fetch all items arrays and flatten them
-      const { data, error } = await supabase.from('clients').select('items');
+      const { data, error } = await supabase.from('clients').select('*');
       if (error) throw error;
-      const allItems = data.flatMap(r => r.items || []);
+      const allItems = (data || []).flatMap((row: any) => [
+        ...(row.items || []),
+        ...(row.equipment_models || []),
+        ...((row.portfolio_entries || []).map((entry: any) => entry?.equipment).filter(Boolean))
+      ]);
       const uniqueItems = Array.from(new Set(allItems)).filter(Boolean);
       return uniqueItems.sort();
+    } catch (e) { console.error(e); return []; }
+  },
+
+  getDistinctCustomerProfiles: async (): Promise<string[]> => {
+    try {
+      const { data, error } = await supabase.from('clients').select('*');
+      if (error) throw error;
+
+      const values = (data || []).flatMap((row: any) => [
+        ...(row.customer_profiles || []),
+        ...((row.portfolio_entries || []).map((entry: any) => entry?.profile).filter(Boolean))
+      ]);
+
+      return Array.from(new Set(values.filter(Boolean))).sort();
+    } catch (e) { console.error(e); return []; }
+  },
+
+  getDistinctProductCategories: async (): Promise<string[]> => {
+    try {
+      const { data, error } = await supabase.from('clients').select('*');
+      if (error) throw error;
+
+      const values = (data || []).flatMap((row: any) => [
+        ...(row.product_categories || []),
+        ...((row.portfolio_entries || []).map((entry: any) => entry?.product_category).filter(Boolean))
+      ]);
+
+      return Array.from(new Set(values.filter(Boolean))).sort();
     } catch (e) { console.error(e); return []; }
   },
 
@@ -144,10 +180,20 @@ export const CampaignPlannerService = {
 
   getDistinctTagCategories: async (): Promise<string[]> => {
     try {
-      const { data, error } = await supabase.from('client_tags').select('categoria').not('categoria', 'is', null);
-      if (error) throw error;
-      const cats = Array.from(new Set(data.map(r => r.categoria)));
-      return cats.sort();
+      const [{ data: tagData, error: tagError }, { data: clientData, error: clientError }] = await Promise.all([
+        supabase.from('client_tags').select('categoria').not('categoria', 'is', null),
+        supabase.from('clients').select('tags').not('tags', 'is', null)
+      ]);
+      if (tagError) throw tagError;
+      if (clientError) throw clientError;
+
+      const cats = new Set<string>((tagData || []).map(r => r.categoria).filter(Boolean));
+      (clientData || [])
+        .flatMap((row: any) => row.tags || [])
+        .filter(Boolean)
+        .forEach((tag: string) => cats.add(tag));
+
+      return Array.from(cats).sort();
     } catch (e) { console.error(e); return []; }
   },
 
@@ -156,8 +202,7 @@ export const CampaignPlannerService = {
       let query = supabase
         .from('clients')
         .select(`
-          id, name, phone, status, neighborhood, city,
-          tags, items, offers, campanha_atual_id, email, interest_product,
+          *, 
           call_logs (
             id, call_type, responses, start_time, operator_id
           )
@@ -182,13 +227,17 @@ export const CampaignPlannerService = {
         // Tag Categories matching
         query = query.overlaps('tags', filters.tags); 
       }
+      if (filters.perfisCliente?.length) {
+        query = query.overlaps('customer_profiles', filters.perfisCliente);
+      }
+      if (filters.categoriasProduto?.length) {
+        query = query.overlaps('product_categories', filters.categoriasProduto);
+      }
       if (filters.interesses?.length) {
         query = query.overlaps('offers', filters.interesses);
       }
       if (filters.equipamentos?.length) {
-        for (const eq of filters.equipamentos) {
-          query = query.contains('items', [eq]);
-        }
+        query = query.overlaps('equipment_models', filters.equipamentos);
       }
       if (filters.interesses?.length) {
         query = query.in('interest_product', filters.interesses);
@@ -206,6 +255,10 @@ export const CampaignPlannerService = {
       return (clients ?? [])
         .map(client => {
           const callLogs = (client.call_logs ?? []) as any[];
+          const portfolioEntries = Array.isArray((client as any).portfolio_entries) ? (client as any).portfolio_entries : [];
+          const customerProfiles = Array.from(new Set([...(client as any).customer_profiles || [], ...portfolioEntries.map((entry: any) => entry?.profile).filter(Boolean)]));
+          const productCategories = Array.from(new Set([...(client as any).product_categories || [], ...portfolioEntries.map((entry: any) => entry?.product_category).filter(Boolean)]));
+          const equipmentModels = Array.from(new Set([...(client as any).equipment_models || [], ...(client as any).items || [], ...portfolioEntries.map((entry: any) => entry?.equipment).filter(Boolean)]));
 
           const callsFiltered = callLogs.filter(cr => {
             if (!cr.start_time) return false;
@@ -246,6 +299,10 @@ export const CampaignPlannerService = {
 
           return {
             ...client,
+            customer_profiles: customerProfiles,
+            product_categories: productCategories,
+            equipment_models: equipmentModels,
+            items: equipmentModels,
             call_logs_filtradas: mappedCallsFiltered,
             ultima_ligacao_filtrada: mappedCallsFiltered.sort(
               (a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime()

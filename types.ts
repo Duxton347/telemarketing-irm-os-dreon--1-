@@ -131,6 +131,13 @@ export interface Interaction {
   operatorId?: string;
 }
 
+export interface ClientPortfolioEntry {
+  id?: string;
+  profile: string;
+  product_category: string;
+  equipment: string;
+}
+
 export interface Client {
   id: string;
   name: string;
@@ -163,6 +170,10 @@ export interface Client {
   state?: string;
   zip_code?: string;
   last_purchase_date?: string;
+  customer_profiles?: string[];
+  product_categories?: string[];
+  equipment_models?: string[];
+  portfolio_entries?: ClientPortfolioEntry[];
 
   // New Fields for Dreon Skill v3
   tags?: string[];
@@ -259,6 +270,10 @@ export interface Task {
   // New Fields for Dreon Skill v3
   proposito?: string;
   campanha_id?: string;
+  campaignName?: string;
+  targetProduct?: string;
+  offerProduct?: string;
+  portfolioScope?: string;
 }
 
 export interface Visit {
@@ -305,6 +320,33 @@ export interface CallRecord {
   proposito?: string;
   campanha_indicada_id?: string;
   campanha_id?: string;
+  campaignName?: string;
+  targetProduct?: string;
+  offerProduct?: string;
+  portfolioScope?: string;
+  offerInterestLevel?: string;
+  offerBlockerReason?: string;
+}
+
+export interface HistoryBreakdown {
+  key: string;
+  label: string;
+  total: number;
+}
+
+export interface ClientHistorySummary {
+  totalCalls: number;
+  totalProtocols: number;
+  openProtocols: number;
+  callCountsByType: HistoryBreakdown[];
+  callCountsByPurpose: HistoryBreakdown[];
+  callCountsByTargetProduct: HistoryBreakdown[];
+}
+
+export interface ClientHistoryData {
+  calls: CallRecord[];
+  protocols: Protocol[];
+  summary: ClientHistorySummary;
 }
 
 export interface Protocol {

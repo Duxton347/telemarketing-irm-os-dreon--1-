@@ -16,6 +16,8 @@ export const CampaignPlanner: React.FC = () => {
   const [citiesList, setCitiesList] = useState<string[]>([]);
   const [neighborhoodsList, setNeighborhoodsList] = useState<string[]>([]);
   const [itemsList, setItemsList] = useState<string[]>([]);
+  const [profilesList, setProfilesList] = useState<string[]>([]);
+  const [productCategoriesList, setProductCategoriesList] = useState<string[]>([]);
   const [callTypesList, setCallTypesList] = useState<string[]>([]);
   const [tagCategoriesList, setTagCategoriesList] = useState<string[]>([]);
   const [operadoresList, setOperadoresList] = useState<any[]>([]);
@@ -31,10 +33,15 @@ export const CampaignPlanner: React.FC = () => {
     statusCliente: ['CLIENT', 'INATIVO', 'LEAD'],
     tags: [],
     interesses: [],
+    perfisCliente: [],
+    categoriasProduto: [],
     equipamentos: [],
     bairros: [],
     cidades: [],
-    temEmail: undefined
+    temEmail: undefined,
+    produtoAlvo: '',
+    ofertaAlvo: '',
+    escopoLinha: ''
   });
 
   // Data state
@@ -63,6 +70,8 @@ export const CampaignPlanner: React.FC = () => {
 
     CampaignPlannerService.getDistinctCities().then(setCitiesList);
     CampaignPlannerService.getDistinctItems().then(setItemsList);
+    CampaignPlannerService.getDistinctCustomerProfiles().then(setProfilesList);
+    CampaignPlannerService.getDistinctProductCategories().then(setProductCategoriesList);
     CampaignPlannerService.getDistinctCallTypes().then(setCallTypesList);
     CampaignPlannerService.getDistinctTagCategories().then(setTagCategoriesList);
     CampaignPlannerService.getDistinctInterestProducts().then(setInterestProductsList);
@@ -279,6 +288,92 @@ export const CampaignPlanner: React.FC = () => {
                          </span>
                        ))}
                      </div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                    <Users size={12} /> Perfil do Cliente
+                  </label>
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      list="profiles-list"
+                      placeholder="Buscar Perfil..."
+                      className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-amber-500 focus:bg-white transition-all shadow-inner"
+                      onChange={(e) => {
+                        const val = e.target.value.trim();
+                        if (profilesList.includes(val)) {
+                          if (!filters.perfisCliente?.includes(val)) setFilters({ ...filters, perfisCliente: [...(filters.perfisCliente || []), val] });
+                          e.target.value = '';
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const val = e.currentTarget.value.trim();
+                          if (val && !filters.perfisCliente?.includes(val)) {
+                            setFilters({ ...filters, perfisCliente: [...(filters.perfisCliente || []), val] });
+                            e.currentTarget.value = '';
+                          }
+                        }
+                      }}
+                    />
+                    <datalist id="profiles-list">
+                      {profilesList.map(profile => <option key={profile} value={profile} />)}
+                    </datalist>
+                  </div>
+                  {filters.perfisCliente && filters.perfisCliente.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {filters.perfisCliente.map(profile => (
+                        <span key={profile} className="inline-flex items-center gap-1 bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-sm px-2.5 py-1 rounded-lg text-xs font-bold animate-in zoom-in duration-200">
+                          {profile} <X size={12} className="cursor-pointer hover:text-amber-200 transition-colors" onClick={() => toggleFilterArray('perfisCliente', profile)} />
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                    <TagIcon size={12} /> Categoria do Produto
+                  </label>
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      list="product-categories-list"
+                      placeholder="Buscar Categoria..."
+                      className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-cyan-500 focus:bg-white transition-all shadow-inner"
+                      onChange={(e) => {
+                        const val = e.target.value.trim();
+                        if (productCategoriesList.includes(val)) {
+                          if (!filters.categoriasProduto?.includes(val)) setFilters({ ...filters, categoriasProduto: [...(filters.categoriasProduto || []), val] });
+                          e.target.value = '';
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const val = e.currentTarget.value.trim();
+                          if (val && !filters.categoriasProduto?.includes(val)) {
+                            setFilters({ ...filters, categoriasProduto: [...(filters.categoriasProduto || []), val] });
+                            e.currentTarget.value = '';
+                          }
+                        }
+                      }}
+                    />
+                    <datalist id="product-categories-list">
+                      {productCategoriesList.map(category => <option key={category} value={category} />)}
+                    </datalist>
+                  </div>
+                  {filters.categoriasProduto && filters.categoriasProduto.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {filters.categoriasProduto.map(category => (
+                        <span key={category} className="inline-flex items-center gap-1 bg-gradient-to-r from-cyan-500 to-sky-500 text-white shadow-sm px-2.5 py-1 rounded-lg text-xs font-bold animate-in zoom-in duration-200">
+                          {category} <X size={12} className="cursor-pointer hover:text-cyan-200 transition-colors" onClick={() => toggleFilterArray('categoriasProduto', category)} />
+                        </span>
+                      ))}
+                    </div>
                   )}
                 </div>
 
@@ -523,7 +618,7 @@ export const CampaignPlanner: React.FC = () => {
                       </th>
                       <th className="px-4 py-4">Status / Cliente</th>
                       <th className="px-4 py-4">Localização & Info</th>
-                      <th className="px-4 py-4 min-w-[150px]">Equipamentos & Tags</th>
+                      <th className="px-4 py-4 min-w-[180px]">Perfil, Categoria & Equipamentos</th>
                       <th className="px-4 py-4 text-right">Último Contato / Ação</th>
                     </tr>
                   </thead>
@@ -563,20 +658,26 @@ export const CampaignPlanner: React.FC = () => {
                           {c.email && <div className="text-[10px] text-blue-500 mt-1 flex items-center gap-1"><Mail size={10}/> {c.email}</div>}
                         </td>
                         <td className="px-4 py-4">
-                          <div className="flex flex-wrap gap-1 max-w-[200px]">
+                          <div className="flex flex-wrap gap-1 max-w-[240px]">
                             {/* Tags / Categs array on client object if they exist */}
+                            {c.customer_profiles?.slice(0, 2).map((profile, idx) => (
+                              <span key={`profile-${idx}`} className="bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase">{profile}</span>
+                            ))}
+                            {c.product_categories?.slice(0, 2).map((category, idx) => (
+                              <span key={`category-${idx}`} className="bg-cyan-50 text-cyan-700 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase">{category}</span>
+                            ))}
                             {c.tags?.slice(0, 3).map((t, idx) => (
                               <span key={idx} className="bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase">{t}</span>
                             ))}
                             {/* Equipamentos from items array */}
-                            {c.items?.slice(0, 2).map((item, idx) => (
+                            {c.equipment_models?.slice(0, 2).map((item, idx) => (
                               <span key={idx} className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase">{item}</span>
                             ))}
                             {c.interest_product && (
                               <span className="bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase" title="Produto de Interesse (Lead/Orçamento)">{c.interest_product}</span>
                             )}
-                            {((c.tags?.length || 0) + (c.items?.length || 0) + (c.interest_product ? 1 : 0) > 5) && (
-                              <span className="text-[9px] text-slate-400 font-bold bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">+{((c.tags?.length || 0) + (c.items?.length || 0) + (c.interest_product ? 1 : 0) - 5)} mais</span>
+                            {((c.customer_profiles?.length || 0) + (c.product_categories?.length || 0) + (c.tags?.length || 0) + (c.equipment_models?.length || 0) + (c.interest_product ? 1 : 0) > 7) && (
+                              <span className="text-[9px] text-slate-400 font-bold bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">+{((c.customer_profiles?.length || 0) + (c.product_categories?.length || 0) + (c.tags?.length || 0) + (c.equipment_models?.length || 0) + (c.interest_product ? 1 : 0) - 7)} mais</span>
                             )}
                           </div>
                         </td>
@@ -640,6 +741,45 @@ export const CampaignPlanner: React.FC = () => {
                     placeholder="Ex: Oferecer avaliação gratuita" 
                     className="w-full bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-blue-500 focus:bg-slate-800 transition-all placeholder:text-slate-600 shadow-inner" 
                   />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Linha / Produto Alvo</label>
+                  <input
+                    list="campaign-target-products"
+                    value={filters.produtoAlvo || ''}
+                    onChange={e => setFilters({ ...filters, produtoAlvo: e.target.value })}
+                    placeholder="Ex: Gerador de Cloro"
+                    className="w-full bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-cyan-500 focus:bg-slate-800 transition-all placeholder:text-slate-600 shadow-inner"
+                  />
+                  <datalist id="campaign-target-products">
+                    {[...productCategoriesList, ...itemsList, ...interestProductsList].filter(Boolean).sort().map(item => <option key={item} value={item} />)}
+                  </datalist>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Oferta / Produto Oferecido</label>
+                  <input
+                    list="campaign-offer-products"
+                    value={filters.ofertaAlvo || ''}
+                    onChange={e => setFilters({ ...filters, ofertaAlvo: e.target.value })}
+                    placeholder="Ex: Sal para Gerador de Cloro"
+                    className="w-full bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-emerald-500 focus:bg-slate-800 transition-all placeholder:text-slate-600 shadow-inner"
+                  />
+                  <datalist id="campaign-offer-products">
+                    {[...productCategoriesList, ...interestProductsList].filter(Boolean).sort().map(item => <option key={item} value={item} />)}
+                  </datalist>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Escopo da Linha</label>
+                  <select
+                    value={filters.escopoLinha || ''}
+                    onChange={e => setFilters({ ...filters, escopoLinha: e.target.value })}
+                    className="w-full bg-slate-800/50 border border-slate-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-blue-500 focus:bg-slate-800 transition-colors cursor-pointer"
+                  >
+                    <option value="">Não especificado</option>
+                    <option value="somente_linha_alvo">Somente a linha alvo</option>
+                    <option value="mais_de_uma_linha">Mais de uma linha do cliente</option>
+                    <option value="todas_as_linhas">Todas as linhas</option>
+                  </select>
                 </div>
               </div>
 
