@@ -107,22 +107,15 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setIsLoading(true);
     try {
       const [allTasks, allQuestionsRaw, allClients] = await Promise.all([
-        dataService.getTasks(),
+        dataService.getTasks(effectiveOperatorId),
         dataService.getQuestions(), // We'll filter later or fetch specific
         dataService.getClients(true) // Pass TRUE to include LEADS (Prospects)
       ]);
-      
-      // Load purpose-specific questions if we have a current task
-      let filteredQuestions = allQuestionsRaw;
-      if (currentTask) {
-        filteredQuestions = await dataService.getQuestions(currentTask.type as CallType, (currentTask as any).proposito);
-      }
-      setQuestions(filteredQuestions);
+      resetState();
 
       const now = new Date();
       // Filter out tasks that are waiting for approval
       const myPendingTasks = allTasks.filter(t =>
-        t.assignedTo === effectiveOperatorId &&
         t.status === 'pending' &&
         (t.approvalStatus === 'APPROVED' || !t.approvalStatus)
       );
@@ -139,6 +132,12 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       });
 
       const myTask = dueTasks[0];
+      let filteredQuestions = allQuestionsRaw;
+      if (myTask) {
+        filteredQuestions = await dataService.getQuestions(myTask.type as CallType, (myTask as any).proposito);
+      }
+      setQuestions(filteredQuestions);
+
       if (myTask) {
         // Try normal client lookup first, then use embedded task data as fallback
         let foundClient = allClients.find(c => c.id === myTask.clientId) || null;
@@ -188,7 +187,6 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
         setCurrentTask(null);
         setClient(null);
       }
-      resetState();
     } catch (e) {
       console.error(e);
     } finally {

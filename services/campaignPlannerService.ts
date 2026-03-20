@@ -330,7 +330,7 @@ export const CampaignPlannerService = {
             }
 
             if (dispatch.canal === 'voz' || dispatch.canal === 'ambos') {
-              await supabase.from('tasks').insert({
+              const { error: taskInsertError } = await supabase.from('tasks').insert({
                 client_id: clientId,
                 assigned_to: dispatch.operatorId,
                 type: dispatch.callType,
@@ -339,11 +339,12 @@ export const CampaignPlannerService = {
                 created_at: new Date().toISOString(),
                 campanha_id: campanha.id
               });
+              if (taskInsertError) throw taskInsertError;
               result.tasks_criadas++;
             }
 
             if (dispatch.canal === 'whatsapp' || dispatch.canal === 'ambos') {
-              await supabase.from('whatsapp_tasks').insert({
+              const { error: waInsertError } = await supabase.from('whatsapp_tasks').insert({
                 client_id: clientId,
                 assigned_to: dispatch.operatorId,
                 type: dispatch.callType,
@@ -352,11 +353,12 @@ export const CampaignPlannerService = {
                 created_at: new Date().toISOString(),
                 updated_at: new Date().toISOString()
               });
+              if (waInsertError) throw waInsertError;
               // assuming whatsapp task acts similar for purpose
               result.tasks_criadas++;
             }
 
-            await supabase.from('campanha_interacoes').insert({
+            const { error: interactionError } = await supabase.from('campanha_interacoes').insert({
               campanha_id: campanha.id,
               client_id: clientId,
               tipo_interacao: 'ENTRADA',
@@ -364,11 +366,13 @@ export const CampaignPlannerService = {
               operador_id: dispatch.operatorId,
               data_hora: new Date().toISOString()
             });
+            if (interactionError) throw interactionError;
 
-            await supabase
+            const { error: clientUpdateError } = await supabase
               .from('clients')
               .update({ campanha_atual_id: campanha.id })
               .eq('id', clientId);
+            if (clientUpdateError) throw clientUpdateError;
 
           } catch (e) {
             result.erros.push(`Erro no cliente ${clientId}: ${String(e)}`);

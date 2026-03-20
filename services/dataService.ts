@@ -26,6 +26,11 @@ const mapCallTypeToDb = (type: string): string => {
   return 'prospect';
 };
 
+const mapTaskTypeToDb = (type?: string): string | undefined => {
+  if (!type) return undefined;
+  return type === CallType.REATIVACAO ? 'POS_VENDA' : type;
+};
+
 const updateClientFunnelStatus = async (clientId: string, newStatus: 'CONTACT_ATTEMPT' | 'CONTACT_MADE') => {
   try {
     const { data: client } = await supabase.from('clients').select('status, funnel_status').eq('id', clientId).single();
@@ -479,11 +484,10 @@ export const dataService = {
         };
       });
 
-    // 2. Fetch Approved Schedules (where scheduled_for <= NOW)
+    // 2. Fetch Approved Schedules
     let schedQuery = supabase.from('call_schedules')
-      .select('*, clients(name, phone)')
-      .eq('status', 'APROVADO')
-      .lte('scheduled_for', new Date().toISOString());
+      .select('*, clients(*)')
+      .eq('status', 'APROVADO');
 
     if (operatorId) {
       schedQuery = schedQuery.eq('assigned_operator_id', operatorId);
@@ -498,11 +502,12 @@ export const dataService = {
         clientId: s.customer_id || '', // Task expects string
         clientName: clientObj?.name || s.clients?.name || 'Cliente Agendado',
         clientPhone: clientObj?.phone || s.clients?.phone,
-        clients: s.clients, // Pass full client object just in case
+        clients: clientObj || null,
         type: clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : (s.call_type as CallType),
         deadline: s.scheduled_for, // Use scheduled time as deadline/display time
         assignedTo: s.assigned_operator_id,
         status: 'pending', // Active in queue
+        scheduledFor: s.scheduled_for,
         scheduleReason: s.schedule_reason,
         originCallId: s.origin_call_id,
         approvalStatus: 'APPROVED',
@@ -514,15 +519,17 @@ export const dataService = {
     // 3. Merge and De-duplicate: Prioritize Schedules
     const combined = [...scheduledTasks, ...legacyTasks];
     const uniqueTasks: Task[] = [];
-    const seenClients = new Set<string>();
+    const seenPendingKeys = new Set<string>();
 
     for (const task of combined) {
-      if (!task.clientId) {
+      if (task.status !== 'pending' || !task.clientId) {
         uniqueTasks.push(task);
         continue;
       }
-      if (!seenClients.has(task.clientId)) {
-        seenClients.add(task.clientId);
+
+      const dedupeKey = `${task.clientId}::${task.assignedTo || 'unassigned'}::${task.type || 'unknown'}`;
+      if (!seenPendingKeys.has(dedupeKey)) {
+        seenPendingKeys.add(dedupeKey);
         uniqueTasks.push(task);
       }
     }
@@ -548,35 +555,47 @@ export const dataService = {
   updateTask: async (taskId: string, updates: Partial<Task>): Promise<void> => {
     const payload: any = {};
     if (updates.status) payload.status = updates.status;
-    if (updates.skipReason) payload.skip_reason = updates.skipReason;
-    if (updates.scheduledFor) payload.scheduled_for = updates.scheduledFor;
-    if (updates.scheduleReason) payload.schedule_reason = updates.scheduleReason;
-    if (updates.deadline) payload.deadline = updates.deadline;
+    if (updates.skipReason !== undefined) payload.skip_reason = updates.skipReason;
+    if (updates.scheduledFor !== undefined) payload.scheduled_for = updates.scheduledFor;
+    if (updates.scheduleReason !== undefined) payload.schedule_reason = updates.scheduleReason;
+    if (updates.deadline !== undefined) payload.deadline = updates.deadline;
+    if (updates.assignedTo !== undefined) payload.assigned_to = updates.assignedTo;
+    if (updates.type !== undefined) payload.type = mapTaskTypeToDb(updates.type);
+    if (updates.approvalStatus !== undefined) payload.approval_status = updates.approvalStatus;
+    payload.updated_at = new Date().toISOString();
     
     // Attempt update on legacy tasks
     const { data: updatedTasks, error: tError } = await supabase.from('tasks').update(payload).eq('id', taskId).select('id');
+    if (tError) throw tError;
     const count = updatedTasks?.length || 0;
     
     // If not found in tasks, try call_schedules
-    if (!tError && (count === 0)) {
+    if (count === 0) {
        const schedulePayload: any = {};
+       if (updates.status === 'pending') schedulePayload.status = 'APROVADO';
        if (updates.status === 'completed') schedulePayload.status = 'CONCLUIDO';
-       if (updates.status === 'skipped') schedulePayload.status = 'CANCELADO'; // or handled via skip logic
-       if (updates.skipReason) schedulePayload.skip_reason = updates.skipReason;
+       if (updates.status === 'skipped') schedulePayload.status = 'CANCELADO';
+       if (updates.skipReason !== undefined) schedulePayload.skip_reason = updates.skipReason;
+       if (updates.scheduledFor !== undefined) schedulePayload.scheduled_for = updates.scheduledFor;
+       if (updates.scheduleReason !== undefined) schedulePayload.schedule_reason = updates.scheduleReason;
+       if (updates.assignedTo !== undefined) schedulePayload.assigned_operator_id = updates.assignedTo;
+       if (updates.type !== undefined) schedulePayload.call_type = mapTaskTypeToDb(updates.type);
+       schedulePayload.updated_at = new Date().toISOString();
        
        if (Object.keys(schedulePayload).length > 0) {
-         await supabase.from('call_schedules').update(schedulePayload).eq('id', taskId);
+         const { error: schedError } = await supabase.from('call_schedules').update(schedulePayload).eq('id', taskId);
+         if (schedError) throw schedError;
        }
     }
 
     // Trigger funnel update
     if (updates.status === 'skipped' || updates.status === 'completed') {
-      const { data: task } = await supabase.from('tasks').select('client_id').eq('id', taskId).single();
+      const { data: task } = await supabase.from('tasks').select('client_id').eq('id', taskId).maybeSingle();
       const clientId = task?.client_id;
       
       // Fallback to call_schedules if not in tasks
       if (!clientId) {
-        const { data: sched } = await supabase.from('call_schedules').select('customer_id').eq('id', taskId).single();
+        const { data: sched } = await supabase.from('call_schedules').select('customer_id').eq('id', taskId).maybeSingle();
         if (sched?.customer_id) {
           await updateClientFunnelStatus(sched.customer_id, updates.status === 'skipped' ? 'CONTACT_ATTEMPT' : 'CONTACT_MADE');
         }
@@ -992,68 +1011,24 @@ export const dataService = {
   },
 
   getDetailedPendingTasks: async () => {
-    // 1. Fetch tasks WITHOUT profiles join (avoids FK ambiguity errors)
-    const { data: tasks, error } = await supabase
-      .from('tasks')
-      .select('*, clients(*)')
-      .eq('status', 'pending')
-      .order('created_at', { ascending: true });
-
-    if (error) console.error('getDetailedPendingTasks tasks error:', error);
-
-    // 1b. Fetch profiles separately for operator name lookup
+    const tasks = await dataService.getTasks();
     const { data: allProfiles } = await supabase
       .from('profiles')
       .select('id, username_display, username');
     const profileMap = new Map((allProfiles || []).map(p => [p.id, p]));
+    const now = new Date();
 
-    // 2. Fetch Approved Schedules (also without profiles join)
-    let mappedSchedules: any[] = [];
-    try {
-      const { data: schedData, error: schedError } = await supabase
-        .from('call_schedules')
-        .select('*, clients(*)')
-        .eq('status', 'APROVADO')
-        .lte('scheduled_for', new Date().toISOString())
-        .order('scheduled_for', { ascending: true });
-
-      if (!schedError && schedData) {
-        mappedSchedules = schedData.map(s => {
-          const clientObj = Array.isArray(s.clients) ? s.clients[0] : s.clients;
-          return {
-            id: s.id,
-            clientId: s.customer_id,
-            type: clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : s.call_type,
-            deadline: s.scheduled_for,
-            assignedTo: s.assigned_operator_id,
-            status: 'pending',
-            clients: clientObj,
-            profiles: profileMap.get(s.assigned_operator_id) || null,
-            clientName: clientObj?.name,
-            clientPhone: clientObj?.phone,
-            duration: 0
-          };
-        });
-      }
-    } catch (e) {
-      console.error('getDetailedPendingTasks schedules error:', e);
-    }
-
-    const validLegacyTasks = (tasks || [])
-      .filter(t => t.client_id)
-      .filter(t => !t.scheduled_for || new Date(t.scheduled_for) <= new Date())
-      .map(t => {
-        const clientObj = Array.isArray(t.clients) ? t.clients[0] : t.clients;
-        return {
-          ...t,
-          type: clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : t.type,
-          clients: clientObj || { name: 'Prospecto', phone: '' },
-          profiles: profileMap.get(t.assigned_to) || null,
-          duration: 0
-        };
-      });
-
-    return [...mappedSchedules, ...validLegacyTasks];
+    return tasks
+      .filter(t => t.status === 'pending')
+      .filter(t => !!t.assignedTo)
+      .filter(t => t.approvalStatus === 'APPROVED' || !t.approvalStatus)
+      .filter(t => !t.scheduledFor || new Date(t.scheduledFor) <= now)
+      .map(t => ({
+        ...t,
+        clients: t.clients || { name: t.clientName || 'Prospecto', phone: t.clientPhone || '' },
+        profiles: profileMap.get(t.assignedTo || '') || null,
+        duration: 0
+      }));
   },
 
 
