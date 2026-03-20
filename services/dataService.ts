@@ -8,7 +8,7 @@ import {
 } from '../types';
 import { TagDecisionEngine } from './tagDecisionEngine';
 import { SCORE_MAP, STAGE_CONFIG } from '../constants';
-import { extractCampaignInsightsFromResponses, extractClientInsightsFromResponses } from '../utils/questionnaireInsights';
+import { extractCampaignInsightsFromResponses, extractClientInsightsFromResponses, resolveStoredResponseForQuestion } from '../utils/questionnaireInsights';
 import {
   collectPortfolioMetadata,
   getClientEquipmentList,
@@ -37,6 +37,35 @@ const mapCallTypeToDb = (type: string): string => {
 const mapTaskTypeToDb = (type?: string): string | undefined => {
   if (!type) return undefined;
   return type === CallType.REATIVACAO ? 'POS_VENDA' : type;
+};
+
+const mapQuestionRecord = (q: any): Question => ({
+  id: q.id,
+  text: q.text,
+  options: q.options || [],
+  type: q.type as any,
+  order: q.order_index,
+  stageId: q.stage_id,
+  proposito: q.proposito,
+  campo_resposta: q.campo_resposta,
+  tipo_input: q.tipo_input,
+  obrigatoria: q.obrigatoria,
+  ativo: q.ativo
+});
+
+const loadActiveQuestions = async (): Promise<Question[]> => {
+  const { data, error } = await supabase
+    .from('questions')
+    .select('*')
+    .eq('ativo', true)
+    .order('order_index', { ascending: true });
+
+  if (error) {
+    console.error('Error loading active questions', error);
+    return [];
+  }
+
+  return (data || []).map(mapQuestionRecord);
 };
 
 const normalizeClientTagValue = (value?: string) => {
@@ -96,15 +125,48 @@ const hasPositiveCallSignal = (responses?: Record<string, any>) => {
   );
 };
 
-const buildDerivedClientTags = (client: any, callLogs: any[] = []) => {
+const enrichClientInsightsFromCallLogs = (callLogs: any[] = [], questions: Question[] = []) => {
+  const derivedProfile: Partial<Client> = {};
+
+  const normalizedLogs = callLogs.map(log => {
+    const insights = extractClientInsightsFromResponses(
+      log.responses || {},
+      questions,
+      log.call_type,
+      log.proposito
+    );
+
+    if (!derivedProfile.email && insights.email) derivedProfile.email = insights.email;
+    if (!derivedProfile.interest_product && insights.interestProduct) {
+      derivedProfile.interest_product = insights.interestProduct;
+    }
+    if (!derivedProfile.buyer_name && insights.buyerName) derivedProfile.buyer_name = insights.buyerName;
+    if (!derivedProfile.responsible_phone && insights.responsiblePhone) {
+      derivedProfile.responsible_phone = insights.responsiblePhone;
+    }
+
+    return {
+      ...log,
+      responses: insights.enrichedResponses
+    };
+  });
+
+  return {
+    normalizedLogs,
+    derivedProfile
+  };
+};
+
+const buildDerivedClientTags = (client: any, callLogs: any[] = [], derivedProfile: Partial<Client> = {}) => {
   const nextTags = new Set<string>(Array.isArray(client?.tags) ? client.tags : []);
 
   if (client?.status === 'CLIENT') {
     nextTags.add('JA_CLIENTE');
   }
 
-  if (client?.interest_product) {
-    const interestTag = normalizeClientTagValue(client.interest_product);
+  const interestProduct = derivedProfile.interest_product || client?.interest_product;
+  if (interestProduct) {
+    const interestTag = normalizeClientTagValue(interestProduct);
     if (interestTag) nextTags.add(`INTERESSE_${interestTag}`);
   }
 
@@ -130,7 +192,7 @@ const buildDerivedClientTags = (client: any, callLogs: any[] = []) => {
 const syncDerivedTagsForClient = async (clientId: string): Promise<boolean> => {
   const { data: client, error: clientError } = await supabase
     .from('clients')
-    .select('id, tags, items, equipment_models, interest_product, status, satisfaction')
+    .select('id, tags, items, equipment_models, interest_product, status, satisfaction, email, buyer_name, responsible_phone')
     .eq('id', clientId)
     .maybeSingle();
 
@@ -139,30 +201,51 @@ const syncDerivedTagsForClient = async (clientId: string): Promise<boolean> => {
     return false;
   }
 
-  const { data: callLogs, error: logsError } = await supabase
-    .from('call_logs')
-    .select('responses, call_type, start_time')
-    .eq('client_id', clientId)
-    .order('start_time', { ascending: false })
-    .limit(25);
+  const [questions, logsResult] = await Promise.all([
+    loadActiveQuestions(),
+    supabase
+      .from('call_logs')
+      .select('responses, call_type, start_time, proposito')
+      .eq('client_id', clientId)
+      .order('start_time', { ascending: false })
+      .limit(50)
+  ]);
+
+  const { data: callLogs, error: logsError } = logsResult;
 
   if (logsError) {
     console.error('Error loading call logs for derived tag sync', logsError);
     return false;
   }
 
-  const nextTags = buildDerivedClientTags(client, callLogs || []);
+  const { normalizedLogs, derivedProfile } = enrichClientInsightsFromCallLogs(callLogs || [], questions);
+  const nextTags = buildDerivedClientTags(client, normalizedLogs, derivedProfile);
   const currentTags = Array.isArray(client.tags) ? client.tags : [];
   const sortedCurrent = [...currentTags].sort();
   const sortedNext = [...nextTags].sort();
 
-  if (JSON.stringify(sortedCurrent) === JSON.stringify(sortedNext)) {
+  const payload: any = {};
+
+  if (!client.email && derivedProfile.email) payload.email = derivedProfile.email;
+  if (!client.interest_product && derivedProfile.interest_product) {
+    payload.interest_product = derivedProfile.interest_product;
+  }
+  if (!client.buyer_name && derivedProfile.buyer_name) payload.buyer_name = derivedProfile.buyer_name;
+  if (!client.responsible_phone && derivedProfile.responsible_phone) {
+    payload.responsible_phone = derivedProfile.responsible_phone;
+  }
+
+  if (JSON.stringify(sortedCurrent) !== JSON.stringify(sortedNext)) {
+    payload.tags = nextTags;
+  }
+
+  if (Object.keys(payload).length === 0) {
     return false;
   }
 
   const { error: updateError } = await supabase
     .from('clients')
-    .update({ tags: nextTags })
+    .update(payload)
     .eq('id', clientId);
 
   if (updateError) {
@@ -610,28 +693,7 @@ export const dataService = {
 
   // --- MÉTODOS EXISTENTES ---
   getResponseValue: (responses: any, question: Question) => {
-    if (!responses) return undefined;
-    
-    // 1. Try DB mapped field (Dreon Skill v3 logic)
-    if (question.campo_resposta && responses[question.campo_resposta] !== undefined) {
-      return responses[question.campo_resposta];
-    }
-
-    // 2. Try exact UUID id
-    if (responses[question.id] !== undefined) return responses[question.id];
-    
-    // 3. Try exact question text normalized
-    const questionTextNorm = normalize(question.text);
-    const keys = Object.keys(responses);
-    for (const key of keys) {
-      if (normalize(key) === questionTextNorm) return responses[key];
-    }
-    
-    // 4. Try legacy PV format
-    const legacyKey = `pv${question.order} `;
-    if (responses[legacyKey] !== undefined) return responses[legacyKey];
-    
-    return undefined;
+    return resolveStoredResponseForQuestion(responses, question);
   },
 
   getSystemSetting: async (key: string): Promise<string> => {
@@ -722,19 +784,7 @@ export const dataService = {
 
       const { data, error } = await query;
       if (error) throw error;
-      return (data || []).map(q => ({
-        id: q.id,
-        text: q.text,
-        options: q.options || [],
-        type: q.type as any,
-        order: q.order_index,
-        stageId: q.stage_id,
-        proposito: q.proposito,
-        campo_resposta: q.campo_resposta,
-        tipo_input: q.tipo_input,
-        obrigatoria: q.obrigatoria,
-        ativo: q.ativo
-      }));
+      return (data || []).map(mapQuestionRecord);
     } catch (e) { return []; }
   },
 
@@ -1209,8 +1259,19 @@ export const dataService = {
   },
 
   saveCall: async (call: CallRecord): Promise<{ id: string, suggestedTags: ClientTag[] }> => {
-    const { enrichedResponses, email, interestProduct, buyerName, responsiblePhone } = extractClientInsightsFromResponses(call.responses || {});
-    const campaignInsights = extractCampaignInsightsFromResponses(enrichedResponses);
+    const questions = await dataService.getQuestions(call.type as CallType, call.proposito);
+    const { enrichedResponses, email, interestProduct, buyerName, responsiblePhone } = extractClientInsightsFromResponses(
+      call.responses || {},
+      questions,
+      call.type,
+      call.proposito
+    );
+    const campaignInsights = extractCampaignInsightsFromResponses(
+      enrichedResponses,
+      questions,
+      call.type,
+      call.proposito
+    );
     const enrichedCallResponses = {
       ...campaignInsights.enrichedResponses,
       target_product: call.targetProduct || campaignInsights.enrichedResponses.target_product,
@@ -1251,7 +1312,7 @@ export const dataService = {
     // Dreon Skill v3: Tag Decision Engine Integration
     try {
       const callWithId = { ...call, id: insertedCall.id, responses: enrichedCallResponses };
-      const decision = TagDecisionEngine.analyzeCall(callWithId, []);
+      const decision = TagDecisionEngine.analyzeCall(callWithId, [], questions);
       
       if (decision.tagsToCreate && decision.tagsToCreate.length > 0) {
         const mappedTags = decision.tagsToCreate.map(t => ({

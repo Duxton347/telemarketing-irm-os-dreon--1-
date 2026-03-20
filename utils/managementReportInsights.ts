@@ -1,5 +1,5 @@
 import { CallRecord, Question, User, WhatsAppTask } from '../types';
-import { enrichQuestionnaireResponses, extractCampaignInsightsFromResponses } from './questionnaireInsights';
+import { enrichQuestionnaireResponses, extractCampaignInsightsFromResponses, questionMatchesContext, resolveStoredResponseForQuestion } from './questionnaireInsights';
 
 export interface ReportBreakdownItem {
   label: string;
@@ -12,6 +12,7 @@ export interface ReportQuestionBreakdown {
   questionText: string;
   type: string;
   purpose?: string;
+  order: number;
   totalResponses: number;
   answers: ReportBreakdownItem[];
 }
@@ -102,17 +103,13 @@ const toAnswerLabel = (value: unknown): string | null => {
   return text ? text : null;
 };
 
-const getQuestionResponseValue = (question: Question, responses: Record<string, any>) => {
-  const direct = toAnswerLabel(responses[question.id]);
-  if (direct) return direct;
-  if (question.campo_resposta) {
-    return toAnswerLabel(responses[question.campo_resposta]);
-  }
-  return null;
-};
-
 const getInterestScore = (interaction: InteractionLike, responses: Record<string, any>) => {
-  const campaignInsights = extractCampaignInsightsFromResponses(responses);
+  const campaignInsights = extractCampaignInsightsFromResponses(
+    responses,
+    [],
+    interaction.type,
+    interaction.proposito
+  );
   const normalizedLevel = normalizeText(
     interaction.offerInterestLevel ||
     responses.offer_interest_level ||
@@ -132,7 +129,12 @@ const getInterestScore = (interaction: InteractionLike, responses: Record<string
 };
 
 const getObjectionReason = (interaction: InteractionLike, responses: Record<string, any>) => {
-  const campaignInsights = extractCampaignInsightsFromResponses(responses);
+  const campaignInsights = extractCampaignInsightsFromResponses(
+    responses,
+    [],
+    interaction.type,
+    interaction.proposito
+  );
   return (
     toAnswerLabel(interaction.offerBlockerReason) ||
     toAnswerLabel(responses.offer_blocker_reason) ||
@@ -283,6 +285,7 @@ export const buildManagementReportInsights = ({
   const operatorNames = new Map(operators.map(operator => [operator.id, operator.name]));
 
   const questionCounts = new Map<string, Map<string, number>>();
+  const relevantQuestionMap = new Map<string, Question>();
   const productBuckets = new Map<string, AggregateBucket>();
   const operatorBuckets = new Map<string, AggregateBucket>();
   const processBuckets = new Map<string, AggregateBucket>();
@@ -298,7 +301,12 @@ export const buildManagementReportInsights = ({
   let totalSatisfactionScoreCount = 0;
 
   for (const interaction of interactions) {
-    const responses = enrichQuestionnaireResponses(interaction.responses || {}, questions);
+    const responses = enrichQuestionnaireResponses(
+      interaction.responses || {},
+      questions,
+      interaction.type,
+      interaction.proposito
+    );
     if (Object.keys(responses).length === 0) continue;
 
     totalQuestionnaireInteractions += 1;
@@ -360,8 +368,13 @@ export const buildManagementReportInsights = ({
       areaTotals.set(area, current);
     });
 
-    questions.forEach(question => {
-      const answer = getQuestionResponseValue(question, responses);
+    const applicableQuestions = questions.filter(question =>
+      questionMatchesContext(question, interaction.type, interaction.proposito)
+    );
+
+    applicableQuestions.forEach(question => {
+      relevantQuestionMap.set(question.id, question);
+      const answer = toAnswerLabel(resolveStoredResponseForQuestion(responses, question));
       if (!answer) return;
 
       const current = questionCounts.get(question.id) || new Map<string, number>();
@@ -370,17 +383,22 @@ export const buildManagementReportInsights = ({
     });
   }
 
-  const questionBreakdowns = questions
+  const questionBreakdowns = Array.from(relevantQuestionMap.values())
+    .sort((a, b) => {
+      if (a.type !== b.type) return String(a.type).localeCompare(String(b.type));
+      if ((a.proposito || '') !== (b.proposito || '')) return (a.proposito || '').localeCompare(b.proposito || '');
+      return (a.order || 0) - (b.order || 0);
+    })
     .map(question => ({
       questionId: question.id,
       questionText: question.text,
       type: question.type,
       purpose: question.proposito,
+      order: question.order,
       totalResponses: Array.from((questionCounts.get(question.id) || new Map()).values()).reduce((sum, value) => sum + value, 0),
       answers: buildBreakdownItems(questionCounts.get(question.id) || new Map())
     }))
-    .filter(question => question.totalResponses > 0)
-    .sort((a, b) => b.totalResponses - a.totalResponses || a.questionText.localeCompare(b.questionText));
+    .filter(question => question.totalResponses > 0);
 
   const satisfactionAreas: ReportAreaInsight[] = Array.from(areaTotals.entries())
     .map(([key, value]) => ({

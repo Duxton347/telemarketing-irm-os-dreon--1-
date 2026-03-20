@@ -1,4 +1,4 @@
-import { Question } from '../types';
+import { CallType, Question } from '../types';
 
 const normalizeText = (value: string = '') =>
   value
@@ -15,6 +15,14 @@ const GENERIC_VALUES = new Set([
   'outros',
   'yes'
 ]);
+
+const normalizeCallTypeValue = (value?: string | null) =>
+  String(value || '')
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
 
 const EMAIL_KEYS = ['email_cliente', 'email', 'email_comprador', 'buyer_email'];
 const INTEREST_KEYS = ['interest_product', 'upsell_interesse_produto', 'interesse_produto', 'produto_interesse'];
@@ -55,6 +63,28 @@ const isMeaningful = (value: unknown) => {
   return true;
 };
 
+const resolveResponseValueByKey = (
+  responses: Record<string, any>,
+  key?: string
+) => {
+  if (!key) return undefined;
+
+  const raw = responses[key];
+  const note = responses[`${key}_note`];
+
+  if (typeof raw === 'string') {
+    const normalized = normalizeText(raw);
+    if (GENERIC_VALUES.has(normalized) && isMeaningful(note)) {
+      return typeof note === 'string' ? note.trim() : note;
+    }
+    if (raw.trim()) return raw.trim();
+  }
+
+  if (isMeaningful(raw)) return raw;
+  if (isMeaningful(note)) return typeof note === 'string' ? note.trim() : note;
+  return undefined;
+};
+
 const sanitizePhone = (value?: string) => {
   if (!value) return undefined;
   const digits = value.replace(/\D/g, '');
@@ -76,19 +106,8 @@ const sanitizeInterest = (value?: string) => {
 
 const pickResponseValue = (responses: Record<string, any>, keys: string[]) => {
   for (const key of keys) {
-    const raw = responses[key];
-    const note = responses[`${key}_note`];
-
-    if (typeof raw === 'string') {
-      const normalized = normalizeText(raw);
-      if (GENERIC_VALUES.has(normalized) && isMeaningful(note)) {
-        return String(note).trim();
-      }
-      if (raw.trim()) return raw.trim();
-    }
-
-    if (isMeaningful(raw)) return raw;
-    if (isMeaningful(note)) return String(note).trim();
+    const value = resolveResponseValueByKey(responses, key);
+    if (value !== undefined) return value;
   }
 
   return undefined;
@@ -108,9 +127,95 @@ const inferCanonicalFieldFromQuestion = (question: Question) => {
   return null;
 };
 
+export const questionMatchesContext = (
+  question: Question,
+  callType?: CallType | 'ALL' | string,
+  proposito?: string | null
+) => {
+  const normalizedQuestionType = normalizeCallTypeValue(String(question.type || 'ALL'));
+  const normalizedCallType = normalizeCallTypeValue(String(callType || 'ALL'));
+  const matchesType =
+    !callType ||
+    normalizedQuestionType === 'ALL' ||
+    normalizedCallType === 'ALL' ||
+    normalizedQuestionType === normalizedCallType;
+  if (!matchesType) return false;
+
+  if (question.proposito) {
+    return question.proposito === proposito;
+  }
+
+  return true;
+};
+
+const getApplicableQuestions = (
+  questions: Question[] = [],
+  callType?: CallType | 'ALL' | string,
+  proposito?: string | null
+) =>
+  questions
+    .filter(question => questionMatchesContext(question, callType, proposito))
+    .sort((a, b) => (a.order || 0) - (b.order || 0));
+
+const getLegacyQuestionKeys = (question: Question) => {
+  if (!question.order) return [];
+
+  const normalizedType = normalizeCallTypeValue(String(question.type || ''));
+  const prefixesByType: Record<string, string[]> = {
+    POS_VENDA: ['pv'],
+    PROSPECCAO: ['pr'],
+    REATIVACAO: ['re'],
+    VENDA: ['v'],
+    CONFIRMACAO_PROTOCOLO: ['cp']
+  };
+
+  return (prefixesByType[normalizedType] || []).flatMap(prefix => [
+    `${prefix}${question.order}`,
+    `${prefix}${question.order} `
+  ]);
+};
+
+export const resolveStoredResponseForQuestion = (
+  responses: Record<string, any> | undefined,
+  question: Question
+) => {
+  if (!responses) return undefined;
+
+  const directFieldValue = resolveResponseValueByKey(responses, question.campo_resposta);
+  if (directFieldValue !== undefined) {
+    return directFieldValue;
+  }
+
+  const directIdValue = resolveResponseValueByKey(responses, question.id);
+  if (directIdValue !== undefined) {
+    return directIdValue;
+  }
+
+  const questionTextNorm = normalizeText(question.text);
+  for (const key of Object.keys(responses)) {
+    if (normalizeText(key) === questionTextNorm) {
+      const questionTextValue = resolveResponseValueByKey(responses, key);
+      if (questionTextValue !== undefined) {
+        return questionTextValue;
+      }
+    }
+  }
+
+  for (const legacyKey of getLegacyQuestionKeys(question)) {
+    const legacyValue = resolveResponseValueByKey(responses, legacyKey);
+    if (legacyValue !== undefined) {
+      return legacyValue;
+    }
+  }
+
+  return undefined;
+};
+
 export const enrichQuestionnaireResponses = (
   responses: Record<string, any>,
-  questions: Question[] = []
+  questions: Question[] = [],
+  callType?: CallType | 'ALL' | string,
+  proposito?: string | null
 ) => {
   const enriched = { ...responses };
 
@@ -121,14 +226,17 @@ export const enrichQuestionnaireResponses = (
     }
   }
 
-  for (const question of questions) {
-    const sourceKey = question.campo_resposta || question.id;
-    const rawValue = pickResponseValue(enriched, [sourceKey, question.id]);
+  for (const question of getApplicableQuestions(questions, callType, proposito)) {
+    const rawValue = resolveStoredResponseForQuestion(enriched, question);
     if (!isMeaningful(rawValue)) continue;
 
     const canonicalField = inferCanonicalFieldFromQuestion(question);
     if (canonicalField && !isMeaningful(enriched[canonicalField])) {
       enriched[canonicalField] = rawValue;
+    }
+
+    if (question.id && !isMeaningful(enriched[question.id])) {
+      enriched[question.id] = rawValue;
     }
 
     if (question.campo_resposta && !isMeaningful(enriched[question.campo_resposta])) {
@@ -149,8 +257,13 @@ export const enrichQuestionnaireResponses = (
   return enriched;
 };
 
-export const extractClientInsightsFromResponses = (responses: Record<string, any>) => {
-  const enriched = enrichQuestionnaireResponses(responses);
+export const extractClientInsightsFromResponses = (
+  responses: Record<string, any>,
+  questions: Question[] = [],
+  callType?: CallType | 'ALL' | string,
+  proposito?: string | null
+) => {
+  const enriched = enrichQuestionnaireResponses(responses, questions, callType, proposito);
   const email = sanitizeEmail(pickResponseValue(enriched, EMAIL_KEYS));
   const interestProduct = sanitizeInterest(pickResponseValue(enriched, INTEREST_KEYS));
   const buyerName = pickResponseValue(enriched, BUYER_KEYS)?.toString().trim() || undefined;
@@ -165,8 +278,13 @@ export const extractClientInsightsFromResponses = (responses: Record<string, any
   };
 };
 
-export const extractCampaignInsightsFromResponses = (responses: Record<string, any>) => {
-  const enriched = enrichQuestionnaireResponses(responses);
+export const extractCampaignInsightsFromResponses = (
+  responses: Record<string, any>,
+  questions: Question[] = [],
+  callType?: CallType | 'ALL' | string,
+  proposito?: string | null
+) => {
+  const enriched = enrichQuestionnaireResponses(responses, questions, callType, proposito);
 
   return {
     enrichedResponses: enriched,

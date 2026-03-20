@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { dataService } from '../services/dataService';
-import { UnifiedReportRow, User, CallType, CallRecord, Question, WhatsAppTask } from '../types';
+import { UnifiedReportRow, User, CallType, CallRecord, Question } from '../types';
 import { Loader2, Calendar, Filter, Users, Tag, CheckSquare, Square, RefreshCcw, Search, ChevronRight } from 'lucide-react';
 import BulkRescheduleModal from '../components/BulkRescheduleModal';
 import BulkUpsellModal from '../components/BulkUpsellModal';
@@ -19,7 +19,6 @@ interface Props {
 const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenProspect, dateRange }) => {
     const [data, setData] = useState<UnifiedReportRow[]>([]);
     const [calls, setCalls] = useState<CallRecord[]>([]);
-    const [whatsappTasks, setWhatsappTasks] = useState<WhatsAppTask[]>([]);
     const [questions, setQuestions] = useState<Question[]>([]);
     const [loading, setLoading] = useState(false);
 
@@ -42,10 +41,9 @@ const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenPro
             // Based on rules, admin sees all, ops see their own or all depending on CRM rule.
             // We pass undefined to RPC to get all, then filter frontend if needed, or pass user.id if not admin.
             const opsId = user.role !== 'ADMIN' ? user.id : undefined;
-            const [rows, allCalls, allWhatsApp, allQuestions] = await Promise.all([
+            const [rows, allCalls, allQuestions] = await Promise.all([
                 dataService.listUnifiedReport(opsId),
                 dataService.getCalls(dateRange.start, dateRange.end),
-                dataService.getWhatsAppTasks(undefined, dateRange.start, dateRange.end),
                 dataService.getQuestions()
             ]);
 
@@ -55,25 +53,9 @@ const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenPro
                 call.type === CallType.VENDA
             );
 
-            const relevantWhatsApp = allWhatsApp.filter(task =>
-                task.status === 'completed' && (
-                    task.type === CallType.POS_VENDA ||
-                    task.type === CallType.REATIVACAO ||
-                    task.type === CallType.VENDA
-                )
-            );
-
-            const relevantQuestions = allQuestions.filter(question =>
-                question.type === 'ALL' ||
-                question.type === CallType.POS_VENDA ||
-                question.type === CallType.REATIVACAO ||
-                question.type === CallType.VENDA
-            );
-
             setData(rows);
             setCalls(relevantCalls);
-            setWhatsappTasks(relevantWhatsApp);
-            setQuestions(relevantQuestions);
+            setQuestions(allQuestions);
         } catch (e) {
             console.error(e);
         } finally {
@@ -87,10 +69,10 @@ const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenPro
 
     const reportInsights = React.useMemo(() => buildManagementReportInsights({
         calls,
-        whatsappTasks,
+        whatsappTasks: [],
         questions,
         operators
-    }), [calls, whatsappTasks, questions, operators]);
+    }), [calls, questions, operators]);
 
     const toggleSelect = (id: string) => {
         setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -226,7 +208,7 @@ const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenPro
                                 <div key={question.questionId} className="p-5 rounded-[28px] bg-slate-50 border border-slate-100">
                                     <div className="flex items-start justify-between gap-4 mb-4">
                                         <div>
-                                            <p className="text-sm font-black text-slate-800 leading-snug">{question.questionText}</p>
+                                            <p className="text-sm font-black text-slate-800 leading-snug">{question.order}. {question.questionText}</p>
                                             <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-1">
                                                 {question.totalResponses} respostas
                                                 {question.purpose ? ` | ${question.purpose}` : ''}

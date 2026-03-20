@@ -1,12 +1,17 @@
-import { CallRecord, ClientTag, TagDecisionResult, TagStatus, TagOrigins, TagCategories, TagMotivos } from '../types';
+import { CallRecord, ClientTag, Question, TagDecisionResult, TagStatus, TagOrigins, TagCategories, TagMotivos } from '../types';
 import { TAG_RULES, TAG_CATEGORIES, TAG_STATUS } from '../constants';
 import { extractClientInsightsFromResponses } from '../utils/questionnaireInsights';
 
 export const TagDecisionEngine = {
-  analyzeCall: (record: CallRecord, history?: any[]): TagDecisionResult => {
+  analyzeCall: (record: CallRecord, history?: any[], questions: Question[] = []): TagDecisionResult => {
     const tagsToCreate: Partial<ClientTag>[] = [];
     const logs: string[] = [];
-    const insights = extractClientInsightsFromResponses(record.responses || {});
+    const insights = extractClientInsightsFromResponses(
+      record.responses || {},
+      questions,
+      record.type,
+      record.proposito
+    );
     const resolvedResponses = {
       ...(record.responses || {}),
       ...insights.enrichedResponses
