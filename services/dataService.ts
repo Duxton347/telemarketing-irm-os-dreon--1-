@@ -16,6 +16,8 @@ import {
   mergePortfolioEntries,
   mergeUniquePortfolioValues
 } from '../utils/clientPortfolio';
+import { normalizePortfolioEntriesWithCatalog } from '../utils/portfolioCatalog';
+import { PortfolioCatalogService } from './portfolioCatalogService';
 
 const normalize = (str: string) =>
   str ? str.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, "") : "";
@@ -2191,8 +2193,12 @@ export const dataService = {
       if (data) existing = data;
     }
 
-    const mergedPortfolioEntries = mergePortfolioEntries(existing?.portfolio_entries, client.portfolio_entries);
-    const portfolioMetadata = collectPortfolioMetadata(mergedPortfolioEntries);
+      const catalogConfig = await PortfolioCatalogService.getCatalogConfig();
+      const mergedPortfolioEntries = normalizePortfolioEntriesWithCatalog(
+        mergePortfolioEntries(existing?.portfolio_entries, client.portfolio_entries),
+        catalogConfig
+      );
+      const portfolioMetadata = collectPortfolioMetadata(mergedPortfolioEntries);
     const equipmentModels = mergeUniquePortfolioValues(
       existing?.equipment_models,
       existing?.items,
@@ -2274,11 +2280,28 @@ export const dataService = {
     const nextPhone = normalizePhone(updates.phone || existing.phone || '');
     if (!nextPhone) throw new Error('Telefone obrigatório');
 
-    const nextPortfolioEntries = mergePortfolioEntries(updates.portfolio_entries);
-    const portfolioMetadata = collectPortfolioMetadata(nextPortfolioEntries);
-    const equipmentModels = mergeUniquePortfolioValues(updates.equipment_models, updates.items, portfolioMetadata.equipment_models);
-    const customerProfiles = mergeUniquePortfolioValues(updates.customer_profiles, portfolioMetadata.customer_profiles);
-    const productCategories = mergeUniquePortfolioValues(updates.product_categories, portfolioMetadata.product_categories);
+      const catalogConfig = await PortfolioCatalogService.getCatalogConfig();
+      const nextPortfolioEntries = normalizePortfolioEntriesWithCatalog(
+        updates.portfolio_entries !== undefined
+          ? mergePortfolioEntries(updates.portfolio_entries)
+          : mergePortfolioEntries(existing.portfolio_entries),
+        catalogConfig
+      );
+      const portfolioMetadata = collectPortfolioMetadata(nextPortfolioEntries);
+      const equipmentModels = mergeUniquePortfolioValues(
+        updates.equipment_models,
+        updates.items,
+        portfolioMetadata.equipment_models
+      );
+      const customerProfiles = mergeUniquePortfolioValues(
+        updates.customer_profiles,
+        existing.customer_profiles,
+        portfolioMetadata.customer_profiles
+      );
+      const productCategories = mergeUniquePortfolioValues(
+        updates.product_categories,
+        portfolioMetadata.product_categories
+      );
 
     const payload: any = {
       name: updates.name ?? existing.name ?? 'Sem Nome',

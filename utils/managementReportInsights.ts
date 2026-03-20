@@ -1,5 +1,12 @@
 import { CallRecord, Question, User, WhatsAppTask } from '../types';
-import { enrichQuestionnaireResponses, extractCampaignInsightsFromResponses, questionMatchesContext, resolveStoredResponseForQuestion } from './questionnaireInsights';
+import {
+  enrichQuestionnaireResponses,
+  extractCampaignInsightsFromResponses,
+  getQuestionnaireSatisfactionScore,
+  questionMatchesContext,
+  resolveQuestionnaireEntries,
+  resolveStoredResponseForQuestion
+} from './questionnaireInsights';
 
 export interface ReportBreakdownItem {
   label: string;
@@ -173,55 +180,75 @@ const getNumericScore = (key: string, value: unknown) => {
   return null;
 };
 
-const getSatisfactionSignals = (responses: Record<string, any>) => {
-  const scores: number[] = [];
+const getSatisfactionSignals = (
+  responses: Record<string, any>,
+  questions: Question[] = [],
+  callType?: string,
+  proposito?: string
+) => {
+  const resolvedEntries = resolveQuestionnaireEntries(responses, questions, callType, proposito);
   const areaScores: Array<{ area: string; score: number }> = [];
 
-  for (const [key, value] of Object.entries(responses)) {
-    const normalizedKey = normalizeText(key);
+  for (const entry of resolvedEntries) {
+    const normalizedSignal = normalizeText(`${entry.key} ${entry.label}`);
     const isSatisfactionField =
-      normalizedKey.includes('satisf') ||
-      normalizedKey.includes('avali') ||
-      normalizedKey.includes('nps') ||
-      normalizedKey.includes('atendimento') ||
-      normalizedKey.includes('resolucao') ||
-      normalizedKey.includes('prazo') ||
-      normalizedKey.includes('entrega') ||
-      normalizedKey.includes('produto') ||
-      normalizedKey.includes('defeito') ||
-      normalizedKey.includes('processo') ||
-      normalizedKey.includes('instalacao') ||
-      normalizedKey.includes('setor');
+      normalizedSignal.includes('satisf') ||
+      normalizedSignal.includes('avali') ||
+      normalizedSignal.includes('nps') ||
+      normalizedSignal.includes('recomendaria') ||
+      normalizedSignal.includes('atendimento') ||
+      normalizedSignal.includes('resolucao') ||
+      normalizedSignal.includes('prazo') ||
+      normalizedSignal.includes('entrega') ||
+      normalizedSignal.includes('produto') ||
+      normalizedSignal.includes('equipamento') ||
+      normalizedSignal.includes('defeito') ||
+      normalizedSignal.includes('processo') ||
+      normalizedSignal.includes('instalacao') ||
+      normalizedSignal.includes('setor') ||
+      normalizedSignal.includes('dificuldade') ||
+      normalizedSignal.includes('uso') ||
+      normalizedSignal.includes('manutencao') ||
+      normalizedSignal.includes('seguranca') ||
+      normalizedSignal.includes('dimensionamento') ||
+      normalizedSignal.includes('indicacao');
 
     if (!isSatisfactionField) continue;
 
-    const score = getNumericScore(key, value) ?? getTextScore(value);
+    const score =
+      getNumericScore(entry.key, entry.value) ??
+      getNumericScore(entry.label, entry.value) ??
+      getTextScore(entry.value);
     if (score === null) continue;
 
-    scores.push(score);
-
     const area =
-      normalizedKey.includes('produto') || normalizedKey.includes('defeito') || normalizedKey.includes('equipamento')
+      normalizedSignal.includes('produto') || normalizedSignal.includes('defeito') || normalizedSignal.includes('equipamento')
         ? 'produto'
-        : normalizedKey.includes('prazo') || normalizedKey.includes('entrega') || normalizedKey.includes('instalacao') || normalizedKey.includes('processo')
+        : normalizedSignal.includes('prazo') ||
+            normalizedSignal.includes('entrega') ||
+            normalizedSignal.includes('instalacao') ||
+            normalizedSignal.includes('processo')
           ? 'processo'
           : 'equipe';
 
     areaScores.push({ area, score });
   }
 
-  if (scores.length === 0) {
-    if (responses.motivo_insatisfacao_principal || responses.produto_problema_especifico) {
-      scores.push(20);
-      areaScores.push({ area: 'produto', score: 20 });
-    } else if (responses.protocolo_resolvido === 'Sim' || responses.servico_concluido === 'Sim') {
-      scores.push(85);
-      areaScores.push({ area: 'processo', score: 85 });
-    }
+  const averageScore = getQuestionnaireSatisfactionScore(responses, questions, callType, proposito);
+
+  if (areaScores.length === 0 && averageScore !== null) {
+    const fallbackArea =
+      responses.motivo_insatisfacao_principal || responses.produto_problema_especifico
+        ? 'produto'
+        : responses.protocolo_resolvido === 'Sim' || responses.servico_concluido === 'Sim'
+          ? 'processo'
+          : 'equipe';
+
+    areaScores.push({ area: fallbackArea, score: averageScore });
   }
 
   return {
-    averageScore: scores.length > 0 ? scores.reduce((sum, score) => sum + score, 0) / scores.length : null,
+    averageScore,
     areaScores
   };
 };
@@ -313,7 +340,12 @@ export const buildManagementReportInsights = ({
 
     const interestScore = getInterestScore(interaction, responses);
     const objectionReason = getObjectionReason(interaction, responses);
-    const satisfaction = getSatisfactionSignals(responses);
+    const satisfaction = getSatisfactionSignals(
+      responses,
+      questions,
+      interaction.type,
+      interaction.proposito
+    );
 
     const productLabel = interaction.offerProduct || interaction.targetProduct || responses.offer_product || responses.target_product || responses.interest_product || 'GERAL';
     const operatorLabel = operatorNames.get(interaction.operatorId || interaction.assignedTo || '') || 'Sem operador';

@@ -16,7 +16,7 @@ import { CallRecord, User, Client, Protocol, Question, Task, OperatorEvent, Oper
 import PostSaleRemarketingReport from './PostSaleRemarketingReport';
 import ProspectHistoryDrawer from '../components/ProspectHistoryDrawer';
 import { buildManagementReportInsights } from '../utils/managementReportInsights';
-import { questionMatchesContext } from '../utils/questionnaireInsights';
+import { resolveQuestionnaireEntries } from '../utils/questionnaireInsights';
 
 // --- HELPER COMPONENTS ---
 
@@ -95,30 +95,11 @@ const collectInteractionResponses = (
    callType?: string,
    proposito?: string
 ) => {
-   const relevantQuestions = questions.filter(question => questionMatchesContext(question, callType, proposito));
-   const resolvedEntries = relevantQuestions
-      .map(question => {
-         const value = dataService.getResponseValue(responses, question);
-         if (!isMeaningfulReportValue(value)) return null;
-
-         return {
-            key: question.campo_resposta || question.id,
-            label: question.text,
-            value: formatReportValue(value)
-         };
-      })
-      .filter(Boolean) as Array<{ key: string; label: string; value: string }>;
-
-   if (resolvedEntries.length > 0) {
-      return resolvedEntries;
-   }
-
-   return Object.entries(responses || {})
-      .filter(([key, value]) => !key.endsWith('_note') && isMeaningfulReportValue(value))
-      .map(([key, value]) => ({
-         key,
-         label: key,
-         value: formatReportValue(value)
+   return resolveQuestionnaireEntries(responses || {}, questions, callType, proposito)
+      .map(entry => ({
+         key: entry.key,
+         label: entry.label,
+         value: formatReportValue(entry.value)
       }));
 };
 

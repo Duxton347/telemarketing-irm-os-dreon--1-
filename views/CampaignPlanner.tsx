@@ -5,11 +5,18 @@ import {
   CampaignPlannerFilters, 
   ClientWithLastCall 
 } from '../services/campaignPlannerService';
+import { PortfolioCatalogService } from '../services/portfolioCatalogService';
 import { CallType } from '../types';
 import { dataService } from '../services/dataService';
 import { Calendar, Filter, Users, Send, Search, Save, X, Settings2, MapPin, Phone, Tag as TagIcon, LayoutGrid, Clock, Mail } from 'lucide-react';
+import { PortfolioCatalogManager } from '../components/PortfolioCatalogManager';
 import { HelpTooltip } from '../components/HelpTooltip';
 import { HELP_TEXTS } from '../utils/helpTexts';
+import {
+  PortfolioCatalogConfig,
+  getActivePortfolioCatalogCategories,
+  getCatalogProductsByCategory
+} from '../utils/portfolioCatalog';
 
 export const CampaignPlanner: React.FC = () => {
   // Dynamic filter lists from DB
@@ -22,6 +29,8 @@ export const CampaignPlanner: React.FC = () => {
   const [tagCategoriesList, setTagCategoriesList] = useState<string[]>([]);
   const [operadoresList, setOperadoresList] = useState<any[]>([]);
   const [interestProductsList, setInterestProductsList] = useState<string[]>([]);
+  const [catalogConfig, setCatalogConfig] = useState<PortfolioCatalogConfig | null>(null);
+  const [isCatalogManagerOpen, setIsCatalogManagerOpen] = useState(false);
 
   // Selected filters
   const [filters, setFilters] = useState<CampaignPlannerFilters>({
@@ -30,6 +39,7 @@ export const CampaignPlanner: React.FC = () => {
     callTypes: [],
     resultados: [],
     operadores: [],
+    niveisSatisfacao: [],
     statusCliente: ['CLIENT', 'INATIVO', 'LEAD'],
     tags: [],
     interesses: [],
@@ -62,20 +72,40 @@ export const CampaignPlanner: React.FC = () => {
   const [dateTo, setDateTo] = useState('');
 
   // Initial Load options
-  useEffect(() => {
-    dataService.getUsers().then(users => {
-      const activeOperators = users.filter(u => u.active);
-      setOperadoresList(activeOperators.map(u => ({ id: u.id, username_display: u.name })));
-    });
+  const loadReferenceData = React.useCallback(async () => {
+    const [
+      users,
+      cities,
+      catalog,
+      profiles,
+      callTypes,
+      tagCategories,
+      interestProducts
+    ] = await Promise.all([
+      dataService.getUsers(),
+      CampaignPlannerService.getDistinctCities(),
+      PortfolioCatalogService.getCatalogConfig(),
+      CampaignPlannerService.getDistinctCustomerProfiles(),
+      CampaignPlannerService.getDistinctCallTypes(),
+      CampaignPlannerService.getDistinctTagCategories(),
+      CampaignPlannerService.getDistinctInterestProducts()
+    ]);
 
-    CampaignPlannerService.getDistinctCities().then(setCitiesList);
-    CampaignPlannerService.getDistinctItems().then(setItemsList);
-    CampaignPlannerService.getDistinctCustomerProfiles().then(setProfilesList);
-    CampaignPlannerService.getDistinctProductCategories().then(setProductCategoriesList);
-    CampaignPlannerService.getDistinctCallTypes().then(setCallTypesList);
-    CampaignPlannerService.getDistinctTagCategories().then(setTagCategoriesList);
-    CampaignPlannerService.getDistinctInterestProducts().then(setInterestProductsList);
+    const activeOperators = users.filter(u => u.active);
+    setOperadoresList(activeOperators.map(u => ({ id: u.id, username_display: u.name })));
+    setCitiesList(cities);
+    setCatalogConfig(catalog);
+    setItemsList(getCatalogProductsByCategory(catalog).map(product => product.name));
+    setProductCategoriesList(getActivePortfolioCatalogCategories(catalog).map(category => category.name));
+    setProfilesList(profiles);
+    setCallTypesList(callTypes);
+    setTagCategoriesList(tagCategories);
+    setInterestProductsList(interestProducts);
   }, []);
+
+  useEffect(() => {
+    loadReferenceData();
+  }, [loadReferenceData]);
 
   // Update neighborhoods when city filter changes
   useEffect(() => {
@@ -87,6 +117,48 @@ export const CampaignPlanner: React.FC = () => {
       CampaignPlannerService.getDistinctNeighborhoods().then(setNeighborhoodsList);
     }
   }, [filters.cidades]);
+
+  const filteredEquipmentOptions = React.useMemo(() => {
+    if (!catalogConfig) return itemsList;
+
+    return getCatalogProductsByCategory(catalogConfig, filters.categoriasProduto)
+      .map(product => product.name)
+      .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [catalogConfig, filters.categoriasProduto, itemsList]);
+
+  const getSatisfactionMeta = (client: ClientWithLastCall) => {
+    const scoreLabel =
+      typeof client.ultima_satisfacao_score === 'number'
+        ? `${Math.round(client.ultima_satisfacao_score)}%`
+        : null;
+
+    switch (client.ultima_satisfacao_nivel) {
+      case 'ALTA':
+        return {
+          label: 'Satisfacao alta',
+          scoreLabel,
+          className: 'bg-emerald-50 text-emerald-700 border-emerald-200'
+        };
+      case 'MEDIA':
+        return {
+          label: 'Satisfacao media',
+          scoreLabel,
+          className: 'bg-amber-50 text-amber-700 border-amber-200'
+        };
+      case 'BAIXA':
+        return {
+          label: 'Satisfacao baixa',
+          scoreLabel,
+          className: 'bg-rose-50 text-rose-700 border-rose-200'
+        };
+      default:
+        return {
+          label: 'Sem leitura',
+          scoreLabel: null,
+          className: 'bg-slate-100 text-slate-600 border-slate-200'
+        };
+    }
+  };
 
   // Main search action
   const handleSearch = async () => {
@@ -187,6 +259,13 @@ export const CampaignPlanner: React.FC = () => {
             Segmente sua base com busca inteligente e envie cargas de trabalho
           </p>
         </div>
+        <button
+          type="button"
+          onClick={() => setIsCatalogManagerOpen(true)}
+          className="px-5 py-3 rounded-2xl border border-slate-200 bg-white text-slate-700 font-black uppercase tracking-widest text-[10px] flex items-center gap-2 shadow-sm hover:border-blue-300 hover:text-blue-700 transition-all"
+        >
+          <Settings2 size={16} /> Gerenciar catalogo tecnico
+        </button>
       </div>
 
       <div className="flex flex-col xl:flex-row gap-8">
@@ -199,11 +278,19 @@ export const CampaignPlanner: React.FC = () => {
             <h2 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2 mb-6">
               <Settings2 size={16} className="text-blue-600" /> Filtros de Segmentação
             </h2>
-            
-            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+            <div className="mb-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <p className="text-xs font-bold text-slate-500">
+                O catalogo tecnico reduz o excesso de opcoes. Ao escolher uma categoria, a lista de produtos fica mais enxuta.
+              </p>
+              <div className="inline-flex items-center gap-2 rounded-2xl bg-blue-50 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-blue-700 border border-blue-100">
+                {filters.categoriasProduto?.length || 0} categoria(s) e {filters.equipamentos?.length || 0} produto(s) filtrados
+              </div>
+            </div>
+             
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-5">
               
               {/* BLOCK 1: Profile & Status */}
-              <div className="space-y-4">
+              <div className="rounded-[24px] border border-slate-200 bg-slate-50/80 p-5 space-y-4">
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
                     <Users size={12} /> Gênero de Cliente
@@ -247,7 +334,7 @@ export const CampaignPlanner: React.FC = () => {
               </div>
 
               {/* BLOCK 2: Geography & Equipment */}
-              <div className="space-y-4">
+              <div className="rounded-[24px] border border-slate-200 bg-slate-50/80 p-5 space-y-4">
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
                     <LayoutGrid size={12} /> Produto de Interesse (Orçamentos / Leads)
@@ -338,6 +425,9 @@ export const CampaignPlanner: React.FC = () => {
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
                     <TagIcon size={12} /> Categoria do Produto
                   </label>
+                  <p className="text-[11px] font-bold text-slate-500">
+                    Lista controlada pelo catalogo tecnico. Ajustes globais ficam em "Gerenciar catalogo tecnico".
+                  </p>
                   <div className="relative">
                     <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                     <input
@@ -470,7 +560,7 @@ export const CampaignPlanner: React.FC = () => {
                       className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-teal-500 focus:bg-white transition-all shadow-inner"
                       onChange={(e) => {
                         const val = e.target.value.trim();
-                        if (itemsList.includes(val)) {
+                        if (filteredEquipmentOptions.includes(val)) {
                           if (!filters.equipamentos?.includes(val)) setFilters({ ...filters, equipamentos: [...(filters.equipamentos || []), val] });
                           e.target.value = '';
                         }
@@ -487,7 +577,7 @@ export const CampaignPlanner: React.FC = () => {
                       }}
                     />
                     <datalist id="items-list">
-                      {itemsList.map(i => <option key={i} value={i} />)}
+                      {filteredEquipmentOptions.map(i => <option key={i} value={i} />)}
                     </datalist>
                   </div>
                   {filters.equipamentos && filters.equipamentos.length > 0 && (
@@ -503,7 +593,7 @@ export const CampaignPlanner: React.FC = () => {
               </div>
 
               {/* BLOCK 3: History & Interactions */}
-              <div className="space-y-4">
+              <div className="rounded-[24px] border border-slate-200 bg-slate-50/80 p-5 space-y-4">
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
                     <Phone size={12} /> Filtros por tipo de Contato Prévio
@@ -528,7 +618,33 @@ export const CampaignPlanner: React.FC = () => {
 
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
-                    <Clock size={12} /> Período do Último Contato
+                    <TagIcon size={12} /> Nivel de Satisfacao da Ultima Ligacao
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { key: 'ALTA', label: 'Alta', active: 'bg-emerald-500 text-white border-transparent shadow-emerald-500/30' },
+                      { key: 'MEDIA', label: 'Media', active: 'bg-amber-500 text-white border-transparent shadow-amber-500/30' },
+                      { key: 'BAIXA', label: 'Baixa', active: 'bg-rose-500 text-white border-transparent shadow-rose-500/30' },
+                      { key: 'SEM_LEITURA', label: 'Sem leitura', active: 'bg-slate-700 text-white border-transparent shadow-slate-500/20' }
+                    ].map(level => (
+                      <button
+                        key={level.key}
+                        onClick={() => toggleFilterArray('niveisSatisfacao', level.key)}
+                        className={`px-3 py-1.5 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-all duration-300 border shadow-sm ${
+                          filters.niveisSatisfacao?.includes(level.key)
+                            ? level.active
+                            : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                        }`}
+                      >
+                        {level.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                    <Clock size={12} /> Periodo do Ultimo Contato
                   </label>
                   <div className="grid grid-cols-2 gap-3">
                     <input 
@@ -544,6 +660,56 @@ export const CampaignPlanner: React.FC = () => {
                       className="w-full text-xs font-bold rounded-xl border-slate-200 bg-slate-50 focus:ring-blue-500 focus:bg-white transition-all shadow-inner" 
                     />
                   </div>
+                </div>
+
+                <div className="hidden">
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                    <Clock size={12} /> Período do Último Contato
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { key: 'ALTA', label: 'Alta', active: 'bg-emerald-500 text-white border-transparent shadow-emerald-500/30' },
+                      { key: 'MEDIA', label: 'MÃ©dia', active: 'bg-amber-500 text-white border-transparent shadow-amber-500/30' },
+                      { key: 'BAIXA', label: 'Baixa', active: 'bg-rose-500 text-white border-transparent shadow-rose-500/30' },
+                      { key: 'SEM_LEITURA', label: 'Sem leitura', active: 'bg-slate-700 text-white border-transparent shadow-slate-500/20' }
+                    ].map(level => (
+                      <button
+                        key={level.key}
+                        onClick={() => toggleFilterArray('niveisSatisfacao', level.key)}
+                        className={`px-3 py-1.5 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-all duration-300 border shadow-sm ${
+                          filters.niveisSatisfacao?.includes(level.key)
+                            ? level.active
+                            : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                        }`}
+                      >
+                        {level.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                    <TagIcon size={12} /> Nivel de Satisfacao da Ultima Ligacao
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <input 
+                      type="date" 
+                      value={dateFrom}
+                      onChange={e => setDateFrom(e.target.value)}
+                      className="w-full text-xs font-bold rounded-xl border-slate-200 bg-slate-50 focus:ring-blue-500 focus:bg-white transition-all shadow-inner" 
+                    />
+                    <input 
+                      type="date" 
+                      value={dateTo}
+                      onChange={e => setDateTo(e.target.value)}
+                      className="w-full text-xs font-bold rounded-xl border-slate-200 bg-slate-50 focus:ring-blue-500 focus:bg-white transition-all shadow-inner" 
+                    />
+                  </div>
+                </div>
+
                 </div>
 
                 <div className="space-y-2">
@@ -623,7 +789,10 @@ export const CampaignPlanner: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {clients.map(c => (
+                    {clients.map(c => {
+                      const satisfactionMeta = getSatisfactionMeta(c);
+
+                      return (
                       <tr key={c.id} className="hover:bg-blue-50/50 transition-colors group cursor-pointer" onClick={(e) => {
                         // Avoid toggling if clicking directly on the checkbox or links
                         if ((e.target as HTMLElement).tagName !== 'INPUT' && (e.target as HTMLElement).tagName !== 'A') {
@@ -690,13 +859,17 @@ export const CampaignPlanner: React.FC = () => {
                                <div className="text-[10px] font-black uppercase text-slate-400 tracking-wider">
                                  {c.ultima_ligacao_filtrada.type}
                                </div>
+                               <div className={`px-2 py-1 rounded-full border text-[10px] font-black uppercase tracking-wider ${satisfactionMeta.className}`}>
+                                 {satisfactionMeta.label}
+                                 {satisfactionMeta.scoreLabel ? ` ${satisfactionMeta.scoreLabel}` : ''}
+                               </div>
                              </div>
                           ) : (
                              <span className="text-xs italic text-slate-400">Nenhum histórico</span>
                           )}
                         </td>
                       </tr>
-                    ))}
+                    )})}
                   </tbody>
                 </table>
               </div>
@@ -869,6 +1042,36 @@ export const CampaignPlanner: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {isCatalogManagerOpen && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-md">
+            <div className="w-full max-w-7xl max-h-[92vh] overflow-y-auto rounded-[36px] border border-slate-200 bg-slate-50 p-6 shadow-2xl">
+              <div className="mb-6 flex items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-black uppercase tracking-tighter text-slate-900">Catalogo Tecnico</h2>
+                  <p className="mt-1 text-sm font-bold text-slate-500">
+                    Gerencie categorias, produtos e aplique a classificacao na base inteira.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsCatalogManagerOpen(false)}
+                  className="rounded-2xl border border-slate-200 bg-white p-3 text-slate-500 hover:text-slate-900"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <PortfolioCatalogManager
+                onCatalogChange={(nextCatalog) => {
+                  setCatalogConfig(nextCatalog);
+                  setItemsList(getCatalogProductsByCategory(nextCatalog).map(product => product.name));
+                  setProductCategoriesList(getActivePortfolioCatalogCategories(nextCatalog).map(category => category.name));
+                }}
+              />
+            </div>
+          </div>
+        )}
 
       </div>
     </div>
