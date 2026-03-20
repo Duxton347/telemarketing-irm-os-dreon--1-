@@ -824,9 +824,9 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   )}
                 </div>
 
-                {clientPortfolioEntries.length > 0 && (
+                {operatorPriorityPortfolioEntries.length > 0 && (
                   <div className="space-y-2">
-                    {clientPortfolioEntries.map((entry, index) => (
+                    {operatorPriorityPortfolioEntries.map((entry, index) => (
                       <div key={entry.id || `${entry.profile}-${entry.product_category}-${entry.equipment}-${index}`} className="rounded-xl border border-slate-700 bg-slate-800/40 p-3 space-y-1">
                         {entry.profile && <p className="text-[8px] font-black uppercase tracking-widest text-amber-300">Perfil: <span className="text-slate-200">{entry.profile}</span></p>}
                         {entry.product_category && <p className="text-[8px] font-black uppercase tracking-widest text-cyan-300">Categoria: <span className="text-slate-200">{entry.product_category}</span></p>}
@@ -835,6 +835,12 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                       </div>
                     ))}
                   </div>
+                )}
+
+                {clientPortfolioEntries.length > operatorPriorityPortfolioEntries.length && (
+                  <p className="text-[10px] text-slate-500 italic">
+                    Alguns itens tecnicos de baixa recorrencia foram ocultados nesta tela para destacar produtos de maior peso comercial.
+                  </p>
                 )}
               </div>
             </div>
