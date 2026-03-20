@@ -2,7 +2,7 @@
 import React from 'react';
 import {
   Search, UserPlus, ChevronRight, Phone, History, Users, Calendar, X,
-  MapPin, Save, Edit2, Loader2, ClipboardList, Clock, AlertTriangle
+  MapPin, Save, Edit2, Loader2, ClipboardList, Clock, AlertTriangle, Download
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { SATISFACTION_EMOJIS } from '../constants';
@@ -259,6 +259,39 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
 
   const isAdmin = user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR;
 
+  const handleExportClientsCsv = () => {
+    const rows = clients
+      .map(client => ({
+        name: (client.name || '').trim(),
+        phone: (client.phone || '').trim()
+      }))
+      .filter(client => client.name || client.phone)
+      .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+
+    if (rows.length === 0) {
+      alert('Nao ha clientes para exportar.');
+      return;
+    }
+
+    const escapeCsv = (value: string) => `"${String(value || '').replace(/"/g, '""')}"`;
+    const csvContent = [
+      'Nome,Telefone',
+      ...rows.map(row => `${escapeCsv(row.name)},${escapeCsv(row.phone)}`)
+    ].join('\r\n');
+
+    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const stamp = new Date().toISOString().slice(0, 10);
+
+    link.href = url;
+    link.download = `clientes-cadastrados-${stamp}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="space-y-6 pb-20 animate-in fade-in duration-500">
       <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -266,13 +299,21 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
           <h2 className="text-3xl font-black text-slate-800 tracking-tighter uppercase">Base de Clientes 360º</h2>
           <p className="text-slate-500 text-sm font-bold mt-1">Gestão centralizada com histórico de atendimentos e protocolos.</p>
         </div>
-        <button onClick={() => {
-          setEditMode(false);
-          resetClientForm();
-          setIsModalOpen(true);
-        }} className="flex items-center gap-2 bg-blue-600 text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-xl hover:bg-blue-700 transition-all">
-          <UserPlus size={18} /> Novo Cliente
-        </button>
+        <div className="flex flex-col sm:flex-row gap-3">
+          <button
+            onClick={handleExportClientsCsv}
+            className="flex items-center justify-center gap-2 bg-emerald-600 text-white px-6 py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-xl hover:bg-emerald-700 transition-all"
+          >
+            <Download size={18} /> Exportar CSV
+          </button>
+          <button onClick={() => {
+            setEditMode(false);
+            resetClientForm();
+            setIsModalOpen(true);
+          }} className="flex items-center gap-2 bg-blue-600 text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-xl hover:bg-blue-700 transition-all">
+            <UserPlus size={18} /> Novo Cliente
+          </button>
+        </div>
       </header>
 
       <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex flex-col md:flex-row items-center gap-4">
