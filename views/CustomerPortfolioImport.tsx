@@ -24,13 +24,22 @@ interface ParsedPortfolioRow {
   status: PreviewStatus;
   reason?: string;
   matchedClient?: Client;
-  matchMethod?: 'TELEFONE' | 'TELEFONE + NOME' | 'NOME';
+  matchMethod?: 'TELEFONE' | 'TELEFONE + NOME';
 }
 
 interface ImportGroup {
   client: Client;
   entries: ClientPortfolioEntry[];
   sourceRows: ParsedPortfolioRow[];
+}
+
+interface ImportExecutionReport {
+  updated: string[];
+  unchanged: string[];
+  errors: Array<{
+    clientName: string;
+    reason: string;
+  }>;
 }
 
 const createEntry = (profile: string, productCategory: string, equipment: string): ClientPortfolioEntry => ({
@@ -67,20 +76,22 @@ const getClientMatch = (
     if (phoneAndNameMatch) {
       return { client: phoneAndNameMatch, method: 'TELEFONE + NOME' as const };
     }
-    return { reason: 'Telefone duplicado na base; revise o nome do cliente.' };
+
+    return { reason: 'Telefone duplicado na base; revise o nome do cliente antes de importar.' };
+  }
+
+  if (phoneMatches.length > 1) {
+    return { reason: 'Telefone duplicado na base; informe o nome exato do cliente para evitar vinculo incorreto.' };
   }
 
   if (normalizedName) {
     const nameMatches = clientByName.get(normalizedName) || [];
-    if (nameMatches.length === 1) {
-      return { client: nameMatches[0], method: 'NOME' as const };
-    }
-    if (nameMatches.length > 1) {
-      return { reason: 'Nome duplicado na base; telefone não foi suficiente para diferenciar.' };
+    if (nameMatches.length >= 1) {
+      return { reason: 'O nome existe na base, mas o telefone nao bateu. Para evitar duplicidade, a linha foi bloqueada.' };
     }
   }
 
-  return { reason: 'Cliente comprador não encontrado pelo telefone/nome informado.' };
+  return { reason: 'Cliente comprador nao encontrado pelo telefone informado.' };
 };
 
 export const CustomerPortfolioImport: React.FC = () => {
@@ -90,6 +101,7 @@ export const CustomerPortfolioImport: React.FC = () => {
   const [previewRows, setPreviewRows] = useState<ParsedPortfolioRow[]>([]);
   const [previewGroups, setPreviewGroups] = useState<ImportGroup[]>([]);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
+  const [importReport, setImportReport] = useState<ImportExecutionReport | null>(null);
 
   const readyRows = previewRows.filter(row => row.status === 'READY');
   const invalidRows = previewRows.filter(row => row.status === 'INVALID');
@@ -102,6 +114,7 @@ export const CustomerPortfolioImport: React.FC = () => {
     setFile(uploadedFile);
     setLoading(true);
     setResultMessage(null);
+    setImportReport(null);
     setPreviewRows([]);
     setPreviewGroups([]);
 
@@ -125,7 +138,7 @@ export const CustomerPortfolioImport: React.FC = () => {
       }
 
       const reader = new FileReader();
-      reader.onload = (loadEvent) => {
+      reader.onload = loadEvent => {
         try {
           const data = new Uint8Array(loadEvent.target?.result as ArrayBuffer);
           const workbook = xlsx.read(data, { type: 'array' });
@@ -133,7 +146,7 @@ export const CustomerPortfolioImport: React.FC = () => {
           const rows = xlsx.utils.sheet_to_json<Record<string, any>>(sheet, { defval: '' });
 
           if (rows.length === 0) {
-            throw new Error('A planilha está vazia.');
+            throw new Error('A planilha esta vazia.');
           }
 
           const headers = Object.keys(rows[0]);
@@ -144,7 +157,7 @@ export const CustomerPortfolioImport: React.FC = () => {
           const equipmentColumn = detectColumn(headers, ['equipamento', 'modelo', 'produto especifico', 'produto específico', 'item']);
 
           if (!nameColumn || !phoneColumn) {
-            throw new Error('As colunas de Nome e Telefone são obrigatórias para vincular a ficha do cliente.');
+            throw new Error('As colunas de Nome e Telefone sao obrigatorias para vincular a ficha do cliente.');
           }
 
           if (!profileColumn && !categoryColumn && !equipmentColumn) {
@@ -174,7 +187,7 @@ export const CustomerPortfolioImport: React.FC = () => {
                   productCategory,
                   equipment,
                   status: 'INVALID' as const,
-                  reason: 'Telefone ausente ou inválido.'
+                  reason: 'Telefone ausente ou invalido.'
                 };
               }
 
@@ -248,7 +261,7 @@ export const CustomerPortfolioImport: React.FC = () => {
 
       reader.onerror = () => {
         setLoading(false);
-        alert('Não foi possível ler o arquivo.');
+        alert('Nao foi possivel ler o arquivo.');
       };
 
       reader.readAsArrayBuffer(uploadedFile);
@@ -263,33 +276,51 @@ export const CustomerPortfolioImport: React.FC = () => {
 
     setImporting(true);
     setResultMessage(null);
+    setImportReport(null);
 
-    try {
-      let updatedClients = 0;
+    const report: ImportExecutionReport = {
+      updated: [],
+      unchanged: [],
+      errors: []
+    };
 
-      for (const group of previewGroups) {
-        const metadata = collectPortfolioMetadata(group.entries);
+    for (const group of previewGroups) {
+      try {
+        const existingEntries = mergePortfolioEntries(group.client.portfolio_entries || []);
+        const mergedEntries = mergePortfolioEntries(existingEntries, group.entries);
+
+        if (mergedEntries.length === existingEntries.length) {
+          report.unchanged.push(`${group.client.name} (${group.client.phone || 'sem telefone'})`);
+          continue;
+        }
+
+        const metadata = collectPortfolioMetadata(mergedEntries);
 
         await dataService.upsertClient({
           id: group.client.id,
           name: group.client.name,
           phone: group.client.phone,
-          portfolio_entries: group.entries,
+          portfolio_entries: mergedEntries,
           customer_profiles: metadata.customer_profiles,
           product_categories: metadata.product_categories,
           equipment_models: metadata.equipment_models,
           items: metadata.equipment_models
         });
 
-        updatedClients += 1;
+        report.updated.push(`${group.client.name} (${group.client.phone || 'sem telefone'})`);
+      } catch (error: any) {
+        report.errors.push({
+          clientName: group.client.name,
+          reason: error?.message || 'Falha desconhecida ao transferir os dados tecnicos.'
+        });
       }
-
-      setResultMessage(`Importação concluída: ${updatedClients} clientes receberam vínculos técnicos adicionais.`);
-    } catch (error: any) {
-      alert(error.message || 'Erro ao importar os dados técnicos.');
-    } finally {
-      setImporting(false);
     }
+
+    setImportReport(report);
+    setResultMessage(
+      `Importacao concluida: ${report.updated.length} cliente(s) atualizados, ${report.unchanged.length} sem novidade e ${report.errors.length} com erro.`
+    );
+    setImporting(false);
   };
 
   return (
@@ -301,7 +332,7 @@ export const CustomerPortfolioImport: React.FC = () => {
             Perfil e Equipamentos do Cliente
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-2">
-            Suba um CSV/Excel com `Nome`, `Telefone`, `Perfil`, `Categoria` e `Equipamento` para enriquecer cadastros já compradores.
+            Suba um CSV/Excel com `Nome`, `Telefone`, `Perfil`, `Categoria` e `Equipamento` para enriquecer cadastros ja compradores.
           </p>
         </div>
       </div>
@@ -311,7 +342,7 @@ export const CustomerPortfolioImport: React.FC = () => {
           <div className="space-y-3">
             <h2 className="text-lg font-black text-slate-800">Como montar a planilha</h2>
             <p className="text-sm text-slate-600">
-              Cada linha representa um vínculo técnico do cliente. O mesmo cliente pode aparecer em várias linhas com equipamentos diferentes.
+              Cada linha representa um vinculo tecnico do cliente. O mesmo cliente pode aparecer em varias linhas com equipamentos diferentes.
             </p>
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 font-mono text-xs text-slate-600 overflow-auto">
               Nome,Telefone,Perfil,Categoria,Equipamento<br />
@@ -322,19 +353,19 @@ export const CustomerPortfolioImport: React.FC = () => {
           </div>
 
           <div className="space-y-3">
-            <h2 className="text-lg font-black text-slate-800">Regras do vínculo</h2>
+            <h2 className="text-lg font-black text-slate-800">Regras do vinculo</h2>
             <div className="space-y-3 text-sm text-slate-600">
               <div className="flex items-start gap-3">
                 <CheckCircle2 size={18} className="text-emerald-500 shrink-0 mt-0.5" />
-                <span>O sistema tenta localizar primeiro pelo telefone, e usa o nome para reforçar ou desempatar.</span>
+                <span>O sistema so atualiza clientes ja existentes e usa o telefone como chave principal para evitar duplicidade.</span>
               </div>
               <div className="flex items-start gap-3">
                 <CheckCircle2 size={18} className="text-emerald-500 shrink-0 mt-0.5" />
-                <span>As linhas encontradas são agrupadas por cliente antes de salvar, evitando duplicidade de equipamento.</span>
+                <span>Se o telefone aparecer mais de uma vez na base, o nome exato e usado apenas para desempatar, nunca para criar novo cliente.</span>
               </div>
               <div className="flex items-start gap-3">
                 <AlertTriangle size={18} className="text-amber-500 shrink-0 mt-0.5" />
-                <span>Linhas não encontradas ou ambíguas ficam no preview para revisão antes da importação.</span>
+                <span>Linhas sem telefone valido, sem dados tecnicos ou sem correspondencia segura ficam bloqueadas no preview com o motivo.</span>
               </div>
             </div>
           </div>
@@ -356,7 +387,7 @@ export const CustomerPortfolioImport: React.FC = () => {
         {loading && (
           <div className="py-12 text-center text-slate-500 space-y-3">
             <Loader2 className="animate-spin mx-auto text-blue-600" size={32} />
-            <p className="font-bold">Processando arquivo e validando vínculos com a base atual...</p>
+            <p className="font-bold">Processando arquivo e validando vinculos com a base atual...</p>
           </div>
         )}
 
@@ -365,7 +396,7 @@ export const CustomerPortfolioImport: React.FC = () => {
             <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
               <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 text-center">
                 <div className="text-2xl font-black text-slate-800">{previewRows.length}</div>
-                <div className="text-xs font-semibold text-slate-500 uppercase">Linhas válidas lidas</div>
+                <div className="text-xs font-semibold text-slate-500 uppercase">Linhas lidas</div>
               </div>
               <div className="bg-blue-50 p-4 rounded-2xl border border-blue-100 text-center">
                 <div className="text-2xl font-black text-blue-700">{readyRows.length}</div>
@@ -377,11 +408,11 @@ export const CustomerPortfolioImport: React.FC = () => {
               </div>
               <div className="bg-amber-50 p-4 rounded-2xl border border-amber-100 text-center">
                 <div className="text-2xl font-black text-amber-700">{notFoundRows.length}</div>
-                <div className="text-xs font-semibold text-amber-600 uppercase">Não encontrados</div>
+                <div className="text-xs font-semibold text-amber-600 uppercase">Bloqueadas</div>
               </div>
               <div className="bg-rose-50 p-4 rounded-2xl border border-rose-100 text-center">
                 <div className="text-2xl font-black text-rose-700">{invalidRows.length}</div>
-                <div className="text-xs font-semibold text-rose-600 uppercase">Inválidas</div>
+                <div className="text-xs font-semibold text-rose-600 uppercase">Invalidas</div>
               </div>
             </div>
 
@@ -411,7 +442,7 @@ export const CustomerPortfolioImport: React.FC = () => {
                         ))}
                       </div>
                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                        {group.sourceRows.length} linha(s) da planilha serão adicionadas a este cliente
+                        {group.sourceRows.length} linha(s) da planilha serao adicionadas a este cliente
                       </p>
                     </div>
                   );
@@ -426,7 +457,7 @@ export const CustomerPortfolioImport: React.FC = () => {
                     <th className="px-4 py-3">Linha</th>
                     <th className="px-4 py-3">Status</th>
                     <th className="px-4 py-3">Cliente da Planilha</th>
-                    <th className="px-4 py-3">Vínculo Encontrado</th>
+                    <th className="px-4 py-3">Vinculo Encontrado</th>
                     <th className="px-4 py-3">Perfil / Categoria / Equipamento</th>
                   </tr>
                 </thead>
@@ -441,11 +472,11 @@ export const CustomerPortfolioImport: React.FC = () => {
                           </span>
                         ) : row.status === 'NOT_FOUND' ? (
                           <span className="inline-flex items-center gap-1 text-amber-700 font-bold">
-                            <AlertTriangle size={14} /> Revisar
+                            <AlertTriangle size={14} /> Bloqueada
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 text-rose-700 font-bold">
-                            <AlertTriangle size={14} /> Inválida
+                            <AlertTriangle size={14} /> Invalida
                           </span>
                         )}
                       </td>
@@ -477,8 +508,56 @@ export const CustomerPortfolioImport: React.FC = () => {
             </div>
 
             {resultMessage && (
-              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700">
-                {resultMessage}
+              <div className="space-y-4">
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-700">
+                  {resultMessage}
+                </div>
+
+                {importReport && (
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                    <div className="rounded-2xl border border-emerald-200 bg-white p-4 space-y-3">
+                      <p className="text-xs font-black uppercase tracking-widest text-emerald-700">Atualizados</p>
+                      {importReport.updated.length > 0 ? (
+                        <div className="space-y-2">
+                          {importReport.updated.map(item => (
+                            <div key={item} className="text-sm text-slate-700 font-medium">{item}</div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-slate-500">Nenhum cliente precisou de atualizacao.</p>
+                      )}
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+                      <p className="text-xs font-black uppercase tracking-widest text-slate-700">Sem Novidade</p>
+                      {importReport.unchanged.length > 0 ? (
+                        <div className="space-y-2">
+                          {importReport.unchanged.map(item => (
+                            <div key={item} className="text-sm text-slate-700 font-medium">{item}</div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-slate-500">Todos os clientes tinham algo novo para gravar.</p>
+                      )}
+                    </div>
+
+                    <div className="rounded-2xl border border-rose-200 bg-white p-4 space-y-3">
+                      <p className="text-xs font-black uppercase tracking-widest text-rose-700">Erros</p>
+                      {importReport.errors.length > 0 ? (
+                        <div className="space-y-3">
+                          {importReport.errors.map(error => (
+                            <div key={`${error.clientName}-${error.reason}`} className="rounded-xl bg-rose-50 border border-rose-100 p-3">
+                              <p className="text-sm font-bold text-rose-700">{error.clientName}</p>
+                              <p className="text-xs text-rose-600 mt-1">{error.reason}</p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-slate-500">Nenhum erro na transferencia.</p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -489,6 +568,7 @@ export const CustomerPortfolioImport: React.FC = () => {
                   setPreviewRows([]);
                   setPreviewGroups([]);
                   setResultMessage(null);
+                  setImportReport(null);
                 }}
                 className="px-4 py-2 font-semibold text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
                 disabled={importing}
