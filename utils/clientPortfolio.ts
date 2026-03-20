@@ -113,6 +113,93 @@ export const collectPortfolioMetadata = (entries: ClientPortfolioEntry[]) => ({
 export const getClientEquipmentList = (client?: Partial<Client> | null) =>
   mergeUniquePortfolioValues(client?.equipment_models, client?.items);
 
+const LOW_SIGNAL_PORTFOLIO_KEYWORDS = [
+  'conexao',
+  'conexoes',
+  'conexão',
+  'conexões',
+  'curva',
+  'joelho',
+  'luva',
+  'niple',
+  'nipple',
+  'tubo',
+  'tubo pvc',
+  'cano',
+  'registro',
+  'adaptador',
+  'flange',
+  'cola',
+  'fita veda',
+  'veda rosca',
+  'hidraulica',
+  'hidráulica',
+  'material hidraulico',
+  'material hidráulico',
+  'acessorio',
+  'acessório',
+  'kit instalacao',
+  'kit instalação',
+  'instalacao',
+  'instalação',
+  'suporte',
+  'abracadeira',
+  'abraçadeira',
+  'ralo',
+  'dreno'
+];
+
+const HIGH_SIGNAL_PORTFOLIO_KEYWORDS = [
+  'boiler',
+  'placa solar',
+  'solar',
+  'fotovoltaico',
+  'aquecedor',
+  'gerador de cloro',
+  'trocador de calor',
+  'bomba de calor',
+  'bomba calor',
+  'pressurizador',
+  'spa',
+  'sauna',
+  'ionizador'
+];
+
+const getPortfolioSignalText = (entry: Partial<ClientPortfolioEntry>) =>
+  normalizeComparableText([entry.profile, entry.product_category, entry.equipment].filter(Boolean).join(' '));
+
+const hasAnyPortfolioKeyword = (entry: Partial<ClientPortfolioEntry>, keywords: string[]) => {
+  const signalText = getPortfolioSignalText(entry);
+  return keywords.some(keyword => signalText.includes(normalizeComparableText(keyword)));
+};
+
+export const isLowSignalPortfolioEntry = (entry: Partial<ClientPortfolioEntry>) =>
+  hasAnyPortfolioKeyword(entry, LOW_SIGNAL_PORTFOLIO_KEYWORDS);
+
+export const isHighSignalPortfolioEntry = (entry: Partial<ClientPortfolioEntry>) =>
+  hasAnyPortfolioKeyword(entry, HIGH_SIGNAL_PORTFOLIO_KEYWORDS);
+
+export const getOperatorPriorityPortfolioEntries = (entries: ClientPortfolioEntry[]) => {
+  const normalizedEntries = mergePortfolioEntries(entries);
+  const hasHighSignalEntries = normalizedEntries.some(isHighSignalPortfolioEntry);
+
+  const prioritizedEntries = hasHighSignalEntries
+    ? normalizedEntries.filter(entry => !isLowSignalPortfolioEntry(entry))
+    : normalizedEntries;
+
+  return prioritizedEntries.sort((a, b) => {
+    const signalScoreA = isHighSignalPortfolioEntry(a) ? 1 : 0;
+    const signalScoreB = isHighSignalPortfolioEntry(b) ? 1 : 0;
+    const quantityA = normalizePortfolioQuantity(a.quantity);
+    const quantityB = normalizePortfolioQuantity(b.quantity);
+
+    return signalScoreB - signalScoreA ||
+      quantityB - quantityA ||
+      a.product_category.localeCompare(b.product_category, 'pt-BR') ||
+      a.equipment.localeCompare(b.equipment, 'pt-BR');
+  });
+};
+
 export const getClientPortfolioEntries = (client?: Partial<Client> | null) => {
   const existingEntries = mergePortfolioEntries(client?.portfolio_entries);
   if (existingEntries.length > 0) {

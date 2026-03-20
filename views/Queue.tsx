@@ -12,7 +12,7 @@ import { TagApprovalCard } from '../components/TagApprovalCard';
 import { HelpTooltip } from '../components/HelpTooltip';
 import { HELP_TEXTS } from '../utils/helpTexts';
 import { enrichQuestionnaireResponses } from '../utils/questionnaireInsights';
-import { collectPortfolioMetadata, getClientPortfolioEntries } from '../utils/clientPortfolio';
+import { collectPortfolioMetadata, getClientPortfolioEntries, getOperatorPriorityPortfolioEntries } from '../utils/clientPortfolio';
 
 interface QueueProps {
   user: any;
@@ -71,9 +71,13 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     offerBlockerReason: ''
   });
   const clientPortfolioEntries = React.useMemo(() => getClientPortfolioEntries(client), [client]);
-  const clientPortfolioMetadata = React.useMemo(
-    () => collectPortfolioMetadata(clientPortfolioEntries),
+  const operatorPriorityPortfolioEntries = React.useMemo(
+    () => getOperatorPriorityPortfolioEntries(clientPortfolioEntries),
     [clientPortfolioEntries]
+  );
+  const clientPortfolioMetadata = React.useMemo(
+    () => collectPortfolioMetadata(operatorPriorityPortfolioEntries),
+    [operatorPriorityPortfolioEntries]
   );
 
   // Estados para abertura de protocolo no report

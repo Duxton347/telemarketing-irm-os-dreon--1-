@@ -78,6 +78,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
   const [clientTags, setClientTags] = React.useState<ClientTag[]>([]);
   const [isEmailModalOpen, setIsEmailModalOpen] = React.useState(false);
   const [newEmail, setNewEmail] = React.useState('');
+  const [expandedCategory, setExpandedCategory] = React.useState<string | null>(null);
 
   const [clientData, setClientData] = React.useState<ClientFormState>(createEmptyClientData);
   const resetClientForm = React.useCallback(() => setClientData(createEmptyClientData()), []);
@@ -87,6 +88,54 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
     () => collectPortfolioMetadata(selectedPortfolioEntries),
     [selectedPortfolioEntries]
   );
+  const selectedCategoryGroups = React.useMemo(() => {
+    const grouped = new Map<string, {
+      category: string;
+      totalQuantity: number;
+      profiles: string[];
+      equipments: Array<{
+        name: string;
+        quantity: number;
+      }>;
+    }>();
+
+    for (const entry of selectedPortfolioEntries) {
+      const category = (entry.product_category || 'Sem Categoria').trim();
+      const group = grouped.get(category) || {
+        category,
+        totalQuantity: 0,
+        profiles: [],
+        equipments: []
+      };
+
+      group.totalQuantity += entry.quantity || 1;
+
+      if (entry.profile && !group.profiles.includes(entry.profile)) {
+        group.profiles.push(entry.profile);
+      }
+
+      if (entry.equipment) {
+        const existingEquipment = group.equipments.find(item => item.name === entry.equipment);
+        if (existingEquipment) {
+          existingEquipment.quantity += entry.quantity || 1;
+        } else {
+          group.equipments.push({
+            name: entry.equipment,
+            quantity: entry.quantity || 1
+          });
+        }
+      }
+
+      grouped.set(category, group);
+    }
+
+    return Array.from(grouped.values())
+      .map(group => ({
+        ...group,
+        equipments: group.equipments.sort((a, b) => b.quantity - a.quantity || a.name.localeCompare(b.name, 'pt-BR'))
+      }))
+      .sort((a, b) => b.totalQuantity - a.totalQuantity || a.category.localeCompare(b.category, 'pt-BR'));
+  }, [selectedPortfolioEntries]);
 
   const addPortfolioEntry = () => {
     setClientData(prev => ({
@@ -153,6 +202,10 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
     fetchHistory();
     setNewEmail(selectedClient?.email || '');
   }, [selectedClient]);
+
+  React.useEffect(() => {
+    setExpandedCategory(null);
+  }, [selectedClient?.id]);
 
   const handleSaveEmail = async () => {
     if (!selectedClient || !newEmail) return;
@@ -513,10 +566,54 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                     <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2">
                       <TagIcon size={14} className="text-indigo-500" /> Equipamentos e Itens Específicos
                     </h5>
-                    <div className="flex flex-wrap gap-2">
-                      {selectedPortfolioMetadata.equipment_models.length > 0 ? selectedPortfolioMetadata.equipment_models.map((item, index) => (
-                        <span key={`${item}-${index}`} className="px-4 py-2 bg-blue-50 text-blue-700 rounded-xl text-[10px] font-black uppercase border border-blue-100">{item}</span>
-                      )) : (
+                    <div className="space-y-3">
+                      {selectedCategoryGroups.length > 0 ? selectedCategoryGroups.map(group => {
+                        const isExpanded = expandedCategory === group.category;
+
+                        return (
+                          <div key={group.category} className="rounded-[24px] border border-slate-200 bg-white overflow-hidden">
+                            <button
+                              type="button"
+                              onClick={() => setExpandedCategory(isExpanded ? null : group.category)}
+                              className="w-full p-5 flex items-center justify-between gap-4 text-left hover:bg-slate-50 transition-colors"
+                            >
+                              <div className="space-y-2">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="px-3 py-1 rounded-lg bg-cyan-50 text-cyan-700 text-[10px] font-black uppercase border border-cyan-100">{group.category}</span>
+                                  {group.profiles.map(profile => (
+                                    <span key={profile} className="px-3 py-1 rounded-lg bg-amber-50 text-amber-700 text-[10px] font-black uppercase border border-amber-100">{profile}</span>
+                                  ))}
+                                </div>
+                                <p className="text-xs font-bold text-slate-500">{group.equipments.length} produto(s) especifico(s) vinculado(s)</p>
+                              </div>
+                              <div className="flex items-center gap-4 shrink-0">
+                                <div className="rounded-2xl bg-slate-900 px-3 py-2 text-white text-center min-w-[82px]">
+                                  <p className="text-[8px] font-black uppercase tracking-widest">Qtd Total</p>
+                                  <p className="text-2xl font-black leading-none mt-1">{group.totalQuantity}</p>
+                                </div>
+                                <ChevronRight size={18} className={`text-slate-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                              </div>
+                            </button>
+
+                            {isExpanded && (
+                              <div className="border-t border-slate-100 bg-slate-50 px-5 py-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                                  {group.equipments.map(equipment => (
+                                    <div key={equipment.name} className="rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 via-white to-cyan-50 p-4">
+                                      <p className="text-[9px] font-black uppercase tracking-[0.2em] text-blue-500">Produto Especifico</p>
+                                      <h6 className="text-sm font-black text-slate-800 mt-2">{equipment.name}</h6>
+                                      <div className="mt-3 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-white">
+                                        <span className="text-[8px] font-black uppercase tracking-widest">Qtd</span>
+                                        <span className="text-lg font-black leading-none">{equipment.quantity}</span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }) : (
                         <span className="text-xs font-bold text-slate-300 italic">Nenhum equipamento vinculado</span>
                       )}
                     </div>
@@ -528,7 +625,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                     </h5>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {selectedPortfolioEntries.length > 0 ? selectedPortfolioEntries.map((entry, index) => (
-                        <div key={entry.id || `${entry.profile}-${entry.product_category}-${entry.equipment}-${index}`} className="p-5 bg-slate-50 rounded-[24px] border border-slate-100 space-y-3">
+                        <div key={entry.id || `${entry.profile}-${entry.product_category}-${entry.equipment}-${index}`} className="p-4 bg-slate-50 rounded-[24px] border border-slate-100 space-y-2">
                           {entry.profile && (
                             <p className="text-[9px] font-black uppercase tracking-widest text-amber-600">Perfil: <span className="text-slate-700">{entry.profile}</span></p>
                           )}
