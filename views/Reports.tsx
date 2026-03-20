@@ -16,6 +16,7 @@ import { CallRecord, User, Client, Protocol, Question, Task, OperatorEvent, Oper
 import PostSaleRemarketingReport from './PostSaleRemarketingReport';
 import ProspectHistoryDrawer from '../components/ProspectHistoryDrawer';
 import { buildManagementReportInsights } from '../utils/managementReportInsights';
+import { questionMatchesContext } from '../utils/questionnaireInsights';
 
 // --- HELPER COMPONENTS ---
 
@@ -56,6 +57,77 @@ const MetricCard: React.FC<{
    );
 };
 
+const normalizeReportText = (value?: string) =>
+   String(value || '')
+      .toLowerCase()
+      .trim()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+
+const isMeaningfulReportValue = (value: unknown) => {
+   if (value === null || value === undefined) return false;
+   if (typeof value === 'string') return value.trim().length > 0;
+   if (Array.isArray(value)) return value.length > 0;
+   return true;
+};
+
+const formatReportValue = (value: unknown) => {
+   if (Array.isArray(value)) {
+      return value.map(item => String(item)).join(', ');
+   }
+
+   if (typeof value === 'object' && value !== null) {
+      return JSON.stringify(value);
+   }
+
+   return String(value);
+};
+
+const findQuestionByHints = (questions: Question[], hints: string[]) =>
+   questions.find(question => {
+      const haystack = `${question.text} ${question.campo_resposta || ''} ${question.id}`.toLowerCase();
+      return hints.some(hint => haystack.includes(hint.toLowerCase()));
+   });
+
+const collectInteractionResponses = (
+   responses: Record<string, any>,
+   questions: Question[],
+   callType?: string,
+   proposito?: string
+) => {
+   const relevantQuestions = questions.filter(question => questionMatchesContext(question, callType, proposito));
+   const resolvedEntries = relevantQuestions
+      .map(question => {
+         const value = dataService.getResponseValue(responses, question);
+         if (!isMeaningfulReportValue(value)) return null;
+
+         return {
+            key: question.campo_resposta || question.id,
+            label: question.text,
+            value: formatReportValue(value)
+         };
+      })
+      .filter(Boolean) as Array<{ key: string; label: string; value: string }>;
+
+   if (resolvedEntries.length > 0) {
+      return resolvedEntries;
+   }
+
+   return Object.entries(responses || {})
+      .filter(([key, value]) => !key.endsWith('_note') && isMeaningfulReportValue(value))
+      .map(([key, value]) => ({
+         key,
+         label: key,
+         value: formatReportValue(value)
+      }));
+};
+
+const getInteractionTypeLabel = (interaction: any) => {
+   const isWhatsApp = interaction?.type === CallType.WHATSAPP || interaction?._type === 'whatsapp';
+   if (isWhatsApp) return 'WhatsApp';
+   return interaction?.type || 'Ligação';
+};
+
 // --- MAIN COMPONENT ---
 
 const Reports: React.FC<{ user: any }> = ({ user }) => {
@@ -65,7 +137,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
 
    // Custom Date Range
    const [dateRange, setDateRange] = React.useState({
-      start: new Date(new Date().setDate(new Date().getDate() - 30)).toISOString().split('T')[0],
+      start: '2010-01-01',
       end: new Date().toISOString().split('T')[0]
    });
 
@@ -247,6 +319,16 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
              speed: { satisfied: 0, total: 0 }
          };
 
+         const npsQuestion = findQuestionByHints(fetchedQuestions, ['nps', 'recomend']);
+         const priceQuestion = findQuestionByHints(fetchedQuestions, ['preco', 'precificacao', 'preço']);
+         const productQuestion = findQuestionByHints(fetchedQuestions, ['produto', 'estoque', 'qualidade']);
+         const speedQuestion = findQuestionByHints(fetchedQuestions, ['velocidade', 'agilidade', 'prazo']);
+
+         const getResolvedInteractionValue = (interaction: any, question?: Question) => {
+             if (!question) return undefined;
+             return dataService.getResponseValue(interaction.responses || {}, question);
+         };
+
          // Analyze all responses from calls and WA tasks within date range
          const allInteractions = [
              ...fetchedCalls,
@@ -257,7 +339,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
              const responses = interaction.responses || {};
              
              // NPS Eval
-             const npsRaw = responses['q_nps'];
+             const npsRaw = getResolvedInteractionValue(interaction, npsQuestion) ?? responses['q_nps'];
              if (npsRaw !== undefined) {
                  const npsScoreRaw = parseInt(npsRaw, 10);
                  if (!isNaN(npsScoreRaw)) {
@@ -282,6 +364,42 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
              checkSatisfaction('q_precificacao', 'price');
              checkSatisfaction('q_produto_estoque', 'product');
              checkSatisfaction('q_velocidade', 'speed');
+         });
+
+         promoters = 0;
+         detractors = 0;
+         npsTotal = 0;
+         satRates.price = { satisfied: 0, total: 0 };
+         satRates.product = { satisfied: 0, total: 0 };
+         satRates.speed = { satisfied: 0, total: 0 };
+
+         allInteractions.forEach((interaction: any) => {
+             const responses = interaction.responses || {};
+             const npsRaw = getResolvedInteractionValue(interaction, npsQuestion) ?? responses['q_nps'];
+
+             if (npsRaw !== undefined) {
+                 const npsScoreRaw = parseInt(String(npsRaw), 10);
+                 if (!isNaN(npsScoreRaw)) {
+                     npsTotal++;
+                     if (npsScoreRaw >= 9) promoters++;
+                     else if (npsScoreRaw <= 6) detractors++;
+                 }
+             }
+
+             const resolvedChecks = [
+                 { value: getResolvedInteractionValue(interaction, priceQuestion) ?? responses['q_precificacao'], category: 'price' as const },
+                 { value: getResolvedInteractionValue(interaction, productQuestion) ?? responses['q_produto_estoque'], category: 'product' as const },
+                 { value: getResolvedInteractionValue(interaction, speedQuestion) ?? responses['q_velocidade'], category: 'speed' as const }
+             ];
+
+             resolvedChecks.forEach(check => {
+                 if (!isMeaningfulReportValue(check.value)) return;
+                 satRates[check.category].total++;
+                 const normalizedVal = normalizeReportText(String(check.value));
+                 if (['otimo', 'bom', 'sim', 'adequado'].some(option => normalizedVal.includes(option))) {
+                     satRates[check.category].satisfied++;
+                 }
+             });
          });
 
          const npsScore = npsTotal > 0 ? Math.round(((promoters - detractors) / npsTotal) * 100) : 0;
@@ -399,6 +517,14 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
 
       const isCall = selectedInteraction._type === 'call';
       const isWhatsApp = selectedInteraction.type === CallType.WHATSAPP || selectedInteraction._type === 'whatsapp';
+      const resolvedCallResponses = isCall
+         ? collectInteractionResponses(
+            selectedInteraction.responses || {},
+            questions,
+            selectedInteraction.type,
+            selectedInteraction.proposito
+         )
+         : [];
       const client = clients.find(c => c.id === selectedInteraction.clientId) || prospects.find(p => p.id === selectedInteraction.clientId);
       const op = operators.find(o => o.id === (isCall ? selectedInteraction.operatorId : selectedInteraction.assignedTo));
       const date = new Date(selectedInteraction.date);
@@ -495,19 +621,13 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
 
                      {isCall ? (
                         <div className="grid grid-cols-1 gap-4">
-                           {Object.entries(selectedInteraction.responses || {}).map(([key, val]: any) => {
-                              // Find question text
-                              const question = questions.find(q => q.id === key);
-                              const label = question ? question.text : key;
-
-                              return (
-                                 <div key={key} className="p-5 rounded-2xl bg-white border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                                    <p className="text-xs font-bold text-slate-500 uppercase mb-2 leading-relaxed">{label}</p>
-                                    <p className="text-base font-medium text-slate-800 bg-slate-50 p-3 rounded-xl border border-slate-100">{String(val)}</p>
-                                 </div>
-                              );
-                           })}
-                           {Object.keys(selectedInteraction.responses || {}).length === 0 && (
+                           {resolvedCallResponses.map(({ key, label, value }) => (
+                              <div key={key} className="p-5 rounded-2xl bg-white border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+                                 <p className="text-xs font-bold text-slate-500 uppercase mb-2 leading-relaxed">{label}</p>
+                                 <p className="text-base font-medium text-slate-800 bg-slate-50 p-3 rounded-xl border border-slate-100">{value}</p>
+                              </div>
+                           ))}
+                           {resolvedCallResponses.length === 0 && (
                               <div className="text-center p-8 bg-slate-50 rounded-3xl border border-slate-100 border-dashed">
                                  <p className="text-sm text-slate-400 font-bold italic">Nenhuma resposta registrada para esta chamada.</p>
                               </div>
@@ -1432,12 +1552,13 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                               </tr>
                            </thead>
                             <tbody className="divide-y divide-slate-50">
-                               {getFilteredAuditData().slice(0, 100).map((item: any, i) => {
+                              {getFilteredAuditData().map((item: any, i) => {
                                  const isCall = item._type === 'call';
                                  const isWhatsApp = item.type === CallType.WHATSAPP || item._type === 'whatsapp';
                                  const date = new Date(isCall ? item.startTime : item.createdAt).toLocaleString();
                                  const opName = operators.find(o => o.id === (isCall ? item.operatorId : item.assignedTo))?.name || 'N/A';
                                  const clientName = item.clientName || clients.find(c => c.id === item.clientId)?.name || prospects.find(p => p.id === item.clientId)?.name || 'N/A';
+                                 const interactionTypeLabel = getInteractionTypeLabel(item);
 
                                  return (
                                     <tr
@@ -1448,8 +1569,13 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                                        <td className="py-4 px-6 text-xs font-bold text-slate-600 pl-8">{date}</td>
                                        <td className="py-4 px-6">
                                           <span className={`px-2 py-1 rounded-md text-[9px] font-black uppercase ${!isWhatsApp ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                                             {!isWhatsApp ? 'Ligação' : 'WhatsApp'}
+                                             {interactionTypeLabel}
                                           </span>
+                                          {item.proposito && (
+                                             <p className="mt-2 text-[10px] font-black uppercase tracking-widest text-slate-400">
+                                                {item.proposito}
+                                             </p>
+                                          )}
                                           {item.relatedVisit ? (
                                              <div>
                                                 <p className="font-bold text-slate-800">Detalhes da Visita</p>

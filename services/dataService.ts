@@ -8,7 +8,7 @@ import {
 } from '../types';
 import { TagDecisionEngine } from './tagDecisionEngine';
 import { SCORE_MAP, STAGE_CONFIG } from '../constants';
-import { extractCampaignInsightsFromResponses, extractClientInsightsFromResponses, resolveStoredResponseForQuestion } from '../utils/questionnaireInsights';
+import { extractCampaignInsightsFromResponses, extractClientInsightsFromResponses, questionMatchesContext, resolveStoredResponseForQuestion } from '../utils/questionnaireInsights';
 import {
   collectPortfolioMetadata,
   getClientEquipmentList,
@@ -50,8 +50,15 @@ const normalizeCallTypeToken = (value?: string | null) =>
 const mapStoredCallTypeToApp = (value?: string | null): CallType => {
   switch (normalizeCallTypeToken(value)) {
     case 'POS_VENDA':
+    case 'POSVENDA':
+    case 'ACOMPANHAMENTO':
+    case 'SUPORTE':
+    case 'COBRANCA':
+    case 'TENTATIVA':
       return CallType.POS_VENDA;
     case 'PROSPECCAO':
+    case 'PROSPECT':
+    case 'PROSPECTO':
       return CallType.PROSPECCAO;
     case 'VENDA':
       return CallType.VENDA;
@@ -63,6 +70,34 @@ const mapStoredCallTypeToApp = (value?: string | null): CallType => {
       return CallType.WHATSAPP;
     default:
       return (value as CallType) || CallType.POS_VENDA;
+  }
+};
+
+const mapCallLogTypeToDb = (type?: string | null): string => {
+  const normalized = normalizeCallTypeToken(type);
+
+  switch (normalized) {
+    case 'WHATSAPP':
+      return 'WHATSAPP';
+    case 'CONFIRMACAO_PROTOCOLO':
+      return 'CONFIRMACAO_PROTOCOLO';
+    case 'PROSPECCAO':
+    case 'PROSPECT':
+    case 'PROSPECTO':
+      return 'PROSPECCAO';
+    case 'VENDA':
+      return 'VENDA';
+    case 'REATIVACAO':
+      return 'REATIVACAO';
+    case 'POS_VENDA':
+    case 'POSVENDA':
+    case 'ACOMPANHAMENTO':
+    case 'SUPORTE':
+    case 'COBRANCA':
+    case 'TENTATIVA':
+      return 'POS_VENDA';
+    default:
+      return normalized || 'POS_VENDA';
   }
 };
 
@@ -93,6 +128,341 @@ const expandCallTypeQueryValues = (callType?: CallType | 'ALL' | string) => {
   }
 
   return Array.from(values);
+};
+
+const REPORT_METADATA_KEYS = new Set([
+  'target_product',
+  'offer_product',
+  'portfolio_scope',
+  'offer_interest_level',
+  'offer_blocker_reason',
+  'campaign_name',
+  'campanha_id',
+  'campanha_indicada_id',
+  'note'
+]);
+
+const isMeaningfulReportValue = (value: unknown) => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+};
+
+const normalizeReportText = (value: unknown) =>
+  String(value || '')
+    .toLowerCase()
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+const isPostSaleRemarketingCallType = (value?: string | null) => {
+  switch (normalizeCallTypeToken(value)) {
+    case 'POS_VENDA':
+    case 'POSVENDA':
+    case 'REATIVACAO':
+    case 'VENDA':
+    case 'ACOMPANHAMENTO':
+    case 'SUPORTE':
+    case 'COBRANCA':
+    case 'TENTATIVA':
+      return true;
+    default:
+      return false;
+  }
+};
+
+const findQuestionByReportHints = (
+  questions: Question[],
+  callType: string | undefined,
+  proposito: string | null | undefined,
+  hints: string[]
+) =>
+  questions.find(question => {
+    if (!questionMatchesContext(question, callType, proposito)) return false;
+    const haystack = `${question.text} ${question.campo_resposta || ''} ${question.id}`.toLowerCase();
+    return hints.some(hint => haystack.includes(hint.toLowerCase()));
+  });
+
+const normalizeUnifiedRating = (value: number | null) => {
+  if (value === null || Number.isNaN(value)) return null;
+  if (value >= 0 && value <= 10) return Math.max(0, Math.min(5, Math.round(value / 2)));
+  if (value >= 1 && value <= 5) return Math.round(value);
+  return null;
+};
+
+const extractRatingFromValue = (value: unknown) => {
+  if (!isMeaningfulReportValue(value)) return null;
+
+  if (typeof value === 'number') {
+    return normalizeUnifiedRating(value);
+  }
+
+  const text = String(value).trim();
+  const numeric = Number(text.replace(',', '.'));
+  if (!Number.isNaN(numeric)) {
+    return normalizeUnifiedRating(numeric);
+  }
+
+  const normalized = normalizeReportText(text);
+  if (normalized.includes('excelente') || normalized.includes('otimo')) return 5;
+  if (normalized === 'bom' || normalized.includes('bom')) return 4;
+  if (normalized.includes('regular')) return 3;
+  if (normalized.includes('ruim')) return 2;
+  if (normalized.includes('pessimo')) return 1;
+
+  return null;
+};
+
+const hasResolvedQuestionnaireResponses = (
+  responses: Record<string, any> = {},
+  questions: Question[] = [],
+  callType?: string,
+  proposito?: string | null
+) => {
+  for (const question of questions) {
+    if (!questionMatchesContext(question, callType, proposito)) continue;
+    const value = resolveStoredResponseForQuestion(responses, question);
+    if (isMeaningfulReportValue(value)) return true;
+  }
+
+  return Object.entries(responses).some(([key, value]) => {
+    if (key.endsWith('_note')) return false;
+    if (REPORT_METADATA_KEYS.has(key)) return false;
+    return isMeaningfulReportValue(value);
+  });
+};
+
+const extractUnifiedReportRating = (
+  responses: Record<string, any> = {},
+  questions: Question[] = [],
+  callType?: string,
+  proposito?: string | null
+) => {
+  const ratingQuestion = findQuestionByReportHints(
+    questions,
+    callType,
+    proposito,
+    ['nps', 'nota', 'avali', 'satisfa']
+  );
+
+  if (ratingQuestion) {
+    const resolved = resolveStoredResponseForQuestion(responses, ratingQuestion);
+    const rating = extractRatingFromValue(resolved);
+    if (rating !== null) return rating;
+  }
+
+  for (const [key, value] of Object.entries(responses)) {
+    if (key.endsWith('_note')) continue;
+    const normalizedKey = normalizeReportText(key);
+    if (!['nps', 'nota', 'avali', 'satisfa'].some(hint => normalizedKey.includes(hint))) continue;
+    const rating = extractRatingFromValue(value);
+    if (rating !== null) return rating;
+  }
+
+  return null;
+};
+
+const sanitizeOfferValue = (value?: unknown) => {
+  if (!isMeaningfulReportValue(value)) return undefined;
+  const text = String(value).trim();
+  const normalized = normalizeReportText(text);
+  if (!normalized || normalized === 'sim' || normalized === 'nao' || normalized === 'não') {
+    return undefined;
+  }
+  return text;
+};
+
+const extractUnifiedReportOffer = (
+  responses: Record<string, any> = {},
+  questions: Question[] = [],
+  callType?: string,
+  proposito?: string | null
+) => {
+  const campaignInsights = extractCampaignInsightsFromResponses(responses, questions, callType, proposito);
+  const candidates = [
+    campaignInsights.enrichedResponses.upsell_offer,
+    campaignInsights.enrichedResponses.offer_product,
+    campaignInsights.enrichedResponses.target_product,
+    campaignInsights.enrichedResponses.interest_product
+  ];
+
+  for (const candidate of candidates) {
+    const sanitized = sanitizeOfferValue(candidate);
+    if (sanitized) return sanitized;
+  }
+
+  return undefined;
+};
+
+const buildUnifiedReportFallback = async (
+  operatorId?: string,
+  statusFilter?: string
+): Promise<UnifiedReportRow[]> => {
+  let clientsQuery = supabase.from('clients').select('id, name, phone, status');
+  let callsQuery = supabase
+    .from('call_logs')
+    .select('id, client_id, operator_id, start_time, call_type, responses, proposito');
+  let tasksQuery = supabase
+    .from('tasks')
+    .select('id, client_id, assigned_to, type, status, skip_reason, updated_at, created_at');
+  let whatsappQuery = supabase
+    .from('whatsapp_tasks')
+    .select('id, client_id, assigned_to, type, status, skip_reason, created_at, completed_at, responses');
+  let salesQuery = supabase
+    .from('sales')
+    .select('id, client_id, operator_id, registered_at, status');
+
+  if (statusFilter) {
+    clientsQuery = clientsQuery.eq('status', statusFilter);
+  }
+
+  if (operatorId) {
+    callsQuery = callsQuery.eq('operator_id', operatorId);
+    tasksQuery = tasksQuery.eq('assigned_to', operatorId);
+    whatsappQuery = whatsappQuery.eq('assigned_to', operatorId);
+    salesQuery = salesQuery.eq('operator_id', operatorId);
+  }
+
+  const [
+    questions,
+    clientsResult,
+    callsResult,
+    tasksResult,
+    whatsappResult,
+    salesResult
+  ] = await Promise.all([
+    loadActiveQuestions(),
+    clientsQuery,
+    callsQuery,
+    tasksQuery,
+    whatsappQuery,
+    salesQuery
+  ]);
+
+  if (clientsResult.error) throw clientsResult.error;
+  if (callsResult.error) throw callsResult.error;
+  if (tasksResult.error) throw tasksResult.error;
+  if (whatsappResult.error) throw whatsappResult.error;
+  if (salesResult.error) throw salesResult.error;
+
+  const clients = clientsResult.data || [];
+  const relevantCalls = (callsResult.data || []).filter(call => isPostSaleRemarketingCallType(call.call_type));
+  const relevantTasks = (tasksResult.data || []).filter(task => isPostSaleRemarketingCallType(task.type));
+  const whatsappTasks = whatsappResult.data || [];
+  const validSales = (salesResult.data || []).filter(sale => sale.status !== 'CANCELADO');
+
+  const clientMap = new Map(clients.map(client => [client.id, client]));
+  const clientIds = new Set<string>();
+
+  clients.forEach(client => {
+    if (client.status !== 'LEAD') {
+      clientIds.add(client.id);
+    }
+  });
+  relevantCalls.forEach(call => {
+    if (call.client_id) clientIds.add(call.client_id);
+  });
+  relevantTasks.forEach(task => {
+    if (task.client_id) clientIds.add(task.client_id);
+  });
+  whatsappTasks.forEach(task => {
+    if (task.client_id) clientIds.add(task.client_id);
+  });
+  validSales.forEach(sale => {
+    if (sale.client_id) clientIds.add(sale.client_id);
+  });
+
+  const rows = Array.from(clientIds).map(clientId => {
+    const client = clientMap.get(clientId);
+    const clientCalls = relevantCalls.filter(call => call.client_id === clientId);
+    const clientSkippedTasks = relevantTasks.filter(task => task.client_id === clientId && task.status === 'skipped');
+    const clientWhatsapp = whatsappTasks.filter(task => task.client_id === clientId && (task.status === 'completed' || task.status === 'skipped'));
+    const clientSales = validSales.filter(sale => sale.client_id === clientId);
+
+    const events: Array<{
+      timestamp?: string;
+      outcome: string;
+      responseStatus: 'Respondeu' | 'Sem Resposta';
+      operatorId?: string;
+      channel: string;
+      rating?: number | null;
+      upsellOffer?: string;
+      skipReason?: string;
+    }> = [];
+
+    clientCalls.forEach(call => {
+      events.push({
+        timestamp: call.start_time,
+        outcome: String(mapStoredCallTypeToApp(call.call_type) || 'Ligação'),
+        responseStatus: hasResolvedQuestionnaireResponses(call.responses || {}, questions, call.call_type, call.proposito)
+          ? 'Respondeu'
+          : 'Sem Resposta',
+        operatorId: call.operator_id,
+        channel: 'Ligação',
+        rating: extractUnifiedReportRating(call.responses || {}, questions, call.call_type, call.proposito),
+        upsellOffer: extractUnifiedReportOffer(call.responses || {}, questions, call.call_type, call.proposito)
+      });
+    });
+
+    clientSkippedTasks.forEach(task => {
+      events.push({
+        timestamp: task.updated_at || task.created_at,
+        outcome: String(mapStoredCallTypeToApp(task.type) || 'Ligação'),
+        responseStatus: 'Sem Resposta',
+        operatorId: task.assigned_to,
+        channel: 'Ligação',
+        skipReason: task.skip_reason || undefined
+      });
+    });
+
+    clientWhatsapp.forEach(task => {
+      events.push({
+        timestamp: task.completed_at || task.created_at,
+        outcome: 'WhatsApp',
+        responseStatus: task.status === 'completed' && hasResolvedQuestionnaireResponses(task.responses || {}, questions, CallType.WHATSAPP)
+          ? 'Respondeu'
+          : 'Sem Resposta',
+        operatorId: task.assigned_to,
+        channel: 'WhatsApp',
+        rating: extractUnifiedReportRating(task.responses || {}, questions, CallType.WHATSAPP),
+        upsellOffer: extractUnifiedReportOffer(task.responses || {}, questions, CallType.WHATSAPP),
+        skipReason: task.status === 'skipped' ? task.skip_reason || undefined : undefined
+      });
+    });
+
+    events.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+
+    const lastEvent = events[0];
+    const lastRatedEvent = events.find(event => event.rating !== null && event.rating !== undefined);
+    const lastOfferEvent = events.find(event => event.upsellOffer);
+    const hasSale = clientSales.length > 0;
+
+    return {
+      clientId,
+      clientName: client?.name || 'Cliente Desconhecido',
+      clientPhone: client?.phone || '',
+      clientStatus: client?.status || 'CLIENT',
+      attemptsCount: events.length,
+      lastContactAt: lastEvent?.timestamp,
+      lastOutcome: lastEvent?.outcome,
+      lastOperatorId: lastEvent?.operatorId,
+      lastChannel: lastEvent?.channel,
+      lastContactGenre: lastEvent?.channel,
+      lastRating: lastRatedEvent?.rating ?? undefined,
+      upsellOffer: lastOfferEvent?.upsellOffer,
+      upsellStatus: lastOfferEvent?.upsellOffer ? (hasSale ? 'DONE' : 'OPEN') : undefined,
+      responseStatus: events.length === 0 ? 'Não Contatado' : (lastEvent?.responseStatus || 'Sem Resposta'),
+      conversionStatus: hasSale ? 'Gerou Venda' : 'Sem Venda',
+      lastSkipReason: lastEvent?.responseStatus === 'Sem Resposta' ? lastEvent?.skipReason : undefined
+    } as UnifiedReportRow;
+  });
+
+  return rows.sort((a, b) => {
+    const dateDiff = new Date(b.lastContactAt || 0).getTime() - new Date(a.lastContactAt || 0).getTime();
+    if (dateDiff !== 0) return dateDiff;
+    return a.clientName.localeCompare(b.clientName);
+  });
 };
 
 const mapQuestionRecord = (q: any): Question => ({
@@ -1342,7 +1712,7 @@ export const dataService = {
       task_id: call.taskId,
       operator_id: call.operatorId,
       client_id: call.clientId,
-      call_type: call.type,
+      call_type: mapCallLogTypeToDb(call.type),
       responses: enrichedCallResponses,
       duration: call.duration,
       report_time: call.reportTime,
@@ -1393,7 +1763,7 @@ export const dataService = {
     if (updates.startTime) payload.start_time = updates.startTime;
     if (updates.endTime) payload.end_time = updates.endTime;
     if (updates.responses) payload.responses = updates.responses;
-    if (updates.type) payload.call_type = updates.type;
+    if (updates.type) payload.call_type = mapCallLogTypeToDb(updates.type);
 
     const { error } = await supabase.from('call_logs').update(payload).eq('id', id);
     if (error) throw error;
@@ -2743,26 +3113,32 @@ export const dataService = {
     if (operatorId) rpcArgs.p_operator_id = operatorId;
     if (statusFilter) rpcArgs.p_status_filter = statusFilter;
 
-    const { data, error } = await supabase.rpc('get_unified_remarketing_report', rpcArgs);
-    if (error) throw error;
+    try {
+      const { data, error } = await supabase.rpc('get_unified_remarketing_report', rpcArgs);
+      if (error) throw error;
 
-    return (data || []).map((row: any) => ({
-      clientId: row.client_id,
-      clientName: row.client_name,
-      clientPhone: row.client_phone,
-      clientStatus: row.client_status,
-      attemptsCount: Number(row.attempts_count),
-      lastContactAt: row.last_contact_at,
-      lastOutcome: row.last_outcome,
-      lastOperatorId: row.last_operator_id,
-      lastChannel: row.last_channel,
-      lastContactGenre: row.last_contact_genre,
-      lastRating: row.last_rating,
-      upsellOffer: row.upsell_offer,
-      upsellStatus: row.upsell_status,
-      responseStatus: row.response_status,
-      conversionStatus: row.conversion_status
-    }));
+      return (data || []).map((row: any) => ({
+        clientId: row.client_id,
+        clientName: row.client_name,
+        clientPhone: row.client_phone,
+        clientStatus: row.client_status,
+        attemptsCount: Number(row.attempts_count),
+        lastContactAt: row.last_contact_at,
+        lastOutcome: row.last_outcome,
+        lastOperatorId: row.last_operator_id,
+        lastChannel: row.last_channel,
+        lastContactGenre: row.last_contact_genre,
+        lastRating: row.last_rating,
+        upsellOffer: row.upsell_offer,
+        upsellStatus: row.upsell_status,
+        responseStatus: row.response_status,
+        conversionStatus: row.conversion_status,
+        lastSkipReason: row.last_skip_reason
+      }));
+    } catch (error) {
+      console.warn('Unified remarketing RPC unavailable, using fallback aggregation.', error);
+      return buildUnifiedReportFallback(operatorId, statusFilter);
+    }
   },
 
   bulkCreateTasks: async (tasks: any[]): Promise<void> => {
@@ -2786,7 +3162,7 @@ export const dataService = {
     const payload = prospectIds.map(id => ({
       operator_id: operatorId,
       client_id: id,
-      call_type: CallType.POS_VENDA,
+      call_type: mapCallLogTypeToDb(CallType.POS_VENDA),
       responses: { upsell_offer: offer, note: notes, is_bulk_upsell: true },
       duration: 0,
       report_time: 0,

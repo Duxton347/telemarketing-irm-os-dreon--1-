@@ -8,6 +8,7 @@ import { dataService } from '../services/dataService';
 import { SATISFACTION_EMOJIS } from '../constants';
 import { Client, UserRole, ProtocolStatus, ClientTag, ClientHistoryData, ClientPortfolioEntry } from '../types';
 import { HelpTooltip } from '../components/HelpTooltip';
+import { PortfolioCategoryBrowser } from '../components/PortfolioCategoryBrowser';
 import { HELP_TEXTS } from '../utils/helpTexts';
 import { EmailService } from '../services/emailService';
 import { Mail, ShieldCheck, Tag as TagIcon, Plus, Sparkles } from 'lucide-react';
@@ -172,7 +173,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
     setExpandedCategory(current =>
       current && selectedCategoryGroups.some(group => group.category === current)
         ? current
-        : selectedCategoryGroups[0].category
+        : null
     );
   }, [selectedCategoryGroups]);
 
@@ -517,69 +518,15 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                       </div>
                     </div>
 
-                    <div className="space-y-4">
-                      <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2">
-                        <TagIcon size={14} className="text-slate-500" /> Produtos Possuidos pelo Cliente
-                      </h5>
-                      <div className="flex flex-wrap gap-3">
-                        {selectedCategoryGroups.length > 0 ? selectedCategoryGroups.map(group => {
-                          const isExpanded = expandedCategory === group.category;
-                          const toneClass =
-                            group.priority === 'high'
-                              ? 'bg-rose-50 text-rose-700 border-rose-200'
-                              : group.priority === 'medium'
-                                ? 'bg-amber-50 text-amber-700 border-amber-200'
-                                : 'bg-slate-50 text-slate-600 border-slate-200';
-
-                          return (
-                            <button
-                              key={group.category}
-                              type="button"
-                              onClick={() => setExpandedCategory(group.category)}
-                              className={`px-4 py-2.5 rounded-2xl border text-xs font-black uppercase tracking-wide transition-all shadow-sm ${
-                                isExpanded ? 'bg-slate-900 text-white border-slate-900' : toneClass
-                              }`}
-                            >
-                              {group.category}
-                            </button>
-                          );
-                        }) : (
-                          <span className="text-xs font-bold text-slate-300 italic">Nenhuma categoria vinculada</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-4">
-                    <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2">
-                      <TagIcon size={14} className="text-indigo-500" /> Produtos da Categoria Selecionada
-                    </h5>
-                    {expandedCategory && selectedCategoryGroups.find(group => group.category === expandedCategory) ? (
-                      <div className="rounded-[28px] border border-slate-200 bg-slate-50 p-5">
-                        <div className="flex items-center justify-between gap-4 mb-4">
-                          <div>
-                            <p className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-400">Categoria Selecionada</p>
-                            <h6 className="text-lg font-black text-slate-800 mt-1">{expandedCategory}</h6>
-                          </div>
-                          <span className="px-3 py-1.5 rounded-xl bg-white text-slate-600 border border-slate-200 text-[10px] font-black uppercase shadow-sm">
-                            {selectedCategoryGroups.find(group => group.category === expandedCategory)?.total_quantity} item(ns)
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                          {selectedCategoryGroups.find(group => group.category === expandedCategory)!.equipments.map(equipment => (
-                            <div key={equipment.name} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                              <p className="text-sm font-black text-slate-800 leading-tight">{equipment.name}</p>
-                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-3">Quantidade</p>
-                              <p className="text-2xl font-black text-slate-900 mt-1">{equipment.quantity}</p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="rounded-[28px] border border-dashed border-slate-200 bg-slate-50 px-5 py-8 text-center text-sm font-bold text-slate-400">
-                        Selecione uma categoria para ver os produtos relacionados.
-                      </div>
-                    )}
+                    <PortfolioCategoryBrowser
+                      title="Categorias e Equipamentos do Cliente"
+                      description="Os produtos ficam ocultos e so aparecem quando voce abrir a categoria desejada."
+                      groups={selectedCategoryGroups}
+                      expandedCategory={expandedCategory}
+                      onToggleCategory={(category) => setExpandedCategory(current => current === category ? null : category)}
+                      emptyCategoryLabel="Nenhuma categoria vinculada"
+                      emptySelectionLabel="Clique em uma categoria para ver os produtos relacionados."
+                    />
                   </div>
 
                   <div className="hidden">

@@ -10,6 +10,7 @@ import { Task, Client, Question, CallType, OperatorEventType, ProtocolStatus, Us
 import { SKIP_REASONS, PROTOCOL_SLA } from '../constants';
 import { TagApprovalCard } from '../components/TagApprovalCard';
 import { HelpTooltip } from '../components/HelpTooltip';
+import { PortfolioCategoryBrowser } from '../components/PortfolioCategoryBrowser';
 import { HELP_TEXTS } from '../utils/helpTexts';
 import { enrichQuestionnaireResponses } from '../utils/questionnaireInsights';
 import {
@@ -132,7 +133,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setExpandedPortfolioCategory(current =>
       current && operatorPortfolioCategoryGroups.some(group => group.category === current)
         ? current
-        : operatorPortfolioCategoryGroups[0].category
+        : null
     );
   }, [operatorPortfolioCategoryGroups, client?.id]);
 
@@ -842,59 +843,16 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   )}
                 </div>
 
-                <div className="flex flex-wrap gap-3">
-                  {operatorPortfolioCategoryGroups.length > 0 ? operatorPortfolioCategoryGroups.map(group => {
-                    const isExpanded = expandedPortfolioCategory === group.category;
-                    const toneClass =
-                      group.priority === 'high'
-                        ? 'bg-rose-950/45 text-rose-200 border-rose-800/70'
-                        : group.priority === 'medium'
-                          ? 'bg-amber-950/35 text-amber-200 border-amber-800/60'
-                          : 'bg-slate-800/70 text-slate-200 border-slate-600';
-
-                    return (
-                      <button
-                        key={group.category}
-                        type="button"
-                        onClick={() => setExpandedPortfolioCategory(group.category)}
-                        className={`px-4 py-2.5 rounded-2xl border text-[10px] font-black uppercase tracking-wide transition-all ${
-                          isExpanded ? 'bg-white text-slate-900 border-white shadow-sm' : toneClass
-                        }`}
-                      >
-                        {group.category}
-                      </button>
-                    );
-                  }) : (
-                    <span className="text-xs text-slate-600 italic">Nenhuma categoria prioritaria encontrada</span>
-                  )}
-                </div>
-
-                {expandedPortfolioCategory && operatorPortfolioCategoryGroups.find(group => group.category === expandedPortfolioCategory) ? (
-                  <div className="rounded-[24px] border border-slate-700 bg-slate-800/55 p-4 space-y-4">
-                    <div className="flex items-center justify-between gap-4">
-                      <div>
-                        <p className="text-[8px] font-black uppercase tracking-[0.22em] text-slate-500">Categoria Selecionada</p>
-                        <p className="text-sm font-black text-white mt-1">{expandedPortfolioCategory}</p>
-                      </div>
-                      <span className="px-3 py-1.5 rounded-xl bg-slate-900 text-slate-200 border border-slate-700 text-[10px] font-black uppercase">
-                        {operatorPortfolioCategoryGroups.find(group => group.category === expandedPortfolioCategory)?.total_quantity} item(ns)
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      {operatorPortfolioCategoryGroups.find(group => group.category === expandedPortfolioCategory)!.equipments.map(equipment => (
-                        <div key={equipment.name} className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
-                          <p className="text-sm font-black text-white leading-tight">{equipment.name}</p>
-                          <p className="text-[8px] font-black uppercase tracking-widest text-slate-500 mt-3">Quantidade</p>
-                          <p className="text-xl font-black text-slate-100 mt-1">{equipment.quantity}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="rounded-[24px] border border-dashed border-slate-700 bg-slate-800/30 px-4 py-6 text-center text-xs font-bold text-slate-500">
-                    Selecione uma categoria para ver os produtos relacionados.
-                  </div>
-                )}
+                <PortfolioCategoryBrowser
+                  title="Categorias e Equipamentos Prioritarios"
+                  description="Os produtos ficam ocultos ate voce abrir a categoria desejada."
+                  groups={operatorPortfolioCategoryGroups}
+                  expandedCategory={expandedPortfolioCategory}
+                  onToggleCategory={(category) => setExpandedPortfolioCategory(current => current === category ? null : category)}
+                  emptyCategoryLabel="Nenhuma categoria prioritaria encontrada"
+                  emptySelectionLabel="Clique em uma categoria para ver os produtos relacionados."
+                  theme="dark"
+                />
               </div>
             </div>
 
