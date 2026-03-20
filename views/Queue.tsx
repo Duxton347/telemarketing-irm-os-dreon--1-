@@ -12,7 +12,12 @@ import { TagApprovalCard } from '../components/TagApprovalCard';
 import { HelpTooltip } from '../components/HelpTooltip';
 import { HELP_TEXTS } from '../utils/helpTexts';
 import { enrichQuestionnaireResponses } from '../utils/questionnaireInsights';
-import { collectPortfolioMetadata, getClientPortfolioEntries, getOperatorPriorityPortfolioEntries } from '../utils/clientPortfolio';
+import {
+  buildPortfolioCategoryGroups,
+  collectPortfolioMetadata,
+  getClientPortfolioEntries,
+  getOperatorPriorityPortfolioEntries
+} from '../utils/clientPortfolio';
 
 interface QueueProps {
   user: any;
@@ -62,6 +67,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   const [isCopied, setIsCopied] = React.useState(false);
   const [isCopiedSecondary, setIsCopiedSecondary] = React.useState(false);
   const [hasRecentCall, setHasRecentCall] = React.useState(false);
+  const [expandedPortfolioCategory, setExpandedPortfolioCategory] = React.useState<string | null>(null);
 
   const [clientHistory, setClientHistory] = React.useState<ClientHistoryData>(EMPTY_CLIENT_HISTORY);
   const [historyLoading, setHistoryLoading] = React.useState(false);
@@ -77,6 +83,10 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   );
   const clientPortfolioMetadata = React.useMemo(
     () => collectPortfolioMetadata(operatorPriorityPortfolioEntries),
+    [operatorPriorityPortfolioEntries]
+  );
+  const operatorPortfolioCategoryGroups = React.useMemo(
+    () => buildPortfolioCategoryGroups(operatorPriorityPortfolioEntries),
     [operatorPriorityPortfolioEntries]
   );
 
@@ -113,6 +123,19 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     }
   }, [currentTask]);
 
+  React.useEffect(() => {
+    if (operatorPortfolioCategoryGroups.length === 0) {
+      setExpandedPortfolioCategory(null);
+      return;
+    }
+
+    setExpandedPortfolioCategory(current =>
+      current && operatorPortfolioCategoryGroups.some(group => group.category === current)
+        ? current
+        : operatorPortfolioCategoryGroups[0].category
+    );
+  }, [operatorPortfolioCategoryGroups, client?.id]);
+
   const config = dataService.getProtocolConfig();
 
   const resetState = React.useCallback(() => {
@@ -125,6 +148,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setCallSummary('');
     setStartTime(null);
     setHasRecentCall(false);
+    setExpandedPortfolioCategory(null);
     setNeedsProtocol(false);
     setProtoData({ title: '', departmentId: 'atendimento', priority: 'Média' });
     setScheduleData({ isScheduling: false, date: '', time: '', reason: '', type: CallType.POS_VENDA });
@@ -811,36 +835,65 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
               <div className="space-y-4">
                 <div className="flex flex-wrap gap-2">
                   {clientPortfolioMetadata.customer_profiles.map(profile => (
-                    <span key={profile} className="px-3 py-1 bg-amber-900/30 text-[10px] font-black uppercase text-amber-300 rounded-md border border-amber-800/70">{profile}</span>
+                    <span key={profile} className="px-3 py-1.5 bg-amber-900/30 text-[10px] font-black uppercase text-amber-300 rounded-xl border border-amber-800/70">{profile}</span>
                   ))}
-                  {clientPortfolioMetadata.product_categories.map(category => (
-                    <span key={category} className="px-3 py-1 bg-cyan-900/30 text-[10px] font-black uppercase text-cyan-300 rounded-md border border-cyan-800/70">{category}</span>
-                  ))}
-                  {clientPortfolioMetadata.equipment_models.map(equipment => (
-                    <span key={equipment} className="px-3 py-1 bg-slate-800 text-[10px] font-black uppercase text-slate-300 rounded-md border border-slate-700">{equipment}</span>
-                  ))}
-                  {clientPortfolioMetadata.customer_profiles.length === 0 && clientPortfolioMetadata.product_categories.length === 0 && clientPortfolioMetadata.equipment_models.length === 0 && (
-                    <span className="text-xs text-slate-600 italic">Nenhum equipamento cadastrado</span>
+                  {clientPortfolioMetadata.customer_profiles.length === 0 && (
+                    <span className="text-xs text-slate-600 italic">Nenhum perfil priorizado encontrado</span>
                   )}
                 </div>
 
-                {operatorPriorityPortfolioEntries.length > 0 && (
-                  <div className="space-y-2">
-                    {operatorPriorityPortfolioEntries.map((entry, index) => (
-                      <div key={entry.id || `${entry.profile}-${entry.product_category}-${entry.equipment}-${index}`} className="rounded-xl border border-slate-700 bg-slate-800/40 p-3 space-y-1">
-                        {entry.profile && <p className="text-[8px] font-black uppercase tracking-widest text-amber-300">Perfil: <span className="text-slate-200">{entry.profile}</span></p>}
-                        {entry.product_category && <p className="text-[8px] font-black uppercase tracking-widest text-cyan-300">Categoria: <span className="text-slate-200">{entry.product_category}</span></p>}
-                        {entry.equipment && <p className="text-[8px] font-black uppercase tracking-widest text-blue-300">Equipamento: <span className="text-slate-200">{entry.equipment}</span></p>}
-                        <p className="text-[8px] font-black uppercase tracking-widest text-emerald-300">Quantidade: <span className="text-slate-200">{entry.quantity || 1}</span></p>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <div className="flex flex-wrap gap-3">
+                  {operatorPortfolioCategoryGroups.length > 0 ? operatorPortfolioCategoryGroups.map(group => {
+                    const isExpanded = expandedPortfolioCategory === group.category;
+                    const toneClass =
+                      group.priority === 'high'
+                        ? 'bg-rose-950/45 text-rose-200 border-rose-800/70'
+                        : group.priority === 'medium'
+                          ? 'bg-amber-950/35 text-amber-200 border-amber-800/60'
+                          : 'bg-slate-800/70 text-slate-200 border-slate-600';
 
-                {clientPortfolioEntries.length > operatorPriorityPortfolioEntries.length && (
-                  <p className="text-[10px] text-slate-500 italic">
-                    Alguns itens tecnicos de baixa recorrencia foram ocultados nesta tela para destacar produtos de maior peso comercial.
-                  </p>
+                    return (
+                      <button
+                        key={group.category}
+                        type="button"
+                        onClick={() => setExpandedPortfolioCategory(group.category)}
+                        className={`px-4 py-2.5 rounded-2xl border text-[10px] font-black uppercase tracking-wide transition-all ${
+                          isExpanded ? 'bg-white text-slate-900 border-white shadow-sm' : toneClass
+                        }`}
+                      >
+                        {group.category}
+                      </button>
+                    );
+                  }) : (
+                    <span className="text-xs text-slate-600 italic">Nenhuma categoria prioritaria encontrada</span>
+                  )}
+                </div>
+
+                {expandedPortfolioCategory && operatorPortfolioCategoryGroups.find(group => group.category === expandedPortfolioCategory) ? (
+                  <div className="rounded-[24px] border border-slate-700 bg-slate-800/55 p-4 space-y-4">
+                    <div className="flex items-center justify-between gap-4">
+                      <div>
+                        <p className="text-[8px] font-black uppercase tracking-[0.22em] text-slate-500">Categoria Selecionada</p>
+                        <p className="text-sm font-black text-white mt-1">{expandedPortfolioCategory}</p>
+                      </div>
+                      <span className="px-3 py-1.5 rounded-xl bg-slate-900 text-slate-200 border border-slate-700 text-[10px] font-black uppercase">
+                        {operatorPortfolioCategoryGroups.find(group => group.category === expandedPortfolioCategory)?.total_quantity} item(ns)
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                      {operatorPortfolioCategoryGroups.find(group => group.category === expandedPortfolioCategory)!.equipments.map(equipment => (
+                        <div key={equipment.name} className="rounded-2xl border border-slate-700 bg-slate-900/70 p-4">
+                          <p className="text-sm font-black text-white leading-tight">{equipment.name}</p>
+                          <p className="text-[8px] font-black uppercase tracking-widest text-slate-500 mt-3">Quantidade</p>
+                          <p className="text-xl font-black text-slate-100 mt-1">{equipment.quantity}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-[24px] border border-dashed border-slate-700 bg-slate-800/30 px-4 py-6 text-center text-xs font-bold text-slate-500">
+                    Selecione uma categoria para ver os produtos relacionados.
+                  </div>
                 )}
               </div>
             </div>

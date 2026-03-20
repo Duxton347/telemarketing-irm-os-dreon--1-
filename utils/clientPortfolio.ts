@@ -1,5 +1,17 @@
 import { Client, ClientPortfolioEntry } from '../types';
 
+export interface PortfolioCategoryGroup {
+  category: string;
+  priority: 'high' | 'medium' | 'low' | 'other';
+  priority_weight: number;
+  total_quantity: number;
+  profiles: string[];
+  equipments: Array<{
+    name: string;
+    quantity: number;
+  }>;
+}
+
 export const normalizeComparableText = (value?: string) =>
   (value || '')
     .toString()
@@ -165,6 +177,28 @@ const HIGH_SIGNAL_PORTFOLIO_KEYWORDS = [
   'ionizador'
 ];
 
+const CATEGORY_PRIORITY_RULES: Array<{
+  priority: 'high' | 'medium' | 'low';
+  weight: number;
+  keywords: string[];
+}> = [
+  {
+    priority: 'high',
+    weight: 300,
+    keywords: ['boiler', 'fotovoltaico', 'trocador de calor', 'placa solar', 'aquecedor a gas', 'aquecedor de gas']
+  },
+  {
+    priority: 'medium',
+    weight: 200,
+    keywords: ['hidro', 'piscina', 'filtro', 'pressurizacao', 'pressurização', 'gerador de cloro', 'cloro', 'controlador']
+  },
+  {
+    priority: 'low',
+    weight: 100,
+    keywords: ['conexao', 'conexão', 'hidraul', 'metalic', 'quimic', 'eletric', 'tubo', 'curva', 'joelho', 'luva', 'registro', 'adaptador', 'adesivo', 'sal', 'abracadeira', 'abraçadeira', 'cabo']
+  }
+];
+
 const getPortfolioSignalText = (entry: Partial<ClientPortfolioEntry>) =>
   normalizeComparableText([entry.profile, entry.product_category, entry.equipment].filter(Boolean).join(' '));
 
@@ -198,6 +232,87 @@ export const getOperatorPriorityPortfolioEntries = (entries: ClientPortfolioEntr
       a.product_category.localeCompare(b.product_category, 'pt-BR') ||
       a.equipment.localeCompare(b.equipment, 'pt-BR');
   });
+};
+
+export const getPortfolioCategoryPriority = (value: string) => {
+  const comparable = normalizeComparableText(value);
+
+  for (const rule of CATEGORY_PRIORITY_RULES) {
+    if (rule.keywords.some(keyword => comparable.includes(normalizeComparableText(keyword)))) {
+      return {
+        priority: rule.priority,
+        weight: rule.weight
+      };
+    }
+  }
+
+  return {
+    priority: 'other' as const,
+    weight: 0
+  };
+};
+
+export const buildPortfolioCategoryGroups = (
+  entries: ClientPortfolioEntry[],
+  options?: {
+    hideLowPriorityWhenHigherExists?: boolean;
+  }
+): PortfolioCategoryGroup[] => {
+  const grouped = new Map<string, PortfolioCategoryGroup>();
+  const normalizedEntries = mergePortfolioEntries(entries);
+
+  for (const entry of normalizedEntries) {
+    const category = normalizePortfolioValue(entry.product_category) || 'Sem Categoria';
+    const categoryKey = normalizeComparableText(category);
+    const categoryPriority = getPortfolioCategoryPriority(category);
+    const group = grouped.get(categoryKey) || {
+      category,
+      priority: categoryPriority.priority,
+      priority_weight: categoryPriority.weight,
+      total_quantity: 0,
+      profiles: [],
+      equipments: []
+    };
+
+    group.total_quantity += normalizePortfolioQuantity(entry.quantity);
+
+    if (entry.profile && !group.profiles.includes(entry.profile)) {
+      group.profiles.push(entry.profile);
+    }
+
+    if (entry.equipment) {
+      const existingEquipment = group.equipments.find(item => normalizeComparableText(item.name) === normalizeComparableText(entry.equipment));
+      if (existingEquipment) {
+        existingEquipment.quantity += normalizePortfolioQuantity(entry.quantity);
+      } else {
+        group.equipments.push({
+          name: entry.equipment,
+          quantity: normalizePortfolioQuantity(entry.quantity)
+        });
+      }
+    }
+
+    grouped.set(categoryKey, group);
+  }
+
+  let nextGroups = Array.from(grouped.values()).map(group => ({
+    ...group,
+    equipments: group.equipments.sort((a, b) => b.quantity - a.quantity || a.name.localeCompare(b.name, 'pt-BR')),
+    profiles: [...group.profiles].sort((a, b) => a.localeCompare(b, 'pt-BR'))
+  }));
+
+  const hideLowPriorityWhenHigherExists = options?.hideLowPriorityWhenHigherExists ?? true;
+  const hasHigherPriorityGroup = nextGroups.some(group => group.priority === 'high' || group.priority === 'medium');
+
+  if (hideLowPriorityWhenHigherExists && hasHigherPriorityGroup) {
+    nextGroups = nextGroups.filter(group => group.priority !== 'low');
+  }
+
+  return nextGroups.sort((a, b) =>
+    b.priority_weight - a.priority_weight ||
+    b.total_quantity - a.total_quantity ||
+    a.category.localeCompare(b.category, 'pt-BR')
+  );
 };
 
 export const getClientPortfolioEntries = (client?: Partial<Client> | null) => {

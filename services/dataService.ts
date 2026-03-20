@@ -39,11 +39,67 @@ const mapTaskTypeToDb = (type?: string): string | undefined => {
   return type === CallType.REATIVACAO ? 'POS_VENDA' : type;
 };
 
+const normalizeCallTypeToken = (value?: string | null) =>
+  String(value || '')
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+const mapStoredCallTypeToApp = (value?: string | null): CallType => {
+  switch (normalizeCallTypeToken(value)) {
+    case 'POS_VENDA':
+      return CallType.POS_VENDA;
+    case 'PROSPECCAO':
+      return CallType.PROSPECCAO;
+    case 'VENDA':
+      return CallType.VENDA;
+    case 'CONFIRMACAO_PROTOCOLO':
+      return CallType.CONFIRMACAO_PROTOCOLO;
+    case 'REATIVACAO':
+      return CallType.REATIVACAO;
+    case 'WHATSAPP':
+      return CallType.WHATSAPP;
+    default:
+      return (value as CallType) || CallType.POS_VENDA;
+  }
+};
+
+const expandCallTypeQueryValues = (callType?: CallType | 'ALL' | string) => {
+  if (!callType) return ['ALL'];
+
+  const raw = String(callType).trim();
+  const normalized = normalizeCallTypeToken(raw);
+  const values = new Set<string>([raw]);
+
+  if (normalized) values.add(normalized);
+  if (normalized === 'ALL') values.add('ALL');
+
+  switch (normalized) {
+    case 'POS_VENDA':
+      values.add('PÓS-VENDA');
+      values.add('PÓS_VENDA');
+      break;
+    case 'PROSPECCAO':
+      values.add('PROSPECÇÃO');
+      break;
+    case 'CONFIRMACAO_PROTOCOLO':
+      values.add('CONFIRMAÇÃO PROTOCOLO');
+      break;
+    case 'REATIVACAO':
+      values.add('REATIVAÇÃO');
+      break;
+  }
+
+  return Array.from(values);
+};
+
 const mapQuestionRecord = (q: any): Question => ({
   id: q.id,
   text: q.text,
   options: q.options || [],
-  type: q.type as any,
+  type: q.type === 'ALL' ? 'ALL' : mapStoredCallTypeToApp(q.type),
   order: q.order_index,
   stageId: q.stage_id,
   proposito: q.proposito,
@@ -536,7 +592,7 @@ export const dataService = {
       assignedOperatorId: s.assigned_operator_id,
       approvedByAdminId: s.approved_by_admin_id,
       scheduledFor: s.scheduled_for,
-      callType: s.call_type as CallType,
+      callType: mapStoredCallTypeToApp(s.call_type),
       status: s.status as ScheduleStatus,
       scheduleReason: s.schedule_reason,
       approvalReason: s.approval_reason,
@@ -774,7 +830,7 @@ export const dataService = {
         .order('order_index', { ascending: true });
         
       if (callType) {
-        query = query.in('type', [callType, 'ALL']);
+        query = query.in('type', expandCallTypeQueryValues(callType));
       }
       
       if (proposito) {
@@ -827,7 +883,7 @@ export const dataService = {
         // Ensure that tasks dispatched with a specific call type (e.g., from Campaign Planner) retain it,
         // unless it's explicitly a reativation logic condition.
         // We will prefer the explicitly assigned task type, falling back to logic based on client status.
-        const taskType = t.type ? (t.type as CallType) : (clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : CallType.POS_VENDA);
+        const taskType = t.type ? mapStoredCallTypeToApp(t.type) : (clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : CallType.POS_VENDA);
 
         return {
           id: t.id,
@@ -873,7 +929,7 @@ export const dataService = {
         clientName: clientObj?.name || s.clients?.name || 'Cliente Agendado',
         clientPhone: clientObj?.phone || s.clients?.phone,
         clients: clientObj || null,
-        type: clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : (s.call_type as CallType),
+        type: clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : mapStoredCallTypeToApp(s.call_type),
         deadline: s.scheduled_for, // Use scheduled time as deadline/display time
         assignedTo: s.assigned_operator_id,
         status: 'pending', // Active in queue
@@ -1227,7 +1283,7 @@ export const dataService = {
       duration: c.duration,
       reportTime: c.report_time,
       responses: c.responses || {},
-      type: (c.call_type as CallType) || CallType.POS_VENDA,
+      type: mapStoredCallTypeToApp(c.call_type),
       protocolId: c.protocol_id,
       clientName: (c as any).clients?.name || 'Cliente Desconhecido',
       clientPhone: (c as any).clients?.phone || '',
@@ -1558,7 +1614,7 @@ export const dataService = {
           duration: c.duration,
           reportTime: c.report_time,
           responses: c.responses || {},
-          type: (c.call_type as CallType) || CallType.POS_VENDA,
+          type: mapStoredCallTypeToApp(c.call_type),
           protocolId: c.protocol_id,
           proposito: c.proposito || campaignContextMap.get(c.campanha_id)?.proposito,
           campanha_id: c.campanha_id,
@@ -2758,7 +2814,7 @@ export const dataService = {
         duration: c.duration,
         reportTime: c.report_time,
         responses: c.responses || {},
-        type: (c.call_type as CallType) || CallType.POS_VENDA,
+        type: mapStoredCallTypeToApp(c.call_type),
         protocolId: c.protocol_id
       })),
       tasks: (tasksRes.data || []).map((t: any) => ({

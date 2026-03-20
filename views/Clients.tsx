@@ -11,7 +11,7 @@ import { HelpTooltip } from '../components/HelpTooltip';
 import { HELP_TEXTS } from '../utils/helpTexts';
 import { EmailService } from '../services/emailService';
 import { Mail, ShieldCheck, Tag as TagIcon, Plus, Sparkles } from 'lucide-react';
-import { collectPortfolioMetadata, getClientPortfolioEntries, mergePortfolioEntries } from '../utils/clientPortfolio';
+import { buildPortfolioCategoryGroups, collectPortfolioMetadata, getClientPortfolioEntries, mergePortfolioEntries } from '../utils/clientPortfolio';
 
 const EMPTY_CLIENT_HISTORY: ClientHistoryData = {
   calls: [],
@@ -88,54 +88,10 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
     () => collectPortfolioMetadata(selectedPortfolioEntries),
     [selectedPortfolioEntries]
   );
-  const selectedCategoryGroups = React.useMemo(() => {
-    const grouped = new Map<string, {
-      category: string;
-      totalQuantity: number;
-      profiles: string[];
-      equipments: Array<{
-        name: string;
-        quantity: number;
-      }>;
-    }>();
-
-    for (const entry of selectedPortfolioEntries) {
-      const category = (entry.product_category || 'Sem Categoria').trim();
-      const group = grouped.get(category) || {
-        category,
-        totalQuantity: 0,
-        profiles: [],
-        equipments: []
-      };
-
-      group.totalQuantity += entry.quantity || 1;
-
-      if (entry.profile && !group.profiles.includes(entry.profile)) {
-        group.profiles.push(entry.profile);
-      }
-
-      if (entry.equipment) {
-        const existingEquipment = group.equipments.find(item => item.name === entry.equipment);
-        if (existingEquipment) {
-          existingEquipment.quantity += entry.quantity || 1;
-        } else {
-          group.equipments.push({
-            name: entry.equipment,
-            quantity: entry.quantity || 1
-          });
-        }
-      }
-
-      grouped.set(category, group);
-    }
-
-    return Array.from(grouped.values())
-      .map(group => ({
-        ...group,
-        equipments: group.equipments.sort((a, b) => b.quantity - a.quantity || a.name.localeCompare(b.name, 'pt-BR'))
-      }))
-      .sort((a, b) => b.totalQuantity - a.totalQuantity || a.category.localeCompare(b.category, 'pt-BR'));
-  }, [selectedPortfolioEntries]);
+  const selectedCategoryGroups = React.useMemo(
+    () => buildPortfolioCategoryGroups(selectedPortfolioEntries),
+    [selectedPortfolioEntries]
+  );
 
   const addPortfolioEntry = () => {
     setClientData(prev => ({
@@ -206,6 +162,19 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
   React.useEffect(() => {
     setExpandedCategory(null);
   }, [selectedClient?.id]);
+
+  React.useEffect(() => {
+    if (selectedCategoryGroups.length === 0) {
+      setExpandedCategory(null);
+      return;
+    }
+
+    setExpandedCategory(current =>
+      current && selectedCategoryGroups.some(group => group.category === current)
+        ? current
+        : selectedCategoryGroups[0].category
+    );
+  }, [selectedCategoryGroups]);
 
   const handleSaveEmail = async () => {
     if (!selectedClient || !newEmail) return;
@@ -537,7 +506,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="space-y-4">
                       <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2">
-                        <Users size={14} className="text-amber-500" /> Perfis Vinculados
+                        <Users size={14} className="text-amber-500" /> Perfil do Cliente
                       </h5>
                       <div className="flex flex-wrap gap-2">
                         {selectedPortfolioMetadata.customer_profiles.length > 0 ? selectedPortfolioMetadata.customer_profiles.map((profile, index) => (
@@ -550,12 +519,31 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
 
                     <div className="space-y-4">
                       <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2">
-                        <TagIcon size={14} className="text-cyan-500" /> Categorias do Produto
+                        <TagIcon size={14} className="text-slate-500" /> Produtos Possuidos pelo Cliente
                       </h5>
-                      <div className="flex flex-wrap gap-2">
-                        {selectedPortfolioMetadata.product_categories.length > 0 ? selectedPortfolioMetadata.product_categories.map((category, index) => (
-                          <span key={`${category}-${index}`} className="px-4 py-2 bg-cyan-50 text-cyan-700 rounded-xl text-[10px] font-black uppercase border border-cyan-100">{category}</span>
-                        )) : (
+                      <div className="flex flex-wrap gap-3">
+                        {selectedCategoryGroups.length > 0 ? selectedCategoryGroups.map(group => {
+                          const isExpanded = expandedCategory === group.category;
+                          const toneClass =
+                            group.priority === 'high'
+                              ? 'bg-rose-50 text-rose-700 border-rose-200'
+                              : group.priority === 'medium'
+                                ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                : 'bg-slate-50 text-slate-600 border-slate-200';
+
+                          return (
+                            <button
+                              key={group.category}
+                              type="button"
+                              onClick={() => setExpandedCategory(group.category)}
+                              className={`px-4 py-2.5 rounded-2xl border text-xs font-black uppercase tracking-wide transition-all shadow-sm ${
+                                isExpanded ? 'bg-slate-900 text-white border-slate-900' : toneClass
+                              }`}
+                            >
+                              {group.category}
+                            </button>
+                          );
+                        }) : (
                           <span className="text-xs font-bold text-slate-300 italic">Nenhuma categoria vinculada</span>
                         )}
                       </div>
@@ -563,6 +551,38 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                   </div>
 
                   <div className="space-y-4">
+                    <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2">
+                      <TagIcon size={14} className="text-indigo-500" /> Produtos da Categoria Selecionada
+                    </h5>
+                    {expandedCategory && selectedCategoryGroups.find(group => group.category === expandedCategory) ? (
+                      <div className="rounded-[28px] border border-slate-200 bg-slate-50 p-5">
+                        <div className="flex items-center justify-between gap-4 mb-4">
+                          <div>
+                            <p className="text-[10px] font-black uppercase tracking-[0.24em] text-slate-400">Categoria Selecionada</p>
+                            <h6 className="text-lg font-black text-slate-800 mt-1">{expandedCategory}</h6>
+                          </div>
+                          <span className="px-3 py-1.5 rounded-xl bg-white text-slate-600 border border-slate-200 text-[10px] font-black uppercase shadow-sm">
+                            {selectedCategoryGroups.find(group => group.category === expandedCategory)?.total_quantity} item(ns)
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                          {selectedCategoryGroups.find(group => group.category === expandedCategory)!.equipments.map(equipment => (
+                            <div key={equipment.name} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                              <p className="text-sm font-black text-slate-800 leading-tight">{equipment.name}</p>
+                              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-3">Quantidade</p>
+                              <p className="text-2xl font-black text-slate-900 mt-1">{equipment.quantity}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-[28px] border border-dashed border-slate-200 bg-slate-50 px-5 py-8 text-center text-sm font-bold text-slate-400">
+                        Selecione uma categoria para ver os produtos relacionados.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="hidden">
                     <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2">
                       <TagIcon size={14} className="text-indigo-500" /> Equipamentos e Itens Específicos
                     </h5>
@@ -589,7 +609,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                               <div className="flex items-center gap-4 shrink-0">
                                 <div className="rounded-2xl bg-slate-900 px-3 py-2 text-white text-center min-w-[82px]">
                                   <p className="text-[8px] font-black uppercase tracking-widest">Qtd Total</p>
-                                  <p className="text-2xl font-black leading-none mt-1">{group.totalQuantity}</p>
+                                  <p className="text-2xl font-black leading-none mt-1">{group.total_quantity}</p>
                                 </div>
                                 <ChevronRight size={18} className={`text-slate-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
                               </div>
@@ -619,7 +639,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                     </div>
                   </div>
 
-                  <div className="space-y-4">
+                  <div className="hidden">
                     <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2">
                       <ClipboardList size={14} className="text-slate-500" /> Relações Técnicas por Linha
                     </h5>

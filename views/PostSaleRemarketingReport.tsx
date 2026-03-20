@@ -16,6 +16,19 @@ interface Props {
     };
 }
 
+const normalizeCallTypeToken = (value?: string | null) =>
+    String(value || '')
+        .toUpperCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^A-Z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+
+const isPostSaleRemarketingType = (value?: string | null) => {
+    const normalized = normalizeCallTypeToken(value);
+    return normalized === 'POS_VENDA' || normalized === 'REATIVACAO' || normalized === 'VENDA';
+};
+
 const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenProspect, dateRange }) => {
     const [data, setData] = useState<UnifiedReportRow[]>([]);
     const [calls, setCalls] = useState<CallRecord[]>([]);
@@ -47,11 +60,7 @@ const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenPro
                 dataService.getQuestions()
             ]);
 
-            const relevantCalls = allCalls.filter(call =>
-                call.type === CallType.POS_VENDA ||
-                call.type === CallType.REATIVACAO ||
-                call.type === CallType.VENDA
-            );
+            const relevantCalls = allCalls.filter(call => isPostSaleRemarketingType(call.type));
 
             setData(rows);
             setCalls(relevantCalls);
