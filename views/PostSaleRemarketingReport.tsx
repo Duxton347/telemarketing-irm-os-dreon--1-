@@ -1,18 +1,38 @@
 import React, { useState, useEffect } from 'react';
 import { dataService } from '../services/dataService';
-import { UnifiedReportRow, User, CallType } from '../types';
+import { UnifiedReportRow, User, CallType, CallRecord, Question } from '../types';
 import { Loader2, Calendar, Filter, Users, Tag, CheckSquare, Square, RefreshCcw, Search, ChevronRight } from 'lucide-react';
 import BulkRescheduleModal from '../components/BulkRescheduleModal';
 import BulkUpsellModal from '../components/BulkUpsellModal';
+import { buildManagementReportInsights } from '../utils/managementReportInsights';
 
 interface Props {
     user: User;
     operators: User[];
     onOpenProspect: (clientId: string) => void;
+    dateRange: {
+        start: string;
+        end: string;
+    };
 }
 
-const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenProspect }) => {
+const normalizeCallTypeToken = (value?: string | null) =>
+    String(value || '')
+        .toUpperCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^A-Z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+
+const isPostSaleRemarketingType = (value?: string | null) => {
+    const normalized = normalizeCallTypeToken(value);
+    return normalized === 'POS_VENDA' || normalized === 'REATIVACAO' || normalized === 'VENDA';
+};
+
+const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenProspect, dateRange }) => {
     const [data, setData] = useState<UnifiedReportRow[]>([]);
+    const [calls, setCalls] = useState<CallRecord[]>([]);
+    const [questions, setQuestions] = useState<Question[]>([]);
     const [loading, setLoading] = useState(false);
 
     // Selection
@@ -34,8 +54,17 @@ const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenPro
             // Based on rules, admin sees all, ops see their own or all depending on CRM rule.
             // We pass undefined to RPC to get all, then filter frontend if needed, or pass user.id if not admin.
             const opsId = user.role !== 'ADMIN' ? user.id : undefined;
-            const rows = await dataService.listUnifiedReport(opsId);
+            const [rows, allCalls, allQuestions] = await Promise.all([
+                dataService.listUnifiedReport(opsId),
+                dataService.getCalls(dateRange.start, dateRange.end),
+                dataService.getQuestions()
+            ]);
+
+            const relevantCalls = allCalls.filter(call => isPostSaleRemarketingType(call.type));
+
             setData(rows);
+            setCalls(relevantCalls);
+            setQuestions(allQuestions);
         } catch (e) {
             console.error(e);
         } finally {
@@ -45,7 +74,14 @@ const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenPro
 
     useEffect(() => {
         loadReport();
-    }, [user.id]);
+    }, [user.id, dateRange.start, dateRange.end]);
+
+    const reportInsights = React.useMemo(() => buildManagementReportInsights({
+        calls,
+        whatsappTasks: [],
+        questions,
+        operators
+    }), [calls, questions, operators]);
 
     const toggleSelect = (id: string) => {
         setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -87,13 +123,19 @@ const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenPro
 
     // --- STATS ---
     const stats = {
-        total: data.length,
+        total: reportInsights.totalQuestionnaireInteractions,
         semResposta: data.filter(r => r.responseStatus === 'Sem Resposta').length,
-        avaliaram_mal: data.filter(r => r.lastRating && r.lastRating <= 3).length,
-        avaliaram_bem: data.filter(r => r.lastRating && r.lastRating >= 4).length,
+        avaliaram_mal: reportInsights.satisfactionNegativeCount,
+        avaliaram_bem: reportInsights.satisfactionPositiveCount,
         semVenda: data.filter(r => r.conversionStatus === 'Sem Venda').length,
         upsell: data.filter(r => r.upsellOffer && r.upsellStatus !== 'DONE').length,
+        responderam: reportInsights.totalQuestionnaireInteractions,
+        interesse: reportInsights.interestCount,
+        objecao: reportInsights.objectionCount
     };
+
+    const percentageOfBase = (value: number, total = reportInsights.totalQuestionnaireInteractions) =>
+        total > 0 ? ((value / total) * 100).toFixed(1) : '0.0';
 
     return (
         <div className="space-y-6">
@@ -104,7 +146,7 @@ const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenPro
                     { k: 'avaliaram_mal', b: 'Avaliaram Mal', v: stats.avaliaram_mal, c: 'bg-rose-50 text-rose-700' },
                     { k: 'avaliaram_bem', b: 'Avaliaram Bem', v: stats.avaliaram_bem, c: 'bg-emerald-50 text-emerald-700' },
                     { k: 'sem_resposta', b: 'Sem Resposta', v: stats.semResposta, c: 'bg-orange-50 text-orange-700' },
-                    { k: 'responderam', b: 'Responderam', v: stats.total - stats.semResposta, c: 'bg-blue-50 text-blue-700' },
+                    { k: 'responderam', b: 'Responderam', v: stats.responderam, c: 'bg-blue-50 text-blue-700' },
                     { k: 'upsell_possivel', b: 'Upsell Possível', v: stats.upsell, c: 'bg-amber-50 text-amber-700' },
                     { k: 'sem_venda', b: 'Sem Venda', v: stats.semVenda, c: 'bg-slate-100 text-slate-800' }
                 ].map(s => (
@@ -115,6 +157,15 @@ const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenPro
                     >
                         <p className="text-[10px] font-black uppercase tracking-widest opacity-70 mb-1">{s.b}</p>
                         <p className="text-2xl font-black">{s.v}</p>
+                        <p className="text-[10px] font-black uppercase tracking-widest opacity-60 mt-2">
+                            {s.k === 'avaliaram_mal' ? `${percentageOfBase(stats.avaliaram_mal)}% da base` :
+                             s.k === 'avaliaram_bem' ? `${percentageOfBase(stats.avaliaram_bem)}% da base` :
+                             s.k === 'sem_resposta' ? (data.length > 0 ? `${((stats.semResposta / data.length) * 100).toFixed(1)}% da lista` : '0.0% da lista') :
+                             s.k === 'responderam' ? 'Questionarios validos' :
+                             s.k === 'upsell_possivel' ? (data.length > 0 ? `${((stats.upsell / data.length) * 100).toFixed(1)}% da lista` : '0.0% da lista') :
+                             s.k === 'sem_venda' ? (data.length > 0 ? `${((stats.semVenda / data.length) * 100).toFixed(1)}% da lista` : '0.0% da lista') :
+                             'Base respondida'}
+                        </p>
                     </button>
                 ))}
             </div>
@@ -143,6 +194,127 @@ const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenPro
                     })}
                 </div>
             )}
+
+            <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                <div className="xl:col-span-2 bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm">
+                    <div className="flex items-center justify-between gap-4 mb-6">
+                        <div>
+                            <h3 className="text-lg font-black text-slate-800">Perguntas, respostas e porcentagens</h3>
+                            <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mt-1">Base real dos questionarios de pos-venda e remarketing</p>
+                        </div>
+                        <span className="px-3 py-1 rounded-full bg-blue-50 text-blue-700 text-[10px] font-black uppercase">
+                            {reportInsights.totalQuestionnaireInteractions} respostas validas
+                        </span>
+                    </div>
+
+                    {reportInsights.questionBreakdowns.length === 0 ? (
+                        <div className="text-center py-12 bg-slate-50 rounded-[28px] border border-dashed border-slate-200 text-slate-400 text-sm font-bold">
+                            Ainda nao existe questionario respondido nesse periodo para alimentar o pos-venda.
+                        </div>
+                    ) : (
+                        <div className="space-y-4 max-h-[520px] overflow-y-auto pr-2">
+                            {reportInsights.questionBreakdowns.map(question => (
+                                <div key={question.questionId} className="p-5 rounded-[28px] bg-slate-50 border border-slate-100">
+                                    <div className="flex items-start justify-between gap-4 mb-4">
+                                        <div>
+                                            <p className="text-sm font-black text-slate-800 leading-snug">{question.order}. {question.questionText}</p>
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-1">
+                                                {question.totalResponses} respostas
+                                                {question.purpose ? ` | ${question.purpose}` : ''}
+                                            </p>
+                                        </div>
+                                        <span className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black uppercase text-slate-600">{question.type}</span>
+                                    </div>
+
+                                    <div className="space-y-3">
+                                        {question.answers.map(answer => (
+                                            <div key={`${question.questionId}-${answer.label}`}>
+                                                <div className="flex justify-between gap-3 text-xs font-bold mb-1">
+                                                    <span className="text-slate-600">{answer.label}</span>
+                                                    <span className="text-slate-900">{answer.count} | {answer.percentage.toFixed(1)}%</span>
+                                                </div>
+                                                <div className="h-2 w-full bg-white rounded-full overflow-hidden border border-slate-100">
+                                                    <div className="h-full bg-blue-500 rounded-full" style={{ width: `${answer.percentage}%` }} />
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                <div className="space-y-6">
+                    <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm">
+                        <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest mb-5">Leitura Gerencial</h3>
+                        <div className="space-y-4">
+                            <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-100">
+                                <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600">Taxa de Interesse</p>
+                                <p className="text-2xl font-black text-emerald-700 mt-1">{reportInsights.interestRate.toFixed(1)}%</p>
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-emerald-500 mt-2">{reportInsights.interestCount} interacoes com interesse forte</p>
+                            </div>
+                            <div className="p-4 rounded-2xl bg-rose-50 border border-rose-100">
+                                <p className="text-[10px] font-black uppercase tracking-widest text-rose-600">Taxa de Objecao</p>
+                                <p className="text-2xl font-black text-rose-700 mt-1">{reportInsights.objectionRate.toFixed(1)}%</p>
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-rose-500 mt-2">{reportInsights.objectionCount} interacoes com impeditivo declarado</p>
+                            </div>
+                            <div className="p-4 rounded-2xl bg-blue-50 border border-blue-100">
+                                <p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Satisfacao Media</p>
+                                <p className="text-2xl font-black text-blue-700 mt-1">{reportInsights.averageSatisfactionScore.toFixed(1)} / 100</p>
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-blue-500 mt-2">
+                                    {reportInsights.satisfactionPositiveCount} avaliaram bem | {reportInsights.satisfactionNegativeCount} avaliaram mal
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm">
+                        <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest mb-5">Produto, Equipe e Processo</h3>
+                        <div className="space-y-4">
+                            <div>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Top Produtos / Ofertas</p>
+                                <div className="space-y-2">
+                                    {reportInsights.productInsights.slice(0, 4).map(item => (
+                                        <div key={item.key} className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
+                                            <p className="text-xs font-black text-slate-800">{item.label}</p>
+                                            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">
+                                                Interesse {item.interestRate.toFixed(1)}% | Objecao {item.objectionRate.toFixed(1)}% | Satisfacao {item.satisfactionRate.toFixed(1)}%
+                                            </p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            <div>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Top Equipe</p>
+                                <div className="space-y-2">
+                                    {reportInsights.operatorInsights.slice(0, 4).map(item => (
+                                        <div key={item.key} className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
+                                            <p className="text-xs font-black text-slate-800">{item.label}</p>
+                                            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">
+                                                Interesse {item.interestRate.toFixed(1)}% | Objecao {item.objectionRate.toFixed(1)}% | Satisfacao {item.satisfactionRate.toFixed(1)}%
+                                            </p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            <div>
+                                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Top Processos</p>
+                                <div className="space-y-2">
+                                    {reportInsights.processInsights.slice(0, 4).map(item => (
+                                        <div key={item.key} className="p-3 rounded-2xl bg-slate-50 border border-slate-100">
+                                            <p className="text-xs font-black text-slate-800">{item.label}</p>
+                                            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-1">
+                                                Interesse {item.interestRate.toFixed(1)}% | Objecao {item.objectionRate.toFixed(1)}% | Satisfacao {item.satisfactionRate.toFixed(1)}%
+                                            </p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
 
             {/* Toolbar */}
             <div className="flex flex-wrap items-center justify-between gap-4 bg-white p-4 rounded-3xl border border-slate-100 shadow-sm">

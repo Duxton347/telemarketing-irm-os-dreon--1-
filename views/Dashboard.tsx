@@ -51,19 +51,21 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
 
   // Constants for Dashboard View
   const fetchBaseData = React.useCallback(async () => {
+    const filterId = user?.role === UserRole.OPERATOR ? user.id : selectedFilter;
+    const taskFilter = filterId === 'all' ? undefined : filterId;
+
     const [calls, protocols, tasks, allUsers, allQuestions, waTasks] = await Promise.all([
       dataService.getCalls(),
       dataService.getProtocols(),
-      dataService.getTasks(),
+      dataService.getTasks(taskFilter),
       dataService.getUsers(),
       dataService.getQuestions(),
-      dataService.getWhatsAppTasks() // Fetch all pending WA tasks
+      dataService.getWhatsAppTasks(taskFilter) // Fetch all pending WA tasks
     ]);
 
     setOperators(allUsers.filter(u => u && u.active !== false));
     setQuestions(allQuestions);
     setTasks(tasks);
-    const filterId = user?.role === UserRole.OPERATOR ? user.id : selectedFilter;
 
     const todayStr = new Date().toISOString().split('T')[0];
 
@@ -72,14 +74,20 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
       .filter(c => c.type !== CallType.WHATSAPP);
 
     const now = new Date(); // Current time for filtering
+    const isActionableVoiceTask = (task: Task) =>
+      !!task.assignedTo &&
+      task.status === 'pending' &&
+      (task.approvalStatus === 'APPROVED' || !task.approvalStatus);
+
     const displayTasks = (filterId === 'all'
-      ? tasks.filter(t => t.status === 'pending')
-      : tasks.filter(t => t.assignedTo === filterId && t.status === 'pending'))
+      ? tasks.filter(isActionableVoiceTask)
+      : tasks.filter(t => t.assignedTo === filterId && isActionableVoiceTask(t)))
       .filter(t => !t.scheduledFor || new Date(t.scheduledFor) <= now); // Exclude future tasks
 
+    const isActionableWaTask = (task: any) => !!task.assignedTo && task.status === 'pending';
     const displayWaTasks = filterId === 'all' 
-      ? waTasks.filter(w => w.status === 'pending')
-      : waTasks.filter(w => w.assignedTo === filterId && w.status === 'pending');
+      ? waTasks.filter(isActionableWaTask)
+      : waTasks.filter(w => w.assignedTo === filterId && isActionableWaTask(w));
 
     const totalPending = displayTasks.length + displayWaTasks.length;
 
@@ -290,7 +298,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
           {operators.map(op => {
             const now = new Date();
             const opTasks = tasks
-              .filter(t => t.assignedTo === op.id && t.status === 'pending')
+              .filter(t => t.assignedTo === op.id && t.status === 'pending' && (t.approvalStatus === 'APPROVED' || !t.approvalStatus))
               .filter(t => !t.scheduledFor || new Date(t.scheduledFor) <= now);
 
             if (selectedFilter !== 'all' && op.id !== selectedFilter) return null;

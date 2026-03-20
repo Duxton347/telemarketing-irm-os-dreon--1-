@@ -15,6 +15,8 @@ import { dataService } from '../services/dataService';
 import { CallRecord, User, Client, Protocol, Question, Task, OperatorEvent, OperatorEventType, Visit, Sale, SaleStatus, WhatsAppTask, CallType, ClientTag } from '../types';
 import PostSaleRemarketingReport from './PostSaleRemarketingReport';
 import ProspectHistoryDrawer from '../components/ProspectHistoryDrawer';
+import { buildManagementReportInsights } from '../utils/managementReportInsights';
+import { resolveQuestionnaireEntries } from '../utils/questionnaireInsights';
 
 // --- HELPER COMPONENTS ---
 
@@ -55,16 +57,68 @@ const MetricCard: React.FC<{
    );
 };
 
+const normalizeReportText = (value?: string) =>
+   String(value || '')
+      .toLowerCase()
+      .trim()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+
+const isMeaningfulReportValue = (value: unknown) => {
+   if (value === null || value === undefined) return false;
+   if (typeof value === 'string') return value.trim().length > 0;
+   if (Array.isArray(value)) return value.length > 0;
+   return true;
+};
+
+const formatReportValue = (value: unknown) => {
+   if (Array.isArray(value)) {
+      return value.map(item => String(item)).join(', ');
+   }
+
+   if (typeof value === 'object' && value !== null) {
+      return JSON.stringify(value);
+   }
+
+   return String(value);
+};
+
+const findQuestionByHints = (questions: Question[], hints: string[]) =>
+   questions.find(question => {
+      const haystack = `${question.text} ${question.campo_resposta || ''} ${question.id}`.toLowerCase();
+      return hints.some(hint => haystack.includes(hint.toLowerCase()));
+   });
+
+const collectInteractionResponses = (
+   responses: Record<string, any>,
+   questions: Question[],
+   callType?: string,
+   proposito?: string
+) => {
+   return resolveQuestionnaireEntries(responses || {}, questions, callType, proposito)
+      .map(entry => ({
+         key: entry.key,
+         label: entry.label,
+         value: formatReportValue(entry.value)
+      }));
+};
+
+const getInteractionTypeLabel = (interaction: any) => {
+   const isWhatsApp = interaction?.type === CallType.WHATSAPP || interaction?._type === 'whatsapp';
+   if (isWhatsApp) return 'WhatsApp';
+   return interaction?.type || 'Ligação';
+};
+
 // --- MAIN COMPONENT ---
 
 const Reports: React.FC<{ user: any }> = ({ user }) => {
    const [isLoading, setIsLoading] = React.useState(true);
-   const [activeTab, setActiveTab] = React.useState<'overview' | 'communications' | 'sales' | 'operators' | 'audit' | 'leads' | 'post_sale'>('overview');
+   const [activeTab, setActiveTab] = React.useState<'overview' | 'management' | 'communications' | 'sales' | 'operators' | 'audit' | 'leads' | 'post_sale' | 'invalid_phones'>('overview');
    const [drawerProspectId, setDrawerProspectId] = React.useState<string | null>(null);
 
    // Custom Date Range
    const [dateRange, setDateRange] = React.useState({
-      start: new Date(new Date().setDate(new Date().getDate() - 30)).toISOString().split('T')[0],
+      start: '2010-01-01',
       end: new Date().toISOString().split('T')[0]
    });
 
@@ -84,6 +138,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
    const [sales, setSales] = React.useState<Sale[]>([]);
    const [operators, setOperators] = React.useState<User[]>([]);
    const [clients, setClients] = React.useState<Client[]>([]);
+   const [invalidClients, setInvalidClients] = React.useState<Client[]>([]);
 
    const [events, setEvents] = React.useState<OperatorEvent[]>([]);
    const [questions, setQuestions] = React.useState<Question[]>([]);
@@ -245,6 +300,16 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
              speed: { satisfied: 0, total: 0 }
          };
 
+         const npsQuestion = findQuestionByHints(fetchedQuestions, ['nps', 'recomend']);
+         const priceQuestion = findQuestionByHints(fetchedQuestions, ['preco', 'precificacao', 'preço']);
+         const productQuestion = findQuestionByHints(fetchedQuestions, ['produto', 'estoque', 'qualidade']);
+         const speedQuestion = findQuestionByHints(fetchedQuestions, ['velocidade', 'agilidade', 'prazo']);
+
+         const getResolvedInteractionValue = (interaction: any, question?: Question) => {
+             if (!question) return undefined;
+             return dataService.getResponseValue(interaction.responses || {}, question);
+         };
+
          // Analyze all responses from calls and WA tasks within date range
          const allInteractions = [
              ...fetchedCalls,
@@ -255,7 +320,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
              const responses = interaction.responses || {};
              
              // NPS Eval
-             const npsRaw = responses['q_nps'];
+             const npsRaw = getResolvedInteractionValue(interaction, npsQuestion) ?? responses['q_nps'];
              if (npsRaw !== undefined) {
                  const npsScoreRaw = parseInt(npsRaw, 10);
                  if (!isNaN(npsScoreRaw)) {
@@ -280,6 +345,42 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
              checkSatisfaction('q_precificacao', 'price');
              checkSatisfaction('q_produto_estoque', 'product');
              checkSatisfaction('q_velocidade', 'speed');
+         });
+
+         promoters = 0;
+         detractors = 0;
+         npsTotal = 0;
+         satRates.price = { satisfied: 0, total: 0 };
+         satRates.product = { satisfied: 0, total: 0 };
+         satRates.speed = { satisfied: 0, total: 0 };
+
+         allInteractions.forEach((interaction: any) => {
+             const responses = interaction.responses || {};
+             const npsRaw = getResolvedInteractionValue(interaction, npsQuestion) ?? responses['q_nps'];
+
+             if (npsRaw !== undefined) {
+                 const npsScoreRaw = parseInt(String(npsRaw), 10);
+                 if (!isNaN(npsScoreRaw)) {
+                     npsTotal++;
+                     if (npsScoreRaw >= 9) promoters++;
+                     else if (npsScoreRaw <= 6) detractors++;
+                 }
+             }
+
+             const resolvedChecks = [
+                 { value: getResolvedInteractionValue(interaction, priceQuestion) ?? responses['q_precificacao'], category: 'price' as const },
+                 { value: getResolvedInteractionValue(interaction, productQuestion) ?? responses['q_produto_estoque'], category: 'product' as const },
+                 { value: getResolvedInteractionValue(interaction, speedQuestion) ?? responses['q_velocidade'], category: 'speed' as const }
+             ];
+
+             resolvedChecks.forEach(check => {
+                 if (!isMeaningfulReportValue(check.value)) return;
+                 satRates[check.category].total++;
+                 const normalizedVal = normalizeReportText(String(check.value));
+                 if (['otimo', 'bom', 'sim', 'adequado'].some(option => normalizedVal.includes(option))) {
+                     satRates[check.category].satisfied++;
+                 }
+             });
          });
 
          const npsScore = npsTotal > 0 ? Math.round(((promoters - detractors) / npsTotal) * 100) : 0;
@@ -318,6 +419,13 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
    }, [dateRange]);
 
    React.useEffect(() => { loadData(); }, [loadData]);
+
+   const managementInsights = React.useMemo(() => buildManagementReportInsights({
+      calls,
+      whatsappTasks,
+      questions,
+      operators
+   }), [calls, whatsappTasks, questions, operators]);
 
    // --- EXPORT FUNCTION ---
    const handleExport = (type: 'csv' | 'xls') => {
@@ -390,6 +498,14 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
 
       const isCall = selectedInteraction._type === 'call';
       const isWhatsApp = selectedInteraction.type === CallType.WHATSAPP || selectedInteraction._type === 'whatsapp';
+      const resolvedCallResponses = isCall
+         ? collectInteractionResponses(
+            selectedInteraction.responses || {},
+            questions,
+            selectedInteraction.type,
+            selectedInteraction.proposito
+         )
+         : [];
       const client = clients.find(c => c.id === selectedInteraction.clientId) || prospects.find(p => p.id === selectedInteraction.clientId);
       const op = operators.find(o => o.id === (isCall ? selectedInteraction.operatorId : selectedInteraction.assignedTo));
       const date = new Date(selectedInteraction.date);
@@ -486,19 +602,13 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
 
                      {isCall ? (
                         <div className="grid grid-cols-1 gap-4">
-                           {Object.entries(selectedInteraction.responses || {}).map(([key, val]: any) => {
-                              // Find question text
-                              const question = questions.find(q => q.id === key);
-                              const label = question ? question.text : key;
-
-                              return (
-                                 <div key={key} className="p-5 rounded-2xl bg-white border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                                    <p className="text-xs font-bold text-slate-500 uppercase mb-2 leading-relaxed">{label}</p>
-                                    <p className="text-base font-medium text-slate-800 bg-slate-50 p-3 rounded-xl border border-slate-100">{String(val)}</p>
-                                 </div>
-                              );
-                           })}
-                           {Object.keys(selectedInteraction.responses || {}).length === 0 && (
+                           {resolvedCallResponses.map(({ key, label, value }) => (
+                              <div key={key} className="p-5 rounded-2xl bg-white border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+                                 <p className="text-xs font-bold text-slate-500 uppercase mb-2 leading-relaxed">{label}</p>
+                                 <p className="text-base font-medium text-slate-800 bg-slate-50 p-3 rounded-xl border border-slate-100">{value}</p>
+                              </div>
+                           ))}
+                           {resolvedCallResponses.length === 0 && (
                               <div className="text-center p-8 bg-slate-50 rounded-3xl border border-slate-100 border-dashed">
                                  <p className="text-sm text-slate-400 font-bold italic">Nenhuma resposta registrada para esta chamada.</p>
                               </div>
@@ -658,6 +768,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
          {/* TABS */}
          <div className="flex overflow-x-auto no-scrollbar gap-2 pb-2">
             {[
+               { id: 'management', label: 'Gerencial & QA', icon: BarChart3 },
                { id: 'overview', label: 'Visão Geral', icon: Target },
                { id: 'communications', label: 'Comunicações', icon: MessageSquare },
                { id: 'sales', label: 'Vendas & Receita', icon: DollarSign },
@@ -934,6 +1045,212 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                                  <div className="w-3 h-3 rounded-full bg-emerald-500" /> WhatsApp
                               </div>
                            </div>
+                        </div>
+                     </div>
+                  </div>
+               )}
+
+               {/* MANAGEMENT TAB */}
+               {activeTab === 'management' && (
+                  <div className="space-y-8">
+                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        <MetricCard
+                           title="Interacoes com Questionario"
+                           value={managementInsights.totalQuestionnaireInteractions}
+                           icon={ClipboardList}
+                           color="slate"
+                        />
+                        <MetricCard
+                           title="Taxa de Interesse"
+                           value={`${managementInsights.interestRate.toFixed(1)}%`}
+                           subtitle="Interesse alto/medio por oferta ou produto"
+                           icon={TrendingUp}
+                           color="emerald"
+                        />
+                        <MetricCard
+                           title="Taxa de Objecao"
+                           value={`${managementInsights.objectionRate.toFixed(1)}%`}
+                           subtitle="Baseada nos impeditivos reais do questionario"
+                           icon={AlertCircle}
+                           color="rose"
+                        />
+                        <MetricCard
+                           title="Satisfacao Media"
+                           value={`${managementInsights.averageSatisfactionScore.toFixed(1)} / 100`}
+                           subtitle={`${managementInsights.satisfactionRate.toFixed(1)}% das leituras positivas`}
+                           icon={Smile}
+                           color="blue"
+                        />
+                     </div>
+
+                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm lg:col-span-2">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8">Performance por Produto / Oferta</h4>
+                           <div className="h-[320px]">
+                              <ResponsiveContainer width="100%" height="100%">
+                                 <BarChart data={managementInsights.productInsights.slice(0, 8).map(item => ({
+                                    name: item.label,
+                                    Interesse: item.interestRate,
+                                    Objecao: item.objectionRate,
+                                    Satisfacao: item.satisfactionRate
+                                 }))}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                    <XAxis dataKey="name" tick={{ fontSize: 10, fontWeight: 700 }} axisLine={false} tickLine={false} interval={0} angle={-18} textAnchor="end" height={80} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} domain={[0, 100]} />
+                                    <Tooltip />
+                                    <Legend />
+                                    <Bar dataKey="Interesse" fill="#10b981" radius={[6, 6, 0, 0]} />
+                                    <Bar dataKey="Objecao" fill="#ef4444" radius={[6, 6, 0, 0]} />
+                                    <Bar dataKey="Satisfacao" fill="#3b82f6" radius={[6, 6, 0, 0]} />
+                                 </BarChart>
+                              </ResponsiveContainer>
+                           </div>
+                        </div>
+
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-6">Principais Impeditivos</h4>
+                           <div className="space-y-3">
+                              {managementInsights.blockerBreakdown.length > 0 ? managementInsights.blockerBreakdown.map(item => (
+                                 <div key={item.label} className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
+                                    <div className="flex items-center justify-between gap-3">
+                                       <p className="text-xs font-bold text-slate-700 leading-relaxed">{item.label}</p>
+                                       <span className="text-[10px] font-black uppercase px-2 py-1 rounded-full bg-white border border-slate-200 text-slate-700">{item.percentage.toFixed(1)}%</span>
+                                    </div>
+                                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-2">{item.count} ocorrencias</p>
+                                 </div>
+                              )) : (
+                                 <div className="text-center py-10 bg-slate-50 rounded-[32px] border border-dashed border-slate-200 text-slate-400 text-xs font-bold uppercase tracking-widest">
+                                    Sem impeditivos mapeados no periodo
+                                 </div>
+                              )}
+                           </div>
+                        </div>
+                     </div>
+
+                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8">Equipe / Operadores</h4>
+                           <div className="space-y-4">
+                              {managementInsights.operatorInsights.slice(0, 8).map(item => (
+                                 <div key={item.key} className="p-5 rounded-[28px] bg-slate-50 border border-slate-100">
+                                    <div className="flex items-start justify-between gap-4">
+                                       <div>
+                                          <p className="text-sm font-black text-slate-800">{item.label}</p>
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-1">{item.totalInteractions} interacoes</p>
+                                       </div>
+                                       <div className="text-right">
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Interesse {item.interestRate.toFixed(1)}%</p>
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-rose-500">Objecao {item.objectionRate.toFixed(1)}%</p>
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-blue-500">Satisfacao {item.satisfactionRate.toFixed(1)}%</p>
+                                       </div>
+                                    </div>
+                                 </div>
+                              ))}
+                           </div>
+                        </div>
+
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8">Processos / Propositos</h4>
+                           <div className="space-y-4">
+                              {managementInsights.processInsights.slice(0, 8).map(item => (
+                                 <div key={item.key} className="p-5 rounded-[28px] bg-slate-50 border border-slate-100">
+                                    <div className="flex items-start justify-between gap-4">
+                                       <div>
+                                          <p className="text-sm font-black text-slate-800">{item.label}</p>
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-1">{item.totalInteractions} interacoes</p>
+                                       </div>
+                                       <div className="text-right">
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Interesse {item.interestRate.toFixed(1)}%</p>
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-rose-500">Objecao {item.objectionRate.toFixed(1)}%</p>
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-blue-500">Satisfacao {item.satisfactionRate.toFixed(1)}%</p>
+                                       </div>
+                                    </div>
+                                 </div>
+                              ))}
+                           </div>
+                        </div>
+                     </div>
+
+                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8">Satisfacao por Area</h4>
+                           <div className="space-y-5">
+                              {managementInsights.satisfactionAreas.map(area => (
+                                 <div key={area.key}>
+                                    <div className="flex justify-between text-xs font-bold mb-2">
+                                       <span className="text-slate-600 uppercase">{area.label}</span>
+                                       <span className="text-blue-600 font-black">{area.averageScore.toFixed(1)} / 100</span>
+                                    </div>
+                                    <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                                       <div className="h-full bg-blue-500 rounded-full" style={{ width: `${Math.max(0, Math.min(area.averageScore, 100))}%` }} />
+                                    </div>
+                                    <p className="text-[9px] text-right font-bold text-slate-400 mt-1">{area.totalSignals} sinais considerados</p>
+                                 </div>
+                              ))}
+                           </div>
+                        </div>
+
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8">Top Respostas por Pergunta</h4>
+                           <div className="space-y-5 max-h-[420px] overflow-y-auto pr-2">
+                              {managementInsights.questionBreakdowns.slice(0, 8).map(question => (
+                                 <div key={question.questionId} className="p-5 rounded-[28px] bg-slate-50 border border-slate-100">
+                                    <div className="flex items-start justify-between gap-4 mb-4">
+                                       <div>
+                                          <p className="text-sm font-black text-slate-800 leading-snug">{question.questionText}</p>
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-1">{question.totalResponses} respostas</p>
+                                       </div>
+                                       <span className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black uppercase text-slate-600">{question.type}</span>
+                                    </div>
+                                    <div className="space-y-3">
+                                       {question.answers.slice(0, 4).map(answer => (
+                                          <div key={`${question.questionId}-${answer.label}`}>
+                                             <div className="flex justify-between text-xs font-bold mb-1 gap-3">
+                                                <span className="text-slate-600">{answer.label}</span>
+                                                <span className="text-slate-900">{answer.percentage.toFixed(1)}%</span>
+                                             </div>
+                                             <div className="h-2 w-full bg-white rounded-full overflow-hidden border border-slate-100">
+                                                <div className="h-full bg-slate-900 rounded-full" style={{ width: `${answer.percentage}%` }} />
+                                             </div>
+                                          </div>
+                                       ))}
+                                    </div>
+                                 </div>
+                              ))}
+                           </div>
+                        </div>
+                     </div>
+
+                     <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm">
+                        <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8">Distribuicao Completa por Pergunta</h4>
+                        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                           {managementInsights.questionBreakdowns.map(question => (
+                              <div key={question.questionId} className="p-6 rounded-[32px] bg-slate-50 border border-slate-100">
+                                 <div className="flex items-start justify-between gap-4 mb-4">
+                                    <div>
+                                       <p className="text-sm font-black text-slate-800 leading-snug">{question.questionText}</p>
+                                       <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-1">
+                                          {question.totalResponses} respostas
+                                          {question.purpose ? ` | ${question.purpose}` : ''}
+                                       </p>
+                                    </div>
+                                    <span className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black uppercase text-slate-600">{question.type}</span>
+                                 </div>
+                                 <div className="space-y-3">
+                                    {question.answers.map(answer => (
+                                       <div key={`${question.questionId}-${answer.label}`}>
+                                          <div className="flex justify-between gap-3 text-xs font-bold mb-1">
+                                             <span className="text-slate-600">{answer.label}</span>
+                                             <span className="text-slate-900">{answer.count} | {answer.percentage.toFixed(1)}%</span>
+                                          </div>
+                                          <div className="h-2 w-full bg-white rounded-full overflow-hidden border border-slate-100">
+                                             <div className="h-full bg-blue-500 rounded-full" style={{ width: `${answer.percentage}%` }} />
+                                          </div>
+                                       </div>
+                                    ))}
+                                 </div>
+                              </div>
+                           ))}
                         </div>
                      </div>
                   </div>
@@ -1216,12 +1533,13 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                               </tr>
                            </thead>
                             <tbody className="divide-y divide-slate-50">
-                               {getFilteredAuditData().slice(0, 100).map((item: any, i) => {
+                              {getFilteredAuditData().map((item: any, i) => {
                                  const isCall = item._type === 'call';
                                  const isWhatsApp = item.type === CallType.WHATSAPP || item._type === 'whatsapp';
                                  const date = new Date(isCall ? item.startTime : item.createdAt).toLocaleString();
                                  const opName = operators.find(o => o.id === (isCall ? item.operatorId : item.assignedTo))?.name || 'N/A';
                                  const clientName = item.clientName || clients.find(c => c.id === item.clientId)?.name || prospects.find(p => p.id === item.clientId)?.name || 'N/A';
+                                 const interactionTypeLabel = getInteractionTypeLabel(item);
 
                                  return (
                                     <tr
@@ -1232,8 +1550,13 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                                        <td className="py-4 px-6 text-xs font-bold text-slate-600 pl-8">{date}</td>
                                        <td className="py-4 px-6">
                                           <span className={`px-2 py-1 rounded-md text-[9px] font-black uppercase ${!isWhatsApp ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                                             {!isWhatsApp ? 'Ligação' : 'WhatsApp'}
+                                             {interactionTypeLabel}
                                           </span>
+                                          {item.proposito && (
+                                             <p className="mt-2 text-[10px] font-black uppercase tracking-widest text-slate-400">
+                                                {item.proposito}
+                                             </p>
+                                          )}
                                           {item.relatedVisit ? (
                                              <div>
                                                 <p className="font-bold text-slate-800">Detalhes da Visita</p>
@@ -1437,6 +1760,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                   <PostSaleRemarketingReport
                      user={user}
                      operators={operators}
+                     dateRange={dateRange}
                      onOpenProspect={(id: string) => setDrawerProspectId(id)}
                   />
                )}

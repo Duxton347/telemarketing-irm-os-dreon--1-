@@ -572,6 +572,19 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
     }
   };
 
+  const handleRebuildClientTags = async () => {
+    setIsProcessing(true);
+    try {
+      const updated = await dataService.rebuildDerivedClientTags();
+      alert(`Reprocessamento concluído! ${updated} clientes tiveram as tags derivadas atualizadas.`);
+      await refreshData();
+    } catch (e: any) {
+      alert("Erro ao reprocessar tags derivadas: " + e.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   return (
     <div className="space-y-8 pb-20 animate-in fade-in duration-500">
       <header className="flex justify-between items-end">
@@ -1507,6 +1520,14 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
               <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-2">Gestão de intenções e ferramentas avançadas Dreon Skill v3.</p>
             </div>
             <div className="flex gap-4">
+              <button
+                onClick={handleRebuildClientTags}
+                disabled={isProcessing}
+                className="px-6 py-3 bg-slate-900 text-white rounded-xl font-black uppercase text-[10px] shadow-lg hover:bg-slate-800 transition-all flex items-center gap-2 disabled:opacity-50"
+              >
+                {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <RotateCcw size={16} />}
+                Reprocessar Tags dos Clientes
+              </button>
               <button 
                 onClick={() => setIsCampaignPlannerOpen(true)}
                 className="px-6 py-3 bg-blue-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg shadow-blue-500/20 hover:bg-blue-700 transition-all flex items-center gap-2"

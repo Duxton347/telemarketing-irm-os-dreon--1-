@@ -1,5 +1,14 @@
 import { supabase } from '../lib/supabase';
 import { Campanha, Client, CallRecord, Task, ClientTag } from '../types';
+import { mergePortfolioEntries } from '../utils/clientPortfolio';
+import {
+  getActivePortfolioCatalogCategories,
+  getActivePortfolioCatalogProducts,
+  normalizeClientPortfolioSnapshot
+} from '../utils/portfolioCatalog';
+import { getQuestionnaireSatisfactionLevel, getQuestionnaireSatisfactionScore } from '../utils/questionnaireInsights';
+import { dataService } from './dataService';
+import { PortfolioCatalogService } from './portfolioCatalogService';
 
 export interface CampaignPlannerFilters {
   periodos?: Array<{ de: string; ate: string }>;
@@ -7,14 +16,20 @@ export interface CampaignPlannerFilters {
   callTypes?: string[];
   resultados?: string[];
   operadores?: string[];
+  niveisSatisfacao?: string[];
   statusCliente?: string[];
   tags?: string[];
   interesses?: string[];
+  perfisCliente?: string[];
+  categoriasProduto?: string[];
   equipamentos?: string[];
   bairros?: string[];
   cidades?: string[];
   campanhaAtual?: string;
   temEmail?: boolean;
+  produtoAlvo?: string;
+  ofertaAlvo?: string;
+  escopoLinha?: string;
 }
 
 export interface CampaignDispatch {
@@ -30,6 +45,8 @@ export interface CampaignDispatch {
 export interface ClientWithLastCall extends Client {
   call_logs_filtradas: CallRecord[];
   ultima_ligacao_filtrada: CallRecord | null;
+  ultima_satisfacao_nivel?: 'ALTA' | 'MEDIA' | 'BAIXA' | 'SEM_LEITURA';
+  ultima_satisfacao_score?: number | null;
 }
 
 export const CampaignPlannerService = {
@@ -106,12 +123,33 @@ export const CampaignPlannerService = {
 
   getDistinctItems: async (): Promise<string[]> => {
     try {
-      // Fetch all items arrays and flatten them
-      const { data, error } = await supabase.from('clients').select('items');
+      const catalog = await PortfolioCatalogService.getCatalogConfig();
+      return getActivePortfolioCatalogProducts(catalog)
+        .map(product => product.name)
+        .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    } catch (e) { console.error(e); return []; }
+  },
+
+  getDistinctCustomerProfiles: async (): Promise<string[]> => {
+    try {
+      const { data, error } = await supabase.from('clients').select('*');
       if (error) throw error;
-      const allItems = data.flatMap(r => r.items || []);
-      const uniqueItems = Array.from(new Set(allItems)).filter(Boolean);
-      return uniqueItems.sort();
+
+      const values = (data || []).flatMap((row: any) => [
+        ...(row.customer_profiles || []),
+        ...((row.portfolio_entries || []).map((entry: any) => entry?.profile).filter(Boolean))
+      ]);
+
+      return Array.from(new Set(values.filter(Boolean))).sort();
+    } catch (e) { console.error(e); return []; }
+  },
+
+  getDistinctProductCategories: async (): Promise<string[]> => {
+    try {
+      const catalog = await PortfolioCatalogService.getCatalogConfig();
+      return getActivePortfolioCatalogCategories(catalog)
+        .map(category => category.name)
+        .sort((a, b) => a.localeCompare(b, 'pt-BR'));
     } catch (e) { console.error(e); return []; }
   },
 
@@ -144,22 +182,35 @@ export const CampaignPlannerService = {
 
   getDistinctTagCategories: async (): Promise<string[]> => {
     try {
-      const { data, error } = await supabase.from('client_tags').select('categoria').not('categoria', 'is', null);
-      if (error) throw error;
-      const cats = Array.from(new Set(data.map(r => r.categoria)));
-      return cats.sort();
+      const [{ data: tagData, error: tagError }, { data: clientData, error: clientError }] = await Promise.all([
+        supabase.from('client_tags').select('categoria').not('categoria', 'is', null),
+        supabase.from('clients').select('tags').not('tags', 'is', null)
+      ]);
+      if (tagError) throw tagError;
+      if (clientError) throw clientError;
+
+      const cats = new Set<string>((tagData || []).map(r => r.categoria).filter(Boolean));
+      (clientData || [])
+        .flatMap((row: any) => row.tags || [])
+        .filter(Boolean)
+        .forEach((tag: string) => cats.add(tag));
+
+      return Array.from(cats).sort();
     } catch (e) { console.error(e); return []; }
   },
 
   fetchClientsByFilters: async (filters: CampaignPlannerFilters): Promise<ClientWithLastCall[]> => {
     try {
+      const [catalogConfig, questions] = await Promise.all([
+        PortfolioCatalogService.getCatalogConfig(),
+        dataService.getQuestions()
+      ]);
       let query = supabase
         .from('clients')
         .select(`
-          id, name, phone, status, neighborhood, city,
-          tags, items, offers, campanha_atual_id, email, interest_product,
+          *, 
           call_logs (
-            id, call_type, responses, start_time, operator_id
+            id, call_type, responses, start_time, operator_id, proposito
           )
         `);
 
@@ -185,11 +236,6 @@ export const CampaignPlannerService = {
       if (filters.interesses?.length) {
         query = query.overlaps('offers', filters.interesses);
       }
-      if (filters.equipamentos?.length) {
-        for (const eq of filters.equipamentos) {
-          query = query.contains('items', [eq]);
-        }
-      }
       if (filters.interesses?.length) {
         query = query.in('interest_product', filters.interesses);
       }
@@ -206,6 +252,7 @@ export const CampaignPlannerService = {
       return (clients ?? [])
         .map(client => {
           const callLogs = (client.call_logs ?? []) as any[];
+          const normalizedSnapshot = normalizeClientPortfolioSnapshot(client as any, catalogConfig);
 
           const callsFiltered = callLogs.filter(cr => {
             if (!cr.start_time) return false;
@@ -241,25 +288,65 @@ export const CampaignPlannerService = {
             responses: cr.responses,
             startTime: cr.start_time,
             operatorId: cr.operator_id,
-            clientId: client.id
+            clientId: client.id,
+            proposito: cr.proposito
           })) as CallRecord[];
+
+          const ultimaLigacaoFiltrada = [...mappedCallsFiltered].sort(
+            (a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
+          )[0] ?? null;
+          const ultimaSatisfacaoScore = ultimaLigacaoFiltrada
+            ? getQuestionnaireSatisfactionScore(
+                ultimaLigacaoFiltrada.responses || {},
+                questions,
+                ultimaLigacaoFiltrada.type,
+                ultimaLigacaoFiltrada.proposito
+              )
+            : null;
+          const ultimaSatisfacaoNivel = ultimaLigacaoFiltrada
+            ? getQuestionnaireSatisfactionLevel(
+                ultimaLigacaoFiltrada.responses || {},
+                questions,
+                ultimaLigacaoFiltrada.type,
+                ultimaLigacaoFiltrada.proposito
+              )
+            : 'SEM_LEITURA';
 
           return {
             ...client,
+            customer_profiles: normalizedSnapshot.customer_profiles,
+            product_categories: normalizedSnapshot.product_categories,
+            equipment_models: normalizedSnapshot.equipment_models,
+            items: normalizedSnapshot.items,
+            portfolio_entries: normalizedSnapshot.portfolio_entries,
             call_logs_filtradas: mappedCallsFiltered,
-            ultima_ligacao_filtrada: mappedCallsFiltered.sort(
-              (a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime()
-            )[0] ?? null,
+            ultima_ligacao_filtrada: ultimaLigacaoFiltrada,
+            ultima_satisfacao_nivel: ultimaSatisfacaoNivel,
+            ultima_satisfacao_score: ultimaSatisfacaoScore,
           };
         })
         .filter(client => {
           const temFiltroLigacao = filters.callTypes?.length ||
             filters.resultados?.length ||
             filters.operadores?.length ||
+            filters.niveisSatisfacao?.length ||
             filters.periodos?.length ||
             filters.diasAvulsos?.length;
 
-          return !temFiltroLigacao || client.call_logs_filtradas.length > 0;
+          const matchesProfiles = !filters.perfisCliente?.length ||
+            filters.perfisCliente.some(profile => client.customer_profiles?.includes(profile));
+          const matchesCategories = !filters.categoriasProduto?.length ||
+            filters.categoriasProduto.some(category => client.product_categories?.includes(category));
+          const matchesEquipment = !filters.equipamentos?.length ||
+            filters.equipamentos.some(equipment => client.equipment_models?.includes(equipment));
+          const matchesSatisfaction = !filters.niveisSatisfacao?.length ||
+            filters.niveisSatisfacao.includes(client.ultima_satisfacao_nivel || 'SEM_LEITURA');
+
+          return (!temFiltroLigacao || client.call_logs_filtradas.length > 0) &&
+            matchesProfiles &&
+            matchesCategories &&
+            matchesEquipment &&
+            matchesSatisfaction;
         }) as any[];
     } catch (err) {
       console.error('Error in fetchClientsByFilters:', err);
@@ -330,7 +417,7 @@ export const CampaignPlannerService = {
             }
 
             if (dispatch.canal === 'voz' || dispatch.canal === 'ambos') {
-              await supabase.from('tasks').insert({
+              const { error: taskInsertError } = await supabase.from('tasks').insert({
                 client_id: clientId,
                 assigned_to: dispatch.operatorId,
                 type: dispatch.callType,
@@ -339,11 +426,12 @@ export const CampaignPlannerService = {
                 created_at: new Date().toISOString(),
                 campanha_id: campanha.id
               });
+              if (taskInsertError) throw taskInsertError;
               result.tasks_criadas++;
             }
 
             if (dispatch.canal === 'whatsapp' || dispatch.canal === 'ambos') {
-              await supabase.from('whatsapp_tasks').insert({
+              const { error: waInsertError } = await supabase.from('whatsapp_tasks').insert({
                 client_id: clientId,
                 assigned_to: dispatch.operatorId,
                 type: dispatch.callType,
@@ -352,11 +440,12 @@ export const CampaignPlannerService = {
                 created_at: new Date().toISOString(),
                 updated_at: new Date().toISOString()
               });
+              if (waInsertError) throw waInsertError;
               // assuming whatsapp task acts similar for purpose
               result.tasks_criadas++;
             }
 
-            await supabase.from('campanha_interacoes').insert({
+            const { error: interactionError } = await supabase.from('campanha_interacoes').insert({
               campanha_id: campanha.id,
               client_id: clientId,
               tipo_interacao: 'ENTRADA',
@@ -364,11 +453,13 @@ export const CampaignPlannerService = {
               operador_id: dispatch.operatorId,
               data_hora: new Date().toISOString()
             });
+            if (interactionError) throw interactionError;
 
-            await supabase
+            const { error: clientUpdateError } = await supabase
               .from('clients')
               .update({ campanha_atual_id: campanha.id })
               .eq('id', clientId);
+            if (clientUpdateError) throw clientUpdateError;
 
           } catch (e) {
             result.erros.push(`Erro no cliente ${clientId}: ${String(e)}`);
@@ -408,28 +499,48 @@ export const CampaignPlannerService = {
   
   bulkUpdateClientProducts: async (updates: { clientId: string, products: string[] }[]): Promise<number> => {
      let updated = 0;
+     const catalogConfig = await PortfolioCatalogService.getCatalogConfig();
+
      for (const update of updates) {
        if (!update.products || update.products.length === 0) continue;
-       
+
        const { data: client } = await supabase
          .from('clients')
-         .select('items')
+         .select('id, name, phone, items, equipment_models, customer_profiles, product_categories, portfolio_entries')
          .eq('id', update.clientId)
-         .single();
-         
+         .maybeSingle();
+
        if (!client) continue;
-       
-       const currentItems = client.items || [];
-       const newItems = Array.from(new Set([...currentItems, ...update.products]));
-       
-       if (newItems.length > currentItems.length) {
-         await supabase
-           .from('clients')
-           .update({ items: newItems })
-           .eq('id', update.clientId);
-         updated++;
-       }
+
+       const mergedEntries = mergePortfolioEntries(
+         (client as any).portfolio_entries,
+         update.products.map(product => ({
+           profile: '',
+           product_category: '',
+           equipment: product,
+           quantity: 1
+         }))
+       );
+
+       const normalizedSnapshot = normalizeClientPortfolioSnapshot({
+         ...(client as any),
+         portfolio_entries: mergedEntries
+       }, catalogConfig);
+
+       await supabase
+         .from('clients')
+         .update({
+           items: normalizedSnapshot.items,
+           equipment_models: normalizedSnapshot.equipment_models,
+           customer_profiles: normalizedSnapshot.customer_profiles,
+           product_categories: normalizedSnapshot.product_categories,
+           portfolio_entries: normalizedSnapshot.portfolio_entries
+         })
+         .eq('id', update.clientId);
+
+       updated++;
      }
+
      return updated;
-  }
+   }
 };

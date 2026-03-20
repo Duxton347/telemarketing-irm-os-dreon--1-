@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import { Database, FileSpreadsheet, Sparkles, Tag, Users } from 'lucide-react';
 import { SmartImportModal } from '../components/SmartImportModal';
+import { PortfolioCatalogManager } from '../components/PortfolioCatalogManager';
 import { ProductImport } from './ProductImport'; // Reuse existing component
-import { UserRole } from '../types';
+import { CustomerPortfolioImport } from './CustomerPortfolioImport';
 import { TagApprovalCard } from '../components/TagApprovalCard';
 import { dataService } from '../services/dataService';
 
 export const DataCenter: React.FC<{ user: any }> = ({ user }) => {
-    const [activeTab, setActiveTab] = useState<'SMART_IMPORT' | 'PRODUCTS' | 'TAGS'>('SMART_IMPORT');
+    const [activeTab, setActiveTab] = useState<'SMART_IMPORT' | 'PORTFOLIO' | 'CATALOG' | 'PRODUCTS' | 'TAGS'>('SMART_IMPORT');
     const [isSmartImportOpen, setIsSmartImportOpen] = useState(false);
     const [pendingTags, setPendingTags] = useState<any[]>([]);
 
@@ -45,6 +46,18 @@ export const DataCenter: React.FC<{ user: any }> = ({ user }) => {
                     <FileSpreadsheet size={16} className="inline mr-2" /> Importação Inteligente
                 </button>
                 <button
+                    onClick={() => setActiveTab('PORTFOLIO')}
+                    className={`pb-2 px-4 font-black uppercase text-[11px] tracking-widest transition-all border-b-2 ${activeTab === 'PORTFOLIO' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+                >
+                    <Sparkles size={16} className="inline mr-2" /> Perfil & Equipamentos
+                </button>
+                <button
+                    onClick={() => setActiveTab('CATALOG')}
+                    className={`pb-2 px-4 font-black uppercase text-[11px] tracking-widest transition-all border-b-2 ${activeTab === 'CATALOG' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
+                >
+                    <Database size={16} className="inline mr-2" /> Catalogo Tecnico
+                </button>
+                <button
                     onClick={() => setActiveTab('PRODUCTS')}
                     className={`pb-2 px-4 font-black uppercase text-[11px] tracking-widest transition-all border-b-2 ${activeTab === 'PRODUCTS' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}
                 >
@@ -80,6 +93,24 @@ export const DataCenter: React.FC<{ user: any }> = ({ user }) => {
                 {activeTab === 'PRODUCTS' && (
                     <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
                         <ProductImport />
+                    </div>
+                )}
+
+                {activeTab === 'CATALOG' && (
+                    <div className="bg-white p-8 rounded-3xl border shadow-sm space-y-6">
+                        <div>
+                            <h3 className="text-xl font-black text-slate-800 uppercase tracking-tighter">Catalogo Tecnico dos Clientes</h3>
+                            <p className="text-slate-500 font-medium mt-2">
+                                Controle categorias, produtos, aliases e aplique a classificacao na base inteira.
+                            </p>
+                        </div>
+                        <PortfolioCatalogManager />
+                    </div>
+                )}
+
+                {activeTab === 'PORTFOLIO' && (
+                    <div className="bg-white rounded-3xl border shadow-sm overflow-hidden">
+                        <CustomerPortfolioImport />
                     </div>
                 )}
 

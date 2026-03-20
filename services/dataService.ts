@@ -4,10 +4,20 @@ import {
   UserRole, CallType, ProtocolStatus, ProtocolEvent,
   OperatorEventType, OperatorEvent, Sale, SaleStatus, Visit,
   CallSchedule, CallScheduleWithClient, ScheduleStatus, WhatsAppTask, ProductivityMetrics,
-  UnifiedReportRow, Protocol, ClientTag, TagStatus, Quote
+  UnifiedReportRow, Protocol, ClientTag, TagStatus, Quote, ClientHistoryData, ClientHistorySummary
 } from '../types';
 import { TagDecisionEngine } from './tagDecisionEngine';
 import { SCORE_MAP, STAGE_CONFIG } from '../constants';
+import { extractCampaignInsightsFromResponses, extractClientInsightsFromResponses, questionMatchesContext, resolveStoredResponseForQuestion } from '../utils/questionnaireInsights';
+import {
+  collectPortfolioMetadata,
+  getClientEquipmentList,
+  getClientPortfolioEntries,
+  mergePortfolioEntries,
+  mergeUniquePortfolioValues
+} from '../utils/clientPortfolio';
+import { normalizePortfolioEntriesWithCatalog } from '../utils/portfolioCatalog';
+import { PortfolioCatalogService } from './portfolioCatalogService';
 
 const normalize = (str: string) =>
   str ? str.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, "") : "";
@@ -24,6 +34,813 @@ const mapCallTypeToDb = (type: string): string => {
   if (clean.includes('PROTOCOLO')) return 'suporte';
   if (clean.includes('REATIVACAO')) return 'pos-venda';
   return 'prospect';
+};
+
+const mapTaskTypeToDb = (type?: string): string | undefined => {
+  if (!type) return undefined;
+  return type === CallType.REATIVACAO ? 'POS_VENDA' : type;
+};
+
+const normalizeCallTypeToken = (value?: string | null) =>
+  String(value || '')
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+const mapStoredCallTypeToApp = (value?: string | null): CallType => {
+  switch (normalizeCallTypeToken(value)) {
+    case 'POS_VENDA':
+    case 'POSVENDA':
+    case 'ACOMPANHAMENTO':
+    case 'SUPORTE':
+    case 'COBRANCA':
+    case 'TENTATIVA':
+      return CallType.POS_VENDA;
+    case 'PROSPECCAO':
+    case 'PROSPECT':
+    case 'PROSPECTO':
+      return CallType.PROSPECCAO;
+    case 'VENDA':
+      return CallType.VENDA;
+    case 'CONFIRMACAO_PROTOCOLO':
+      return CallType.CONFIRMACAO_PROTOCOLO;
+    case 'REATIVACAO':
+      return CallType.REATIVACAO;
+    case 'WHATSAPP':
+      return CallType.WHATSAPP;
+    default:
+      return (value as CallType) || CallType.POS_VENDA;
+  }
+};
+
+const mapCallLogTypeToDb = (type?: string | null): string => {
+  const normalized = normalizeCallTypeToken(type);
+
+  switch (normalized) {
+    case 'WHATSAPP':
+      return 'WHATSAPP';
+    case 'CONFIRMACAO_PROTOCOLO':
+      return 'CONFIRMACAO_PROTOCOLO';
+    case 'PROSPECCAO':
+    case 'PROSPECT':
+    case 'PROSPECTO':
+      return 'PROSPECCAO';
+    case 'VENDA':
+      return 'VENDA';
+    case 'REATIVACAO':
+      return 'REATIVACAO';
+    case 'POS_VENDA':
+    case 'POSVENDA':
+    case 'ACOMPANHAMENTO':
+    case 'SUPORTE':
+    case 'COBRANCA':
+    case 'TENTATIVA':
+      return 'POS_VENDA';
+    default:
+      return normalized || 'POS_VENDA';
+  }
+};
+
+const expandCallTypeQueryValues = (callType?: CallType | 'ALL' | string) => {
+  if (!callType) return ['ALL'];
+
+  const raw = String(callType).trim();
+  const normalized = normalizeCallTypeToken(raw);
+  const values = new Set<string>([raw]);
+
+  if (normalized) values.add(normalized);
+  if (normalized === 'ALL') values.add('ALL');
+
+  switch (normalized) {
+    case 'POS_VENDA':
+      values.add('PÓS-VENDA');
+      values.add('PÓS_VENDA');
+      break;
+    case 'PROSPECCAO':
+      values.add('PROSPECÇÃO');
+      break;
+    case 'CONFIRMACAO_PROTOCOLO':
+      values.add('CONFIRMAÇÃO PROTOCOLO');
+      break;
+    case 'REATIVACAO':
+      values.add('REATIVAÇÃO');
+      break;
+  }
+
+  return Array.from(values);
+};
+
+const REPORT_METADATA_KEYS = new Set([
+  'target_product',
+  'offer_product',
+  'portfolio_scope',
+  'offer_interest_level',
+  'offer_blocker_reason',
+  'campaign_name',
+  'campanha_id',
+  'campanha_indicada_id',
+  'note'
+]);
+
+const isMeaningfulReportValue = (value: unknown) => {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+};
+
+const normalizeReportText = (value: unknown) =>
+  String(value || '')
+    .toLowerCase()
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+const isPostSaleRemarketingCallType = (value?: string | null) => {
+  switch (normalizeCallTypeToken(value)) {
+    case 'POS_VENDA':
+    case 'POSVENDA':
+    case 'REATIVACAO':
+    case 'VENDA':
+    case 'ACOMPANHAMENTO':
+    case 'SUPORTE':
+    case 'COBRANCA':
+    case 'TENTATIVA':
+      return true;
+    default:
+      return false;
+  }
+};
+
+const findQuestionByReportHints = (
+  questions: Question[],
+  callType: string | undefined,
+  proposito: string | null | undefined,
+  hints: string[]
+) =>
+  questions.find(question => {
+    if (!questionMatchesContext(question, callType, proposito)) return false;
+    const haystack = `${question.text} ${question.campo_resposta || ''} ${question.id}`.toLowerCase();
+    return hints.some(hint => haystack.includes(hint.toLowerCase()));
+  });
+
+const normalizeUnifiedRating = (value: number | null) => {
+  if (value === null || Number.isNaN(value)) return null;
+  if (value >= 0 && value <= 10) return Math.max(0, Math.min(5, Math.round(value / 2)));
+  if (value >= 1 && value <= 5) return Math.round(value);
+  return null;
+};
+
+const extractRatingFromValue = (value: unknown) => {
+  if (!isMeaningfulReportValue(value)) return null;
+
+  if (typeof value === 'number') {
+    return normalizeUnifiedRating(value);
+  }
+
+  const text = String(value).trim();
+  const numeric = Number(text.replace(',', '.'));
+  if (!Number.isNaN(numeric)) {
+    return normalizeUnifiedRating(numeric);
+  }
+
+  const normalized = normalizeReportText(text);
+  if (normalized.includes('excelente') || normalized.includes('otimo')) return 5;
+  if (normalized === 'bom' || normalized.includes('bom')) return 4;
+  if (normalized.includes('regular')) return 3;
+  if (normalized.includes('ruim')) return 2;
+  if (normalized.includes('pessimo')) return 1;
+
+  return null;
+};
+
+const hasResolvedQuestionnaireResponses = (
+  responses: Record<string, any> = {},
+  questions: Question[] = [],
+  callType?: string,
+  proposito?: string | null
+) => {
+  for (const question of questions) {
+    if (!questionMatchesContext(question, callType, proposito)) continue;
+    const value = resolveStoredResponseForQuestion(responses, question);
+    if (isMeaningfulReportValue(value)) return true;
+  }
+
+  return Object.entries(responses).some(([key, value]) => {
+    if (key.endsWith('_note')) return false;
+    if (REPORT_METADATA_KEYS.has(key)) return false;
+    return isMeaningfulReportValue(value);
+  });
+};
+
+const extractUnifiedReportRating = (
+  responses: Record<string, any> = {},
+  questions: Question[] = [],
+  callType?: string,
+  proposito?: string | null
+) => {
+  const ratingQuestion = findQuestionByReportHints(
+    questions,
+    callType,
+    proposito,
+    ['nps', 'nota', 'avali', 'satisfa']
+  );
+
+  if (ratingQuestion) {
+    const resolved = resolveStoredResponseForQuestion(responses, ratingQuestion);
+    const rating = extractRatingFromValue(resolved);
+    if (rating !== null) return rating;
+  }
+
+  for (const [key, value] of Object.entries(responses)) {
+    if (key.endsWith('_note')) continue;
+    const normalizedKey = normalizeReportText(key);
+    if (!['nps', 'nota', 'avali', 'satisfa'].some(hint => normalizedKey.includes(hint))) continue;
+    const rating = extractRatingFromValue(value);
+    if (rating !== null) return rating;
+  }
+
+  return null;
+};
+
+const sanitizeOfferValue = (value?: unknown) => {
+  if (!isMeaningfulReportValue(value)) return undefined;
+  const text = String(value).trim();
+  const normalized = normalizeReportText(text);
+  if (!normalized || normalized === 'sim' || normalized === 'nao' || normalized === 'não') {
+    return undefined;
+  }
+  return text;
+};
+
+const extractUnifiedReportOffer = (
+  responses: Record<string, any> = {},
+  questions: Question[] = [],
+  callType?: string,
+  proposito?: string | null
+) => {
+  const campaignInsights = extractCampaignInsightsFromResponses(responses, questions, callType, proposito);
+  const candidates = [
+    campaignInsights.enrichedResponses.upsell_offer,
+    campaignInsights.enrichedResponses.offer_product,
+    campaignInsights.enrichedResponses.target_product,
+    campaignInsights.enrichedResponses.interest_product
+  ];
+
+  for (const candidate of candidates) {
+    const sanitized = sanitizeOfferValue(candidate);
+    if (sanitized) return sanitized;
+  }
+
+  return undefined;
+};
+
+const buildUnifiedReportFallback = async (
+  operatorId?: string,
+  statusFilter?: string
+): Promise<UnifiedReportRow[]> => {
+  let clientsQuery = supabase.from('clients').select('id, name, phone, status');
+  let callsQuery = supabase
+    .from('call_logs')
+    .select('id, client_id, operator_id, start_time, call_type, responses, proposito');
+  let tasksQuery = supabase
+    .from('tasks')
+    .select('id, client_id, assigned_to, type, status, skip_reason, updated_at, created_at');
+  let whatsappQuery = supabase
+    .from('whatsapp_tasks')
+    .select('id, client_id, assigned_to, type, status, skip_reason, created_at, completed_at, responses');
+  let salesQuery = supabase
+    .from('sales')
+    .select('id, client_id, operator_id, registered_at, status');
+
+  if (statusFilter) {
+    clientsQuery = clientsQuery.eq('status', statusFilter);
+  }
+
+  if (operatorId) {
+    callsQuery = callsQuery.eq('operator_id', operatorId);
+    tasksQuery = tasksQuery.eq('assigned_to', operatorId);
+    whatsappQuery = whatsappQuery.eq('assigned_to', operatorId);
+    salesQuery = salesQuery.eq('operator_id', operatorId);
+  }
+
+  const [
+    questions,
+    clientsResult,
+    callsResult,
+    tasksResult,
+    whatsappResult,
+    salesResult
+  ] = await Promise.all([
+    loadActiveQuestions(),
+    clientsQuery,
+    callsQuery,
+    tasksQuery,
+    whatsappQuery,
+    salesQuery
+  ]);
+
+  if (clientsResult.error) throw clientsResult.error;
+  if (callsResult.error) throw callsResult.error;
+  if (tasksResult.error) throw tasksResult.error;
+  if (whatsappResult.error) throw whatsappResult.error;
+  if (salesResult.error) throw salesResult.error;
+
+  const clients = clientsResult.data || [];
+  const relevantCalls = (callsResult.data || []).filter(call => isPostSaleRemarketingCallType(call.call_type));
+  const relevantTasks = (tasksResult.data || []).filter(task => isPostSaleRemarketingCallType(task.type));
+  const whatsappTasks = whatsappResult.data || [];
+  const validSales = (salesResult.data || []).filter(sale => sale.status !== 'CANCELADO');
+
+  const clientMap = new Map(clients.map(client => [client.id, client]));
+  const clientIds = new Set<string>();
+
+  clients.forEach(client => {
+    if (client.status !== 'LEAD') {
+      clientIds.add(client.id);
+    }
+  });
+  relevantCalls.forEach(call => {
+    if (call.client_id) clientIds.add(call.client_id);
+  });
+  relevantTasks.forEach(task => {
+    if (task.client_id) clientIds.add(task.client_id);
+  });
+  whatsappTasks.forEach(task => {
+    if (task.client_id) clientIds.add(task.client_id);
+  });
+  validSales.forEach(sale => {
+    if (sale.client_id) clientIds.add(sale.client_id);
+  });
+
+  const rows = Array.from(clientIds).map(clientId => {
+    const client = clientMap.get(clientId);
+    const clientCalls = relevantCalls.filter(call => call.client_id === clientId);
+    const clientSkippedTasks = relevantTasks.filter(task => task.client_id === clientId && task.status === 'skipped');
+    const clientWhatsapp = whatsappTasks.filter(task => task.client_id === clientId && (task.status === 'completed' || task.status === 'skipped'));
+    const clientSales = validSales.filter(sale => sale.client_id === clientId);
+
+    const events: Array<{
+      timestamp?: string;
+      outcome: string;
+      responseStatus: 'Respondeu' | 'Sem Resposta';
+      operatorId?: string;
+      channel: string;
+      rating?: number | null;
+      upsellOffer?: string;
+      skipReason?: string;
+    }> = [];
+
+    clientCalls.forEach(call => {
+      events.push({
+        timestamp: call.start_time,
+        outcome: String(mapStoredCallTypeToApp(call.call_type) || 'Ligação'),
+        responseStatus: hasResolvedQuestionnaireResponses(call.responses || {}, questions, call.call_type, call.proposito)
+          ? 'Respondeu'
+          : 'Sem Resposta',
+        operatorId: call.operator_id,
+        channel: 'Ligação',
+        rating: extractUnifiedReportRating(call.responses || {}, questions, call.call_type, call.proposito),
+        upsellOffer: extractUnifiedReportOffer(call.responses || {}, questions, call.call_type, call.proposito)
+      });
+    });
+
+    clientSkippedTasks.forEach(task => {
+      events.push({
+        timestamp: task.updated_at || task.created_at,
+        outcome: String(mapStoredCallTypeToApp(task.type) || 'Ligação'),
+        responseStatus: 'Sem Resposta',
+        operatorId: task.assigned_to,
+        channel: 'Ligação',
+        skipReason: task.skip_reason || undefined
+      });
+    });
+
+    clientWhatsapp.forEach(task => {
+      events.push({
+        timestamp: task.completed_at || task.created_at,
+        outcome: 'WhatsApp',
+        responseStatus: task.status === 'completed' && hasResolvedQuestionnaireResponses(task.responses || {}, questions, CallType.WHATSAPP)
+          ? 'Respondeu'
+          : 'Sem Resposta',
+        operatorId: task.assigned_to,
+        channel: 'WhatsApp',
+        rating: extractUnifiedReportRating(task.responses || {}, questions, CallType.WHATSAPP),
+        upsellOffer: extractUnifiedReportOffer(task.responses || {}, questions, CallType.WHATSAPP),
+        skipReason: task.status === 'skipped' ? task.skip_reason || undefined : undefined
+      });
+    });
+
+    events.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+
+    const lastEvent = events[0];
+    const lastRatedEvent = events.find(event => event.rating !== null && event.rating !== undefined);
+    const lastOfferEvent = events.find(event => event.upsellOffer);
+    const hasSale = clientSales.length > 0;
+
+    return {
+      clientId,
+      clientName: client?.name || 'Cliente Desconhecido',
+      clientPhone: client?.phone || '',
+      clientStatus: client?.status || 'CLIENT',
+      attemptsCount: events.length,
+      lastContactAt: lastEvent?.timestamp,
+      lastOutcome: lastEvent?.outcome,
+      lastOperatorId: lastEvent?.operatorId,
+      lastChannel: lastEvent?.channel,
+      lastContactGenre: lastEvent?.channel,
+      lastRating: lastRatedEvent?.rating ?? undefined,
+      upsellOffer: lastOfferEvent?.upsellOffer,
+      upsellStatus: lastOfferEvent?.upsellOffer ? (hasSale ? 'DONE' : 'OPEN') : undefined,
+      responseStatus: events.length === 0 ? 'Não Contatado' : (lastEvent?.responseStatus || 'Sem Resposta'),
+      conversionStatus: hasSale ? 'Gerou Venda' : 'Sem Venda',
+      lastSkipReason: lastEvent?.responseStatus === 'Sem Resposta' ? lastEvent?.skipReason : undefined
+    } as UnifiedReportRow;
+  });
+
+  return rows.sort((a, b) => {
+    const dateDiff = new Date(b.lastContactAt || 0).getTime() - new Date(a.lastContactAt || 0).getTime();
+    if (dateDiff !== 0) return dateDiff;
+    return a.clientName.localeCompare(b.clientName);
+  });
+};
+
+const mapQuestionRecord = (q: any): Question => ({
+  id: q.id,
+  text: q.text,
+  options: q.options || [],
+  type: q.type === 'ALL' ? 'ALL' : mapStoredCallTypeToApp(q.type),
+  order: q.order_index,
+  stageId: q.stage_id,
+  proposito: q.proposito,
+  campo_resposta: q.campo_resposta,
+  tipo_input: q.tipo_input,
+  obrigatoria: q.obrigatoria,
+  ativo: q.ativo
+});
+
+const loadActiveQuestions = async (): Promise<Question[]> => {
+  const { data, error } = await supabase
+    .from('questions')
+    .select('*')
+    .eq('ativo', true)
+    .order('order_index', { ascending: true });
+
+  if (error) {
+    console.error('Error loading active questions', error);
+    return [];
+  }
+
+  return (data || []).map(mapQuestionRecord);
+};
+
+const normalizeClientTagValue = (value?: string) => {
+  if (!value) return undefined;
+  return normalize(value).toUpperCase().replace(/\s+/g, '_');
+};
+
+const NEGATIVE_TAG_MOTIVOS = new Set([
+  'ATENDIMENTO_RUIM',
+  'EXECUCAO_RUIM',
+  'ATRASO',
+  'PRODUTO_DEFEITO',
+  'INSATISFEITO'
+]);
+
+const isNegativeTagSignal = (categoria?: string, motivo?: string) =>
+  categoria === 'RECUPERACAO' ||
+  categoria === 'CLIENTE_PERDIDO' ||
+  NEGATIVE_TAG_MOTIVOS.has(motivo || '');
+
+const normalizeResponseValue = (value: unknown) =>
+  typeof value === 'string' ? normalize(value) : '';
+
+const hasNegativeCallSignal = (responses?: Record<string, any>) => {
+  if (!responses) return false;
+
+  const entries = Object.entries(responses);
+  const values = entries.map(([, value]) => normalizeResponseValue(value));
+  const hasValue = (...candidates: string[]) => values.some(value => candidates.some(candidate => value.includes(normalize(candidate))));
+
+  const numericDelay = Number(String(responses.prazo_dias_atraso || '').replace(/\D/g, ''));
+
+  if (normalizeResponseValue(responses.motivo_insatisfacao_principal)) return true;
+  if (normalizeResponseValue(responses.produto_problema_especifico)) return true;
+  if (normalizeResponseValue(responses.reclamacao_instalacao_ocorrencia)) return true;
+  if (hasValue('ruim', 'precisa melhorar', 'demorou pra responder', 'defeito', 'atraso', 'negociacao', 'garantia', 'venda incompleta')) return true;
+  if (responses.produto_troca_necessaria === 'Sim') return true;
+  if (responses.atraso_entrega === 'Sim') return true;
+  if (responses.prejuizo_atraso === 'Sim') return true;
+  if (numericDelay > 0) return true;
+  return false;
+};
+
+const hasPositiveCallSignal = (responses?: Record<string, any>) => {
+  if (!responses) return false;
+  const positiveFields = [
+    responses.protocolo_resolvido,
+    responses.satisfacao_resolucao,
+    responses.servico_concluido
+  ].map(normalizeResponseValue);
+
+  return positiveFields.some(value =>
+    value === 'sim' ||
+    value === 'bom' ||
+    value === 'excelente' ||
+    value === 'otimo'
+  );
+};
+
+const enrichClientInsightsFromCallLogs = (callLogs: any[] = [], questions: Question[] = []) => {
+  const derivedProfile: Partial<Client> = {};
+
+  const normalizedLogs = callLogs.map(log => {
+    const insights = extractClientInsightsFromResponses(
+      log.responses || {},
+      questions,
+      log.call_type,
+      log.proposito
+    );
+
+    if (!derivedProfile.email && insights.email) derivedProfile.email = insights.email;
+    if (!derivedProfile.interest_product && insights.interestProduct) {
+      derivedProfile.interest_product = insights.interestProduct;
+    }
+    if (!derivedProfile.buyer_name && insights.buyerName) derivedProfile.buyer_name = insights.buyerName;
+    if (!derivedProfile.responsible_phone && insights.responsiblePhone) {
+      derivedProfile.responsible_phone = insights.responsiblePhone;
+    }
+
+    return {
+      ...log,
+      responses: insights.enrichedResponses
+    };
+  });
+
+  return {
+    normalizedLogs,
+    derivedProfile
+  };
+};
+
+const buildDerivedClientTags = (client: any, callLogs: any[] = [], derivedProfile: Partial<Client> = {}) => {
+  const nextTags = new Set<string>(Array.isArray(client?.tags) ? client.tags : []);
+
+  if (client?.status === 'CLIENT') {
+    nextTags.add('JA_CLIENTE');
+  }
+
+  const interestProduct = derivedProfile.interest_product || client?.interest_product;
+  if (interestProduct) {
+    const interestTag = normalizeClientTagValue(interestProduct);
+    if (interestTag) nextTags.add(`INTERESSE_${interestTag}`);
+  }
+
+  const items = getClientEquipmentList(client);
+  items
+    .map((item: string) => normalizeClientTagValue(item))
+    .filter(Boolean)
+    .forEach((itemTag: string) => nextTags.add(`TEM_${itemTag}`));
+
+  if (client?.satisfaction === 'low') {
+    nextTags.add('CLIENTE_INSATISFEITO');
+  }
+
+  const hasNegativeSignal = callLogs.some(log => hasNegativeCallSignal(log.responses));
+  const hasPositiveSignal = callLogs.some(log => hasPositiveCallSignal(log.responses));
+
+  if (hasNegativeSignal) nextTags.add('CLIENTE_INSATISFEITO');
+  if (hasPositiveSignal) nextTags.add('CLIENTE_SATISFEITO');
+
+  return Array.from(nextTags);
+};
+
+const syncDerivedTagsForClient = async (clientId: string): Promise<boolean> => {
+  const { data: client, error: clientError } = await supabase
+    .from('clients')
+    .select('id, tags, items, equipment_models, interest_product, status, satisfaction, email, buyer_name, responsible_phone')
+    .eq('id', clientId)
+    .maybeSingle();
+
+  if (clientError || !client) {
+    if (clientError) console.error('Error loading client for derived tag sync', clientError);
+    return false;
+  }
+
+  const [questions, logsResult] = await Promise.all([
+    loadActiveQuestions(),
+    supabase
+      .from('call_logs')
+      .select('responses, call_type, start_time, proposito')
+      .eq('client_id', clientId)
+      .order('start_time', { ascending: false })
+      .limit(50)
+  ]);
+
+  const { data: callLogs, error: logsError } = logsResult;
+
+  if (logsError) {
+    console.error('Error loading call logs for derived tag sync', logsError);
+    return false;
+  }
+
+  const { normalizedLogs, derivedProfile } = enrichClientInsightsFromCallLogs(callLogs || [], questions);
+  const nextTags = buildDerivedClientTags(client, normalizedLogs, derivedProfile);
+  const currentTags = Array.isArray(client.tags) ? client.tags : [];
+  const sortedCurrent = [...currentTags].sort();
+  const sortedNext = [...nextTags].sort();
+
+  const payload: any = {};
+
+  if (!client.email && derivedProfile.email) payload.email = derivedProfile.email;
+  if (!client.interest_product && derivedProfile.interest_product) {
+    payload.interest_product = derivedProfile.interest_product;
+  }
+  if (!client.buyer_name && derivedProfile.buyer_name) payload.buyer_name = derivedProfile.buyer_name;
+  if (!client.responsible_phone && derivedProfile.responsible_phone) {
+    payload.responsible_phone = derivedProfile.responsible_phone;
+  }
+
+  if (JSON.stringify(sortedCurrent) !== JSON.stringify(sortedNext)) {
+    payload.tags = nextTags;
+  }
+
+  if (Object.keys(payload).length === 0) {
+    return false;
+  }
+
+  const { error: updateError } = await supabase
+    .from('clients')
+    .update(payload)
+    .eq('id', clientId);
+
+  if (updateError) {
+    console.error('Error updating derived client tags', updateError);
+    return false;
+  }
+
+  return true;
+};
+
+const extractCampaignContextFromFilters = (filters?: any) => {
+  const safeFilters = filters || {};
+  const targetProduct =
+    safeFilters.produtoAlvo ||
+    safeFilters.targetProduct ||
+    (Array.isArray(safeFilters.equipamentos) && safeFilters.equipamentos.length === 1 ? safeFilters.equipamentos[0] : undefined);
+
+  const offerProduct =
+    safeFilters.ofertaAlvo ||
+    safeFilters.offerProduct ||
+    (Array.isArray(safeFilters.interesses) && safeFilters.interesses.length === 1 ? safeFilters.interesses[0] : undefined);
+
+  return {
+    targetProduct,
+    offerProduct,
+    portfolioScope: safeFilters.escopoLinha || safeFilters.portfolioScope || undefined
+  };
+};
+
+const loadCampaignContextMap = async (campaignIds: string[]) => {
+  const ids = Array.from(new Set(campaignIds.filter(Boolean)));
+  if (ids.length === 0) return new Map<string, any>();
+
+  const { data, error } = await supabase
+    .from('campanhas')
+    .select('id, nome, proposito_alvo, filters_usados')
+    .in('id', ids);
+
+  if (error) {
+    console.error('Error loading campaign context map', error);
+    return new Map<string, any>();
+  }
+
+  return new Map(
+    (data || []).map((campaign: any) => [
+      campaign.id,
+      {
+        campaignName: campaign.nome,
+        proposito: campaign.proposito_alvo,
+        ...extractCampaignContextFromFilters(campaign.filters_usados)
+      }
+    ])
+  );
+};
+
+const buildHistoryBreakdown = (entries: Array<{ key?: string; label?: string }>) => {
+  const totals = new Map<string, { key: string; label: string; total: number }>();
+
+  for (const entry of entries) {
+    if (!entry.key || !entry.label) continue;
+    const current = totals.get(entry.key) || { key: entry.key, label: entry.label, total: 0 };
+    current.total += 1;
+    totals.set(entry.key, current);
+  }
+
+  return Array.from(totals.values()).sort((a, b) => b.total - a.total || a.label.localeCompare(b.label));
+};
+
+const buildClientHistorySummary = (calls: CallRecord[], protocols: Protocol[]): ClientHistorySummary => ({
+  totalCalls: calls.length,
+  totalProtocols: protocols.length,
+  openProtocols: protocols.filter(proto => proto.status !== ProtocolStatus.FECHADO).length,
+  callCountsByType: buildHistoryBreakdown(calls.map(call => ({ key: call.type, label: call.type }))),
+  callCountsByPurpose: buildHistoryBreakdown(calls.map(call => ({ key: call.proposito, label: call.proposito }))),
+  callCountsByTargetProduct: buildHistoryBreakdown(
+    calls.map(call => ({
+      key: call.targetProduct || call.offerProduct,
+      label: call.targetProduct || call.offerProduct
+    }))
+  )
+});
+
+const mapClientRecord = (record: any): Client => {
+  const portfolioEntries = getClientPortfolioEntries(record);
+  const portfolioMetadata = collectPortfolioMetadata(portfolioEntries);
+  const equipmentModels = mergeUniquePortfolioValues(record?.equipment_models, record?.items, portfolioMetadata.equipment_models);
+
+  return {
+    id: record.id,
+    name: record.name || 'Sem Nome',
+    phone: record.phone || '',
+    address: record.address || '',
+    items: equipmentModels,
+    offers: record.offers || [],
+    invalid: record.invalid,
+    acceptance: (record.acceptance as any) || 'medium',
+    satisfaction: (record.satisfaction as any) || 'medium',
+    origin: record.origin,
+    email: record.email,
+    website: record.website,
+    status: record.status || 'CLIENT',
+    responsible_phone: record.responsible_phone,
+    buyer_name: record.buyer_name,
+    interest_product: record.interest_product,
+    preferred_channel: record.preferred_channel,
+    funnel_status: record.funnel_status,
+    external_id: record.external_id,
+    phone_secondary: record.phone_secondary,
+    street: record.street,
+    neighborhood: record.neighborhood,
+    city: record.city,
+    state: record.state,
+    zip_code: record.zip_code,
+    last_purchase_date: record.last_purchase_date,
+    customer_profiles: mergeUniquePortfolioValues(record?.customer_profiles, portfolioMetadata.customer_profiles),
+    product_categories: mergeUniquePortfolioValues(record?.product_categories, portfolioMetadata.product_categories),
+    equipment_models: equipmentModels,
+    portfolio_entries: portfolioEntries,
+    tags: record.tags || [],
+    campanha_atual_id: record.campanha_atual_id
+  };
+};
+
+const syncClientTagToClientProfile = async (tagId: string) => {
+  const { data: tag, error: tagError } = await supabase
+    .from('client_tags')
+    .select('client_id, categoria, motivo')
+    .eq('id', tagId)
+    .maybeSingle();
+
+  if (tagError || !tag?.client_id) {
+    if (tagError) console.error('Error loading tag for client sync', tagError);
+    return;
+  }
+
+  const { data: client, error: clientError } = await supabase
+    .from('clients')
+    .select('tags')
+    .eq('id', tag.client_id)
+    .maybeSingle();
+
+  if (clientError) {
+    console.error('Error loading client tags for sync', clientError);
+    return;
+  }
+
+  const currentTags = Array.isArray(client?.tags) ? client.tags : [];
+  const nextTags = new Set<string>(currentTags);
+
+  const categoria = normalizeClientTagValue(tag.categoria);
+  const motivo = normalizeClientTagValue(tag.motivo);
+
+  if (categoria) nextTags.add(categoria);
+  if (motivo) nextTags.add(motivo);
+  if (isNegativeTagSignal(tag.categoria, tag.motivo)) nextTags.add('CLIENTE_INSATISFEITO');
+  if (tag.categoria === 'CONFIRMACAO' && tag.motivo === 'SATISFEITO') nextTags.add('CLIENTE_SATISFEITO');
+
+  if (nextTags.size === currentTags.length) return;
+
+  const { error: updateError } = await supabase
+    .from('clients')
+    .update({ tags: Array.from(nextTags) })
+    .eq('id', tag.client_id);
+
+  if (updateError) {
+    console.error('Error syncing approved tag to client profile', updateError);
+  }
 };
 
 const updateClientFunnelStatus = async (clientId: string, newStatus: 'CONTACT_ATTEMPT' | 'CONTACT_MADE') => {
@@ -147,7 +964,7 @@ export const dataService = {
       assignedOperatorId: s.assigned_operator_id,
       approvedByAdminId: s.approved_by_admin_id,
       scheduledFor: s.scheduled_for,
-      callType: s.call_type as CallType,
+      callType: mapStoredCallTypeToApp(s.call_type),
       status: s.status as ScheduleStatus,
       scheduleReason: s.schedule_reason,
       approvalReason: s.approval_reason,
@@ -304,28 +1121,7 @@ export const dataService = {
 
   // --- MÉTODOS EXISTENTES ---
   getResponseValue: (responses: any, question: Question) => {
-    if (!responses) return undefined;
-    
-    // 1. Try DB mapped field (Dreon Skill v3 logic)
-    if (question.campo_resposta && responses[question.campo_resposta] !== undefined) {
-      return responses[question.campo_resposta];
-    }
-
-    // 2. Try exact UUID id
-    if (responses[question.id] !== undefined) return responses[question.id];
-    
-    // 3. Try exact question text normalized
-    const questionTextNorm = normalize(question.text);
-    const keys = Object.keys(responses);
-    for (const key of keys) {
-      if (normalize(key) === questionTextNorm) return responses[key];
-    }
-    
-    // 4. Try legacy PV format
-    const legacyKey = `pv${question.order} `;
-    if (responses[legacyKey] !== undefined) return responses[legacyKey];
-    
-    return undefined;
+    return resolveStoredResponseForQuestion(responses, question);
   },
 
   getSystemSetting: async (key: string): Promise<string> => {
@@ -406,7 +1202,7 @@ export const dataService = {
         .order('order_index', { ascending: true });
         
       if (callType) {
-        query = query.in('type', [callType, 'ALL']);
+        query = query.in('type', expandCallTypeQueryValues(callType));
       }
       
       if (proposito) {
@@ -416,24 +1212,23 @@ export const dataService = {
 
       const { data, error } = await query;
       if (error) throw error;
-      return (data || []).map(q => ({
-        id: q.id,
-        text: q.text,
-        options: q.options || [],
-        type: q.type as any,
-        order: q.order_index,
-        stageId: q.stage_id,
-        proposito: q.proposito,
-        campo_resposta: q.campo_resposta,
-        tipo_input: q.tipo_input,
-        obrigatoria: q.obrigatoria,
-        ativo: q.ativo
-      }));
+      return (data || []).map(mapQuestionRecord);
     } catch (e) { return []; }
   },
 
   saveQuestion: async (q: Partial<Question>): Promise<void> => {
-    const payload = { text: q.text, options: q.options, type: q.type, order_index: q.order, stage_id: q.stageId };
+    const payload = {
+      text: q.text,
+      options: q.options,
+      type: q.type,
+      order_index: q.order,
+      stage_id: q.stageId,
+      proposito: q.proposito || null,
+      campo_resposta: q.campo_resposta || null,
+      tipo_input: q.tipo_input || null,
+      obrigatoria: q.obrigatoria ?? false,
+      ativo: q.ativo ?? true
+    };
     if (q.id) await supabase.from('questions').update(payload).eq('id', q.id);
     else await supabase.from('questions').insert(payload);
   },
@@ -450,15 +1245,17 @@ export const dataService = {
     }
     const { data: tasksData, error: tasksError } = await tasksQuery.order('created_at', { ascending: true });
     if (tasksError) throw tasksError;
+    const campaignContextMap = await loadCampaignContextMap((tasksData || []).map((task: any) => task.campanha_id).filter(Boolean));
 
     const legacyTasks: Task[] = (tasksData || [])
       .filter(t => t.client_id) // Only require a valid client_id, don't filter by join result
       .map(t => {
         const clientObj = Array.isArray(t.clients) ? t.clients[0] : t.clients;
+        const campaignContext = campaignContextMap.get(t.campanha_id) || {};
         // Ensure that tasks dispatched with a specific call type (e.g., from Campaign Planner) retain it,
         // unless it's explicitly a reativation logic condition.
         // We will prefer the explicitly assigned task type, falling back to logic based on client status.
-        const taskType = t.type ? (t.type as CallType) : (clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : CallType.POS_VENDA);
+        const taskType = t.type ? mapStoredCallTypeToApp(t.type) : (clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : CallType.POS_VENDA);
 
         return {
           id: t.id,
@@ -474,16 +1271,21 @@ export const dataService = {
           approvalStatus: t.approval_status as any,
           scheduledFor: t.scheduled_for,
           scheduleReason: t.schedule_reason,
+          proposito: t.proposito || campaignContext.proposito,
+          campanha_id: t.campanha_id,
+          campaignName: campaignContext.campaignName,
+          targetProduct: campaignContext.targetProduct,
+          offerProduct: campaignContext.offerProduct,
+          portfolioScope: campaignContext.portfolioScope,
           createdAt: t.created_at,
           updatedAt: t.updated_at
         };
       });
 
-    // 2. Fetch Approved Schedules (where scheduled_for <= NOW)
+    // 2. Fetch Approved Schedules
     let schedQuery = supabase.from('call_schedules')
-      .select('*, clients(name, phone)')
-      .eq('status', 'APROVADO')
-      .lte('scheduled_for', new Date().toISOString());
+      .select('*, clients(*)')
+      .eq('status', 'APROVADO');
 
     if (operatorId) {
       schedQuery = schedQuery.eq('assigned_operator_id', operatorId);
@@ -498,11 +1300,12 @@ export const dataService = {
         clientId: s.customer_id || '', // Task expects string
         clientName: clientObj?.name || s.clients?.name || 'Cliente Agendado',
         clientPhone: clientObj?.phone || s.clients?.phone,
-        clients: s.clients, // Pass full client object just in case
-        type: clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : (s.call_type as CallType),
+        clients: clientObj || null,
+        type: clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : mapStoredCallTypeToApp(s.call_type),
         deadline: s.scheduled_for, // Use scheduled time as deadline/display time
         assignedTo: s.assigned_operator_id,
         status: 'pending', // Active in queue
+        scheduledFor: s.scheduled_for,
         scheduleReason: s.schedule_reason,
         originCallId: s.origin_call_id,
         approvalStatus: 'APPROVED',
@@ -514,15 +1317,17 @@ export const dataService = {
     // 3. Merge and De-duplicate: Prioritize Schedules
     const combined = [...scheduledTasks, ...legacyTasks];
     const uniqueTasks: Task[] = [];
-    const seenClients = new Set<string>();
+    const seenPendingKeys = new Set<string>();
 
     for (const task of combined) {
-      if (!task.clientId) {
+      if (task.status !== 'pending' || !task.clientId) {
         uniqueTasks.push(task);
         continue;
       }
-      if (!seenClients.has(task.clientId)) {
-        seenClients.add(task.clientId);
+
+      const dedupeKey = `${task.clientId}::${task.assignedTo || 'unassigned'}::${task.type || 'unknown'}`;
+      if (!seenPendingKeys.has(dedupeKey)) {
+        seenPendingKeys.add(dedupeKey);
         uniqueTasks.push(task);
       }
     }
@@ -540,7 +1345,9 @@ export const dataService = {
       assigned_to: task.assignedTo,
       status: task.status || 'pending',
       scheduled_for: task.scheduledFor,
-      schedule_reason: task.scheduleReason
+      schedule_reason: task.scheduleReason,
+      proposito: task.proposito,
+      campanha_id: task.campanha_id
     });
     if (error) throw error;
   },
@@ -548,35 +1355,47 @@ export const dataService = {
   updateTask: async (taskId: string, updates: Partial<Task>): Promise<void> => {
     const payload: any = {};
     if (updates.status) payload.status = updates.status;
-    if (updates.skipReason) payload.skip_reason = updates.skipReason;
-    if (updates.scheduledFor) payload.scheduled_for = updates.scheduledFor;
-    if (updates.scheduleReason) payload.schedule_reason = updates.scheduleReason;
-    if (updates.deadline) payload.deadline = updates.deadline;
+    if (updates.skipReason !== undefined) payload.skip_reason = updates.skipReason;
+    if (updates.scheduledFor !== undefined) payload.scheduled_for = updates.scheduledFor;
+    if (updates.scheduleReason !== undefined) payload.schedule_reason = updates.scheduleReason;
+    if (updates.deadline !== undefined) payload.deadline = updates.deadline;
+    if (updates.assignedTo !== undefined) payload.assigned_to = updates.assignedTo;
+    if (updates.type !== undefined) payload.type = mapTaskTypeToDb(updates.type);
+    if (updates.approvalStatus !== undefined) payload.approval_status = updates.approvalStatus;
+    payload.updated_at = new Date().toISOString();
     
     // Attempt update on legacy tasks
     const { data: updatedTasks, error: tError } = await supabase.from('tasks').update(payload).eq('id', taskId).select('id');
+    if (tError) throw tError;
     const count = updatedTasks?.length || 0;
     
     // If not found in tasks, try call_schedules
-    if (!tError && (count === 0)) {
+    if (count === 0) {
        const schedulePayload: any = {};
+       if (updates.status === 'pending') schedulePayload.status = 'APROVADO';
        if (updates.status === 'completed') schedulePayload.status = 'CONCLUIDO';
-       if (updates.status === 'skipped') schedulePayload.status = 'CANCELADO'; // or handled via skip logic
-       if (updates.skipReason) schedulePayload.skip_reason = updates.skipReason;
+       if (updates.status === 'skipped') schedulePayload.status = 'CANCELADO';
+       if (updates.skipReason !== undefined) schedulePayload.skip_reason = updates.skipReason;
+       if (updates.scheduledFor !== undefined) schedulePayload.scheduled_for = updates.scheduledFor;
+       if (updates.scheduleReason !== undefined) schedulePayload.schedule_reason = updates.scheduleReason;
+       if (updates.assignedTo !== undefined) schedulePayload.assigned_operator_id = updates.assignedTo;
+       if (updates.type !== undefined) schedulePayload.call_type = mapTaskTypeToDb(updates.type);
+       schedulePayload.updated_at = new Date().toISOString();
        
        if (Object.keys(schedulePayload).length > 0) {
-         await supabase.from('call_schedules').update(schedulePayload).eq('id', taskId);
+         const { error: schedError } = await supabase.from('call_schedules').update(schedulePayload).eq('id', taskId);
+         if (schedError) throw schedError;
        }
     }
 
     // Trigger funnel update
     if (updates.status === 'skipped' || updates.status === 'completed') {
-      const { data: task } = await supabase.from('tasks').select('client_id').eq('id', taskId).single();
+      const { data: task } = await supabase.from('tasks').select('client_id').eq('id', taskId).maybeSingle();
       const clientId = task?.client_id;
       
       // Fallback to call_schedules if not in tasks
       if (!clientId) {
-        const { data: sched } = await supabase.from('call_schedules').select('customer_id').eq('id', taskId).single();
+        const { data: sched } = await supabase.from('call_schedules').select('customer_id').eq('id', taskId).maybeSingle();
         if (sched?.customer_id) {
           await updateClientFunnelStatus(sched.customer_id, updates.status === 'skipped' ? 'CONTACT_ATTEMPT' : 'CONTACT_MADE');
         }
@@ -823,7 +1642,10 @@ export const dataService = {
 
     const { data, error } = await query;
     if (error) throw error;
-    return (data || []).map(c => ({
+    const campaignContextMap = await loadCampaignContextMap((data || []).map((call: any) => call.campanha_id).filter(Boolean));
+    return (data || []).map(c => {
+      const campaignInsights = extractCampaignInsightsFromResponses(c.responses || {});
+      return {
       id: c.id,
       taskId: c.task_id,
       operatorId: c.operator_id,
@@ -833,11 +1655,20 @@ export const dataService = {
       duration: c.duration,
       reportTime: c.report_time,
       responses: c.responses || {},
-      type: (c.call_type as CallType) || CallType.POS_VENDA,
+      type: mapStoredCallTypeToApp(c.call_type),
       protocolId: c.protocol_id,
       clientName: (c as any).clients?.name || 'Cliente Desconhecido',
-      clientPhone: (c as any).clients?.phone || ''
-    }));
+      clientPhone: (c as any).clients?.phone || '',
+      proposito: c.proposito || campaignContextMap.get(c.campanha_id)?.proposito,
+      campanha_id: c.campanha_id,
+      campaignName: campaignContextMap.get(c.campanha_id)?.campaignName,
+      targetProduct: c.responses?.target_product || campaignContextMap.get(c.campanha_id)?.targetProduct,
+      offerProduct: c.responses?.offer_product || campaignContextMap.get(c.campanha_id)?.offerProduct,
+      portfolioScope: c.responses?.portfolio_scope || campaignInsights.portfolioScope || campaignContextMap.get(c.campanha_id)?.portfolioScope,
+      offerInterestLevel: c.responses?.offer_interest_level || campaignInsights.offerInterestLevel,
+      offerBlockerReason: c.responses?.offer_blocker_reason || campaignInsights.offerBlockerReason
+    };
+    });
   },
 
   checkRecentCall: async (clientId: string): Promise<boolean> => {
@@ -856,12 +1687,35 @@ export const dataService = {
   },
 
   saveCall: async (call: CallRecord): Promise<{ id: string, suggestedTags: ClientTag[] }> => {
+    const questions = await dataService.getQuestions(call.type as CallType, call.proposito);
+    const { enrichedResponses, email, interestProduct, buyerName, responsiblePhone } = extractClientInsightsFromResponses(
+      call.responses || {},
+      questions,
+      call.type,
+      call.proposito
+    );
+    const campaignInsights = extractCampaignInsightsFromResponses(
+      enrichedResponses,
+      questions,
+      call.type,
+      call.proposito
+    );
+    const enrichedCallResponses = {
+      ...campaignInsights.enrichedResponses,
+      target_product: call.targetProduct || campaignInsights.enrichedResponses.target_product,
+      offer_product: call.offerProduct || campaignInsights.enrichedResponses.offer_product,
+      portfolio_scope: call.portfolioScope || campaignInsights.portfolioScope || campaignInsights.enrichedResponses.portfolio_scope,
+      offer_interest_level: call.offerInterestLevel || campaignInsights.offerInterestLevel || campaignInsights.enrichedResponses.offer_interest_level,
+      offer_blocker_reason: call.offerBlockerReason || campaignInsights.offerBlockerReason || campaignInsights.enrichedResponses.offer_blocker_reason,
+      campaign_name: call.campaignName || campaignInsights.enrichedResponses.campaign_name
+    };
+
     const { data: insertedCall, error } = await supabase.from('call_logs').insert({
       task_id: call.taskId,
       operator_id: call.operatorId,
       client_id: call.clientId,
-      call_type: call.type,
-      responses: call.responses,
+      call_type: mapCallLogTypeToDb(call.type),
+      responses: enrichedCallResponses,
       duration: call.duration,
       report_time: call.reportTime,
       start_time: call.startTime,
@@ -875,19 +1729,18 @@ export const dataService = {
     if (error) throw error;
 
     const clientUpdates: any = { last_interaction: new Date().toISOString() };
-    if (call.responses?.email_cliente) {
-      clientUpdates.email = call.responses.email_cliente;
-    }
-    if (call.responses?.upsell_interesse_produto) {
-      clientUpdates.interest_product = call.responses.upsell_interesse_produto;
-    }
+    if (email) clientUpdates.email = email;
+    if (interestProduct) clientUpdates.interest_product = interestProduct;
+    if (buyerName) clientUpdates.buyer_name = buyerName;
+    if (responsiblePhone) clientUpdates.responsible_phone = responsiblePhone;
 
     await supabase.from('clients').update(clientUpdates).eq('id', call.clientId);
+    await syncDerivedTagsForClient(call.clientId);
 
     // Dreon Skill v3: Tag Decision Engine Integration
     try {
-      const callWithId = { ...call, id: insertedCall.id };
-      const decision = TagDecisionEngine.analyzeCall(callWithId, []);
+      const callWithId = { ...call, id: insertedCall.id, responses: enrichedCallResponses };
+      const decision = TagDecisionEngine.analyzeCall(callWithId, [], questions);
       
       if (decision.tagsToCreate && decision.tagsToCreate.length > 0) {
         const mappedTags = decision.tagsToCreate.map(t => ({
@@ -912,7 +1765,7 @@ export const dataService = {
     if (updates.startTime) payload.start_time = updates.startTime;
     if (updates.endTime) payload.end_time = updates.endTime;
     if (updates.responses) payload.responses = updates.responses;
-    if (updates.type) payload.call_type = updates.type;
+    if (updates.type) payload.call_type = mapCallLogTypeToDb(updates.type);
 
     const { error } = await supabase.from('call_logs').update(payload).eq('id', id);
     if (error) throw error;
@@ -953,6 +1806,7 @@ export const dataService = {
       })
       .eq('id', tagId);
     if (error) throw error;
+    await syncClientTagToClientProfile(tagId);
   },
 
   approveTag: async (tagId: string, supervisorId: string): Promise<void> => {
@@ -965,6 +1819,21 @@ export const dataService = {
       })
       .eq('id', tagId);
     if (error) throw error;
+    await syncClientTagToClientProfile(tagId);
+  },
+
+  rebuildDerivedClientTags: async (): Promise<number> => {
+    const { data: clients, error } = await supabase.from('clients').select('id');
+    if (error) throw error;
+
+    let updated = 0;
+    for (const client of clients || []) {
+      if (await syncDerivedTagsForClient(client.id)) {
+        updated += 1;
+      }
+    }
+
+    return updated;
   },
 
   rejectTag: async (tagId: string, operatorId: string, reason: string): Promise<void> => {
@@ -992,68 +1861,24 @@ export const dataService = {
   },
 
   getDetailedPendingTasks: async () => {
-    // 1. Fetch tasks WITHOUT profiles join (avoids FK ambiguity errors)
-    const { data: tasks, error } = await supabase
-      .from('tasks')
-      .select('*, clients(*)')
-      .eq('status', 'pending')
-      .order('created_at', { ascending: true });
-
-    if (error) console.error('getDetailedPendingTasks tasks error:', error);
-
-    // 1b. Fetch profiles separately for operator name lookup
+    const tasks = await dataService.getTasks();
     const { data: allProfiles } = await supabase
       .from('profiles')
       .select('id, username_display, username');
     const profileMap = new Map((allProfiles || []).map(p => [p.id, p]));
+    const now = new Date();
 
-    // 2. Fetch Approved Schedules (also without profiles join)
-    let mappedSchedules: any[] = [];
-    try {
-      const { data: schedData, error: schedError } = await supabase
-        .from('call_schedules')
-        .select('*, clients(*)')
-        .eq('status', 'APROVADO')
-        .lte('scheduled_for', new Date().toISOString())
-        .order('scheduled_for', { ascending: true });
-
-      if (!schedError && schedData) {
-        mappedSchedules = schedData.map(s => {
-          const clientObj = Array.isArray(s.clients) ? s.clients[0] : s.clients;
-          return {
-            id: s.id,
-            clientId: s.customer_id,
-            type: clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : s.call_type,
-            deadline: s.scheduled_for,
-            assignedTo: s.assigned_operator_id,
-            status: 'pending',
-            clients: clientObj,
-            profiles: profileMap.get(s.assigned_operator_id) || null,
-            clientName: clientObj?.name,
-            clientPhone: clientObj?.phone,
-            duration: 0
-          };
-        });
-      }
-    } catch (e) {
-      console.error('getDetailedPendingTasks schedules error:', e);
-    }
-
-    const validLegacyTasks = (tasks || [])
-      .filter(t => t.client_id)
-      .filter(t => !t.scheduled_for || new Date(t.scheduled_for) <= new Date())
-      .map(t => {
-        const clientObj = Array.isArray(t.clients) ? t.clients[0] : t.clients;
-        return {
-          ...t,
-          type: clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : t.type,
-          clients: clientObj || { name: 'Prospecto', phone: '' },
-          profiles: profileMap.get(t.assigned_to) || null,
-          duration: 0
-        };
-      });
-
-    return [...mappedSchedules, ...validLegacyTasks];
+    return tasks
+      .filter(t => t.status === 'pending')
+      .filter(t => !!t.assignedTo)
+      .filter(t => t.approvalStatus === 'APPROVED' || !t.approvalStatus)
+      .filter(t => !t.scheduledFor || new Date(t.scheduledFor) <= now)
+      .map(t => ({
+        ...t,
+        clients: t.clients || { name: t.clientName || 'Prospecto', phone: t.clientPhone || '' },
+        profiles: profileMap.get(t.assignedTo || '') || null,
+        duration: 0
+      }));
   },
 
 
@@ -1124,38 +1949,10 @@ export const dataService = {
       }
     }
 
-    return allData.map(c => ({
-      id: c.id,
-      name: c.name || 'Sem Nome',
-      phone: c.phone || '',
-      address: c.address || '',
-      items: c.items || [],
-      offers: c.offers || [],
-      acceptance: (c.acceptance as any) || 'medium',
-      satisfaction: (c.satisfaction as any) || 'medium',
-      // New Fields
-      origin: c.origin,
-      email: c.email,
-      website: c.website,
-      status: c.status || 'CLIENT',
-      responsible_phone: c.responsible_phone,
-      buyer_name: c.buyer_name,
-      interest_product: c.interest_product,
-      preferred_channel: c.preferred_channel,
-      funnel_status: c.funnel_status,
-      // Address & Multi-Phone
-      external_id: c.external_id,
-      phone_secondary: c.phone_secondary,
-      street: c.street,
-      neighborhood: c.neighborhood,
-      city: c.city,
-      state: c.state,
-      zip_code: c.zip_code,
-      last_purchase_date: c.last_purchase_date
-    }));
+    return allData.map(mapClientRecord);
   },
 
-  getClientHistory: async (clientId: string): Promise<{ calls: CallRecord[], protocols: Protocol[] }> => {
+  getClientHistory: async (clientId: string): Promise<ClientHistoryData> => {
     try {
       // Fetch Call Logs
       const { data: callsData, error: callsError } = await supabase
@@ -1175,8 +1972,11 @@ export const dataService = {
 
       if (protocolsError) throw protocolsError;
 
-      return {
-        calls: (callsData || []).map(c => ({
+      const campaignContextMap = await loadCampaignContextMap((callsData || []).map((call: any) => call.campanha_id).filter(Boolean));
+
+      const mappedCalls: CallRecord[] = (callsData || []).map(c => {
+        const campaignInsights = extractCampaignInsightsFromResponses(c.responses || {});
+        return {
           id: c.id,
           taskId: c.task_id,
           operatorId: c.operator_id,
@@ -1186,35 +1986,54 @@ export const dataService = {
           duration: c.duration,
           reportTime: c.report_time,
           responses: c.responses || {},
-          type: (c.call_type as CallType) || CallType.POS_VENDA,
-          protocolId: c.protocol_id
-        })),
-        protocols: (protocolsData || []).map(p => ({
-          id: p.id,
-          protocolNumber: p.protocol_number,
-          clientId: p.client_id,
-          openedByOperatorId: p.opened_by_operator_id,
-          ownerOperatorId: p.owner_operator_id,
-          origin: p.origin,
-          departmentId: p.department_id,
-          categoryId: p.category_id,
-          title: p.title,
-          description: p.description,
-          priority: p.priority as any,
-          status: p.status as ProtocolStatus,
-          openedAt: p.opened_at,
-          updatedAt: p.updated_at,
-          closedAt: p.closed_at,
-          firstResponseAt: p.first_response_at,
-          lastActionAt: p.last_action_at,
-          slaDueAt: p.sla_due_at,
-          resolutionSummary: p.resolution_summary,
-          rootCause: p.root_cause
-        }))
+          type: mapStoredCallTypeToApp(c.call_type),
+          protocolId: c.protocol_id,
+          proposito: c.proposito || campaignContextMap.get(c.campanha_id)?.proposito,
+          campanha_id: c.campanha_id,
+          campaignName: campaignContextMap.get(c.campanha_id)?.campaignName,
+          targetProduct: c.responses?.target_product || campaignContextMap.get(c.campanha_id)?.targetProduct,
+          offerProduct: c.responses?.offer_product || campaignContextMap.get(c.campanha_id)?.offerProduct,
+          portfolioScope: c.responses?.portfolio_scope || campaignInsights.portfolioScope || campaignContextMap.get(c.campanha_id)?.portfolioScope,
+          offerInterestLevel: c.responses?.offer_interest_level || campaignInsights.offerInterestLevel,
+          offerBlockerReason: c.responses?.offer_blocker_reason || campaignInsights.offerBlockerReason
+        };
+      });
+
+      const mappedProtocols: Protocol[] = (protocolsData || []).map(p => ({
+        id: p.id,
+        protocolNumber: p.protocol_number,
+        clientId: p.client_id,
+        openedByOperatorId: p.opened_by_operator_id,
+        ownerOperatorId: p.owner_operator_id,
+        origin: p.origin,
+        departmentId: p.department_id,
+        categoryId: p.category_id,
+        title: p.title,
+        description: p.description,
+        priority: p.priority as any,
+        status: p.status as ProtocolStatus,
+        openedAt: p.opened_at,
+        updatedAt: p.updated_at,
+        closedAt: p.closed_at,
+        firstResponseAt: p.first_response_at,
+        lastActionAt: p.last_action_at,
+        slaDueAt: p.sla_due_at,
+        resolutionSummary: p.resolution_summary,
+        rootCause: p.root_cause
+      }));
+
+      return {
+        calls: mappedCalls,
+        protocols: mappedProtocols,
+        summary: buildClientHistorySummary(mappedCalls, mappedProtocols)
       };
     } catch (e) {
       console.error("Error getting client history:", e);
-      return { calls: [], protocols: [] };
+      return {
+        calls: [],
+        protocols: [],
+        summary: buildClientHistorySummary([], [])
+      };
     }
   },
 
@@ -1239,32 +2058,7 @@ export const dataService = {
       }
     }
 
-    return allData.map(c => ({
-      id: c.id,
-      name: c.name || 'Prospecto Sem Nome',
-      phone: c.phone || '',
-      address: c.address || '',
-      items: c.items || [],
-      offers: c.offers || [],
-      acceptance: (c.acceptance as any) || 'medium',
-      satisfaction: (c.satisfaction as any) || 'medium',
-      origin: c.origin,
-      email: c.email,
-      website: c.website,
-      status: 'LEAD',
-      responsible_phone: c.responsible_phone,
-      buyer_name: c.buyer_name,
-      interest_product: c.interest_product,
-      preferred_channel: c.preferred_channel,
-      funnel_status: c.funnel_status,
-      external_id: c.external_id,
-      phone_secondary: c.phone_secondary,
-      street: c.street,
-      neighborhood: c.neighborhood,
-      city: c.city,
-      state: c.state,
-      zip_code: c.zip_code
-    }));
+    return allData.map(mapClientRecord).map(client => ({ ...client, status: 'LEAD' as const }));
   },
 
   findDuplicateClients: async (): Promise<any[]> => {
@@ -1371,9 +2165,14 @@ export const dataService = {
 
     let existing: any = null;
 
+    if (client.id) {
+      const { data } = await supabase.from('clients').select('*').eq('id', client.id).maybeSingle();
+      if (data) existing = data;
+    }
+
     // --- 3-step deduplication ---
     // Step 1: Match by external_id (if provided and already exists in the system)
-    if (client.external_id) {
+    if (!existing && client.external_id) {
       const { data } = await supabase.from('clients').select('*').eq('external_id', client.external_id).maybeSingle();
       if (data) existing = data;
     }
@@ -1394,12 +2193,36 @@ export const dataService = {
       if (data) existing = data;
     }
 
+      const catalogConfig = await PortfolioCatalogService.getCatalogConfig();
+      const mergedPortfolioEntries = normalizePortfolioEntriesWithCatalog(
+        mergePortfolioEntries(existing?.portfolio_entries, client.portfolio_entries),
+        catalogConfig
+      );
+      const portfolioMetadata = collectPortfolioMetadata(mergedPortfolioEntries);
+    const equipmentModels = mergeUniquePortfolioValues(
+      existing?.equipment_models,
+      existing?.items,
+      client.equipment_models,
+      client.items,
+      portfolioMetadata.equipment_models
+    );
+    const customerProfiles = mergeUniquePortfolioValues(
+      existing?.customer_profiles,
+      client.customer_profiles,
+      portfolioMetadata.customer_profiles
+    );
+    const productCategories = mergeUniquePortfolioValues(
+      existing?.product_categories,
+      client.product_categories,
+      portfolioMetadata.product_categories
+    );
+
     // Build payload: existing data takes priority, only fill empty fields
     const payload: any = {
       name: existing?.name || client.name || 'Sem Nome',
-      phone: existing?.phone || phone,
+      phone,
       address: existing?.address || client.address || '',
-      items: Array.from(new Set([...(existing?.items || []), ...(client.items || [])])),
+      items: equipmentModels,
       offers: Array.from(new Set([...(existing?.offers || []), ...(client.offers || [])])),
       last_interaction: existing?.last_interaction || new Date().toISOString(),
       origin: existing?.origin || client.origin || 'MANUAL',
@@ -1422,25 +2245,125 @@ export const dataService = {
       city: existing?.city || client.city,
       state: existing?.state || client.state,
       zip_code: existing?.zip_code || client.zip_code,
-      last_purchase_date: client.last_purchase_date || existing?.last_purchase_date
+      last_purchase_date: client.last_purchase_date || existing?.last_purchase_date,
+      customer_profiles: customerProfiles,
+      product_categories: productCategories,
+      equipment_models: equipmentModels,
+      portfolio_entries: mergedPortfolioEntries
     };
 
     if (existing) {
       // UPDATE existing record — never duplicate
       const { data, error } = await supabase.from('clients').update(payload).eq('id', existing.id).select().single();
       if (error) throw error;
-      return data;
+      await syncDerivedTagsForClient(data.id);
+      return mapClientRecord(data);
     } else {
       // INSERT new record
       const { data, error } = await supabase.from('clients').insert(payload).select().single();
       if (error) throw error;
-      return data;
+      await syncDerivedTagsForClient(data.id);
+      return mapClientRecord(data);
     }
   },
 
-  updateClientFields: async (clientId: string, updates: Partial<Client>): Promise<void> => {
-    const { error } = await supabase.from('clients').update(updates).eq('id', clientId);
+  saveClientProfile: async (clientId: string, updates: Partial<Client>): Promise<Client> => {
+    const { data: existing, error: existingError } = await supabase
+      .from('clients')
+      .select('*')
+      .eq('id', clientId)
+      .maybeSingle();
+
+    if (existingError) throw existingError;
+    if (!existing) throw new Error('Cliente não encontrado');
+
+    const nextPhone = normalizePhone(updates.phone || existing.phone || '');
+    if (!nextPhone) throw new Error('Telefone obrigatório');
+
+      const catalogConfig = await PortfolioCatalogService.getCatalogConfig();
+      const nextPortfolioEntries = normalizePortfolioEntriesWithCatalog(
+        updates.portfolio_entries !== undefined
+          ? mergePortfolioEntries(updates.portfolio_entries)
+          : mergePortfolioEntries(existing.portfolio_entries),
+        catalogConfig
+      );
+      const portfolioMetadata = collectPortfolioMetadata(nextPortfolioEntries);
+      const equipmentModels = mergeUniquePortfolioValues(
+        updates.equipment_models,
+        updates.items,
+        portfolioMetadata.equipment_models
+      );
+      const customerProfiles = mergeUniquePortfolioValues(
+        updates.customer_profiles,
+        existing.customer_profiles,
+        portfolioMetadata.customer_profiles
+      );
+      const productCategories = mergeUniquePortfolioValues(
+        updates.product_categories,
+        portfolioMetadata.product_categories
+      );
+
+    const payload: any = {
+      name: updates.name ?? existing.name ?? 'Sem Nome',
+      phone: nextPhone,
+      address: updates.address ?? existing.address ?? '',
+      items: equipmentModels,
+      offers: updates.offers ?? existing.offers ?? [],
+      last_interaction: existing.last_interaction || new Date().toISOString(),
+      origin: updates.origin ?? existing.origin ?? 'MANUAL',
+      email: updates.email ?? existing.email ?? null,
+      website: updates.website ?? existing.website ?? null,
+      status: updates.status === 'INATIVO'
+        ? 'INATIVO'
+        : (updates.status === 'CLIENT'
+          ? 'CLIENT'
+          : (existing.status === 'CLIENT' ? 'CLIENT' : (updates.status ?? existing.status ?? 'CLIENT'))),
+      responsible_phone: updates.responsible_phone ?? existing.responsible_phone ?? null,
+      buyer_name: updates.buyer_name ?? existing.buyer_name ?? null,
+      interest_product: updates.interest_product ?? existing.interest_product ?? null,
+      preferred_channel: updates.preferred_channel ?? existing.preferred_channel ?? null,
+      funnel_status: updates.funnel_status ?? existing.funnel_status ?? 'NEW',
+      external_id: updates.external_id ?? existing.external_id ?? null,
+      phone_secondary: updates.phone_secondary ?? existing.phone_secondary ?? null,
+      street: updates.street ?? existing.street ?? null,
+      neighborhood: updates.neighborhood ?? existing.neighborhood ?? null,
+      city: updates.city ?? existing.city ?? null,
+      state: updates.state ?? existing.state ?? null,
+      zip_code: updates.zip_code ?? existing.zip_code ?? null,
+      last_purchase_date: updates.last_purchase_date ?? existing.last_purchase_date ?? null,
+      customer_profiles: customerProfiles,
+      product_categories: productCategories,
+      equipment_models: equipmentModels,
+      portfolio_entries: nextPortfolioEntries
+    };
+
+    const { data, error } = await supabase.from('clients').update(payload).eq('id', clientId).select().single();
     if (error) throw error;
+
+    await syncDerivedTagsForClient(data.id);
+    return mapClientRecord(data);
+  },
+
+  updateClientFields: async (clientId: string, updates: Partial<Client>): Promise<void> => {
+    if (
+      updates.portfolio_entries !== undefined ||
+      updates.customer_profiles !== undefined ||
+      updates.product_categories !== undefined ||
+      updates.equipment_models !== undefined
+    ) {
+      await dataService.saveClientProfile(clientId, updates);
+      return;
+    }
+
+    const payload: any = { ...updates };
+    if (updates.phone) payload.phone = normalizePhone(updates.phone);
+
+    const { error } = await supabase.from('clients').update(payload).eq('id', clientId);
+    if (error) throw error;
+
+    if (updates.items || updates.equipment_models || updates.interest_product || updates.satisfaction || updates.tags) {
+      await syncDerivedTagsForClient(clientId);
+    }
   },
 
   getInvalidClients: async (): Promise<Client[]> => {
@@ -1464,32 +2387,9 @@ export const dataService = {
       }
     }
 
-    return allData.map(c => ({
-      id: c.id,
-      name: c.name || 'Sem Nome',
-      phone: c.phone || '',
-      address: c.address || '',
-      items: c.items || [],
-      offers: c.offers || [],
-      acceptance: (c.acceptance as any) || 'medium',
-      satisfaction: (c.satisfaction as any) || 'medium',
-      origin: c.origin,
-      email: c.email,
-      website: c.website,
-      status: c.status || 'CLIENT',
-      responsible_phone: c.responsible_phone,
-      buyer_name: c.buyer_name,
-      interest_product: c.interest_product,
-      preferred_channel: c.preferred_channel,
-      funnel_status: c.funnel_status,
-      external_id: c.external_id,
-      phone_secondary: c.phone_secondary,
-      street: c.street,
-      neighborhood: c.neighborhood,
-      city: c.city,
-      state: c.state,
-      zip_code: c.zip_code,
-      invalid: c.invalid
+    return allData.map(record => ({
+      ...mapClientRecord(record),
+      invalid: record.invalid
     }));
   },
 
@@ -1508,12 +2408,24 @@ export const dataService = {
     const { data: duplicate } = await supabase.from('clients').select('*').eq('id', duplicateId).single();
     if (!keeper || !duplicate) throw new Error('Client(s) not found');
 
-    const mergedItems = Array.from(new Set([...(keeper.items || []), ...(duplicate.items || [])]));
+    const mergedPortfolioEntries = mergePortfolioEntries(keeper.portfolio_entries, duplicate.portfolio_entries);
+    const mergedMetadata = collectPortfolioMetadata(mergedPortfolioEntries);
+    const mergedItems = mergeUniquePortfolioValues(
+      keeper.items,
+      keeper.equipment_models,
+      duplicate.items,
+      duplicate.equipment_models,
+      mergedMetadata.equipment_models
+    );
     const mergedOffers = Array.from(new Set([...(keeper.offers || []), ...(duplicate.offers || [])]));
 
     const updatePayload: any = {
       items: mergedItems,
       offers: mergedOffers,
+      customer_profiles: mergeUniquePortfolioValues(keeper.customer_profiles, duplicate.customer_profiles, mergedMetadata.customer_profiles),
+      product_categories: mergeUniquePortfolioValues(keeper.product_categories, duplicate.product_categories, mergedMetadata.product_categories),
+      equipment_models: mergedItems,
+      portfolio_entries: mergedPortfolioEntries,
       // Merge address/phone fields only if keeper is missing them
       external_id: keeper.external_id || duplicate.external_id,
       phone_secondary: keeper.phone_secondary || duplicate.phone_secondary,
@@ -1525,6 +2437,7 @@ export const dataService = {
     };
 
     await supabase.from('clients').update(updatePayload).eq('id', keeperId);
+    await syncDerivedTagsForClient(keeperId);
 
     // 2. Migrate calls
     const { data: calls } = await supabase.from('calls').select('id').eq('client_id', duplicateId);
@@ -2223,26 +3136,32 @@ export const dataService = {
     if (operatorId) rpcArgs.p_operator_id = operatorId;
     if (statusFilter) rpcArgs.p_status_filter = statusFilter;
 
-    const { data, error } = await supabase.rpc('get_unified_remarketing_report', rpcArgs);
-    if (error) throw error;
+    try {
+      const { data, error } = await supabase.rpc('get_unified_remarketing_report', rpcArgs);
+      if (error) throw error;
 
-    return (data || []).map((row: any) => ({
-      clientId: row.client_id,
-      clientName: row.client_name,
-      clientPhone: row.client_phone,
-      clientStatus: row.client_status,
-      attemptsCount: Number(row.attempts_count),
-      lastContactAt: row.last_contact_at,
-      lastOutcome: row.last_outcome,
-      lastOperatorId: row.last_operator_id,
-      lastChannel: row.last_channel,
-      lastContactGenre: row.last_contact_genre,
-      lastRating: row.last_rating,
-      upsellOffer: row.upsell_offer,
-      upsellStatus: row.upsell_status,
-      responseStatus: row.response_status,
-      conversionStatus: row.conversion_status
-    }));
+      return (data || []).map((row: any) => ({
+        clientId: row.client_id,
+        clientName: row.client_name,
+        clientPhone: row.client_phone,
+        clientStatus: row.client_status,
+        attemptsCount: Number(row.attempts_count),
+        lastContactAt: row.last_contact_at,
+        lastOutcome: row.last_outcome,
+        lastOperatorId: row.last_operator_id,
+        lastChannel: row.last_channel,
+        lastContactGenre: row.last_contact_genre,
+        lastRating: row.last_rating,
+        upsellOffer: row.upsell_offer,
+        upsellStatus: row.upsell_status,
+        responseStatus: row.response_status,
+        conversionStatus: row.conversion_status,
+        lastSkipReason: row.last_skip_reason
+      }));
+    } catch (error) {
+      console.warn('Unified remarketing RPC unavailable, using fallback aggregation.', error);
+      return buildUnifiedReportFallback(operatorId, statusFilter);
+    }
   },
 
   bulkCreateTasks: async (tasks: any[]): Promise<void> => {
@@ -2253,7 +3172,9 @@ export const dataService = {
         assigned_to: t.assignedTo,
         status: t.status || 'pending',
         scheduled_for: t.scheduledFor,
-        schedule_reason: t.scheduleReason
+        schedule_reason: t.scheduleReason,
+        proposito: t.proposito,
+        campanha_id: t.campanha_id
       }))
     );
     if (error) throw error;
@@ -2264,7 +3185,7 @@ export const dataService = {
     const payload = prospectIds.map(id => ({
       operator_id: operatorId,
       client_id: id,
-      call_type: CallType.POS_VENDA,
+      call_type: mapCallLogTypeToDb(CallType.POS_VENDA),
       responses: { upsell_offer: offer, note: notes, is_bulk_upsell: true },
       duration: 0,
       report_time: 0,
@@ -2292,7 +3213,7 @@ export const dataService = {
         duration: c.duration,
         reportTime: c.report_time,
         responses: c.responses || {},
-        type: (c.call_type as CallType) || CallType.POS_VENDA,
+        type: mapStoredCallTypeToApp(c.call_type),
         protocolId: c.protocol_id
       })),
       tasks: (tasksRes.data || []).map((t: any) => ({
