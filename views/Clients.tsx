@@ -44,7 +44,8 @@ const createEmptyPortfolioEntry = (): ClientPortfolioEntry => ({
   id: `portfolio-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   profile: '',
   product_category: '',
-  equipment: ''
+  equipment: '',
+  quantity: 1
 });
 
 const createEmptyClientData = (): ClientFormState => ({
@@ -94,7 +95,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
     }));
   };
 
-  const updatePortfolioEntry = (index: number, field: keyof ClientPortfolioEntry, value: string) => {
+  const updatePortfolioEntry = (index: number, field: keyof ClientPortfolioEntry, value: string | number) => {
     setClientData(prev => ({
       ...prev,
       portfolio_entries: prev.portfolio_entries.map((entry, entryIndex) =>
@@ -496,6 +497,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                           {entry.equipment && (
                             <p className="text-[9px] font-black uppercase tracking-widest text-indigo-600">Equipamento: <span className="text-slate-700">{entry.equipment}</span></p>
                           )}
+                          <p className="text-[9px] font-black uppercase tracking-widest text-emerald-600">Quantidade: <span className="text-slate-700">{entry.quantity || 1}</span></p>
                         </div>
                       )) : (
                         <span className="text-xs font-bold text-slate-300 italic">Nenhuma linha técnica vinculada.</span>
@@ -678,7 +680,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
 
                 <div className="space-y-4">
                   {clientData.portfolio_entries.map((entry, index) => (
-                    <div key={entry.id || `${index}`} className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_1fr_auto] gap-3 items-end bg-white rounded-[24px] border border-slate-200 p-4">
+                    <div key={entry.id || `${index}`} className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_1fr_120px_auto] gap-3 items-end bg-white rounded-[24px] border border-slate-200 p-4">
                       <div className="space-y-1.5">
                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Perfil</label>
                         <input
@@ -707,6 +709,17 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                           onChange={e => updatePortfolioEntry(index, 'equipment', e.target.value)}
                           placeholder="Ex: BZ20"
                           className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:border-blue-500"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Quantidade</label>
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          value={entry.quantity || 1}
+                          onChange={e => updatePortfolioEntry(index, 'quantity', Number(e.target.value || 1))}
+                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:border-emerald-500"
                         />
                       </div>
                       <button

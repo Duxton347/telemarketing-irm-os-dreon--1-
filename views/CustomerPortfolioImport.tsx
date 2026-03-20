@@ -8,6 +8,7 @@ import {
   collectPortfolioMetadata,
   mergePortfolioEntries,
   normalizeComparableText,
+  normalizePortfolioQuantity,
   normalizePortfolioValue
 } from '../utils/clientPortfolio';
 
@@ -21,6 +22,7 @@ interface ParsedPortfolioRow {
   profile: string;
   productCategory: string;
   equipment: string;
+  quantity: number;
   status: PreviewStatus;
   reason?: string;
   matchedClient?: Client;
@@ -42,10 +44,11 @@ interface ImportExecutionReport {
   }>;
 }
 
-const createEntry = (profile: string, productCategory: string, equipment: string): ClientPortfolioEntry => ({
+const createEntry = (profile: string, productCategory: string, equipment: string, quantity: number): ClientPortfolioEntry => ({
   profile: normalizePortfolioValue(profile),
   product_category: normalizePortfolioValue(productCategory),
-  equipment: normalizePortfolioValue(equipment)
+  equipment: normalizePortfolioValue(equipment),
+  quantity: normalizePortfolioQuantity(quantity)
 });
 
 const detectColumn = (headers: string[], aliases: string[]) => {
@@ -155,6 +158,7 @@ export const CustomerPortfolioImport: React.FC = () => {
           const profileColumn = detectColumn(headers, ['perfil', 'segmento', 'tipo cliente', 'tipo']);
           const categoryColumn = detectColumn(headers, ['categoria', 'linha', 'produto', 'categoria produto']);
           const equipmentColumn = detectColumn(headers, ['equipamento', 'modelo', 'produto especifico', 'produto específico', 'item']);
+          const quantityColumn = detectColumn(headers, ['quantidade', 'qtd', 'qtde', 'qte']);
 
           if (!nameColumn || !phoneColumn) {
             throw new Error('As colunas de Nome e Telefone sao obrigatorias para vincular a ficha do cliente.');
@@ -172,6 +176,7 @@ export const CustomerPortfolioImport: React.FC = () => {
               const profile = normalizePortfolioValue(profileColumn ? row[profileColumn] : '');
               const productCategory = normalizePortfolioValue(categoryColumn ? row[categoryColumn] : '');
               const equipment = normalizePortfolioValue(equipmentColumn ? row[equipmentColumn] : '');
+              const quantity = normalizePortfolioQuantity(quantityColumn ? row[quantityColumn] : 1);
 
               if (!name && !phone && !profile && !productCategory && !equipment) {
                 return null;
@@ -186,6 +191,7 @@ export const CustomerPortfolioImport: React.FC = () => {
                   profile,
                   productCategory,
                   equipment,
+                  quantity,
                   status: 'INVALID' as const,
                   reason: 'Telefone ausente ou invalido.'
                 };
@@ -200,6 +206,7 @@ export const CustomerPortfolioImport: React.FC = () => {
                   profile,
                   productCategory,
                   equipment,
+                  quantity,
                   status: 'INVALID' as const,
                   reason: 'Linha sem perfil, categoria ou equipamento.'
                 };
@@ -215,6 +222,7 @@ export const CustomerPortfolioImport: React.FC = () => {
                   profile,
                   productCategory,
                   equipment,
+                  quantity,
                   status: 'NOT_FOUND' as const,
                   reason: match.reason
                 };
@@ -228,6 +236,7 @@ export const CustomerPortfolioImport: React.FC = () => {
                 profile,
                 productCategory,
                 equipment,
+                quantity,
                 status: 'READY' as const,
                 matchedClient: match.client,
                 matchMethod: match.method
@@ -245,7 +254,7 @@ export const CustomerPortfolioImport: React.FC = () => {
               sourceRows: []
             };
 
-            group.entries = mergePortfolioEntries(group.entries, [createEntry(row.profile, row.productCategory, row.equipment)]);
+            group.entries = mergePortfolioEntries(group.entries, [createEntry(row.profile, row.productCategory, row.equipment, row.quantity)]);
             group.sourceRows.push(row);
             groupsMap.set(client.id, group);
           }
@@ -289,7 +298,7 @@ export const CustomerPortfolioImport: React.FC = () => {
         const existingEntries = mergePortfolioEntries(group.client.portfolio_entries || []);
         const mergedEntries = mergePortfolioEntries(existingEntries, group.entries);
 
-        if (mergedEntries.length === existingEntries.length) {
+        if (JSON.stringify(mergedEntries) === JSON.stringify(existingEntries)) {
           report.unchanged.push(`${group.client.name} (${group.client.phone || 'sem telefone'})`);
           continue;
         }
@@ -332,7 +341,7 @@ export const CustomerPortfolioImport: React.FC = () => {
             Perfil e Equipamentos do Cliente
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-2">
-            Suba um CSV/Excel com `Nome`, `Telefone`, `Perfil`, `Categoria` e `Equipamento` para enriquecer cadastros ja compradores.
+            Suba um CSV/Excel com `Nome`, `Telefone`, `Perfil`, `Categoria`, `Equipamento` e `Quantidade` para enriquecer cadastros ja compradores.
           </p>
         </div>
       </div>
@@ -345,10 +354,10 @@ export const CustomerPortfolioImport: React.FC = () => {
               Cada linha representa um vinculo tecnico do cliente. O mesmo cliente pode aparecer em varias linhas com equipamentos diferentes.
             </p>
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 font-mono text-xs text-slate-600 overflow-auto">
-              Nome,Telefone,Perfil,Categoria,Equipamento<br />
-              Joao Silva,(11) 99999-0000,Construtor,Boiler,Boiler 500L<br />
-              Joao Silva,(11) 99999-0000,Construtor,Fotovoltaico,BZ30<br />
-              Hotel Sol,(11) 98888-1111,Hotel,Trocador de Calor,TRX 120
+              Nome,Telefone,Perfil,Categoria,Equipamento,Quantidade<br />
+              Joao Silva,(11) 99999-0000,Construtor,Boiler,Boiler 500L,2<br />
+              Joao Silva,(11) 99999-0000,Construtor,Fotovoltaico,BZ30,3<br />
+              Hotel Sol,(11) 98888-1111,Hotel,Trocador de Calor,TRX 120,1
             </div>
           </div>
 
@@ -458,7 +467,7 @@ export const CustomerPortfolioImport: React.FC = () => {
                     <th className="px-4 py-3">Status</th>
                     <th className="px-4 py-3">Cliente da Planilha</th>
                     <th className="px-4 py-3">Vinculo Encontrado</th>
-                    <th className="px-4 py-3">Perfil / Categoria / Equipamento</th>
+                    <th className="px-4 py-3">Perfil / Categoria / Equipamento / Qtd</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
@@ -499,6 +508,7 @@ export const CustomerPortfolioImport: React.FC = () => {
                           {row.profile && <span className="px-2 py-1 rounded-lg bg-amber-50 text-amber-700 text-[10px] font-black uppercase border border-amber-100">{row.profile}</span>}
                           {row.productCategory && <span className="px-2 py-1 rounded-lg bg-cyan-50 text-cyan-700 text-[10px] font-black uppercase border border-cyan-100">{row.productCategory}</span>}
                           {row.equipment && <span className="px-2 py-1 rounded-lg bg-slate-100 text-slate-700 text-[10px] font-black uppercase border border-slate-200">{row.equipment}</span>}
+                          <span className="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 text-[10px] font-black uppercase border border-emerald-100">Qtd {row.quantity}</span>
                         </div>
                       </td>
                     </tr>

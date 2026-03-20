@@ -827,6 +827,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                         {entry.profile && <p className="text-[8px] font-black uppercase tracking-widest text-amber-300">Perfil: <span className="text-slate-200">{entry.profile}</span></p>}
                         {entry.product_category && <p className="text-[8px] font-black uppercase tracking-widest text-cyan-300">Categoria: <span className="text-slate-200">{entry.product_category}</span></p>}
                         {entry.equipment && <p className="text-[8px] font-black uppercase tracking-widest text-blue-300">Equipamento: <span className="text-slate-200">{entry.equipment}</span></p>}
+                        <p className="text-[8px] font-black uppercase tracking-widest text-emerald-300">Quantidade: <span className="text-slate-200">{entry.quantity || 1}</span></p>
                       </div>
                     ))}
                   </div>

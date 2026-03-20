@@ -1653,6 +1653,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                   <PostSaleRemarketingReport
                      user={user}
                      operators={operators}
+                     dateRange={dateRange}
                      onOpenProspect={(id: string) => setDrawerProspectId(id)}
                   />
                )}

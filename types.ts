@@ -136,6 +136,7 @@ export interface ClientPortfolioEntry {
   profile: string;
   product_category: string;
   equipment: string;
+  quantity?: number;
 }
 
 export interface Client {

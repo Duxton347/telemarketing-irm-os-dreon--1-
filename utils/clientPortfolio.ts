@@ -15,6 +15,15 @@ export const normalizePortfolioValue = (value?: string) =>
     .trim()
     .replace(/\s+/g, ' ');
 
+export const normalizePortfolioQuantity = (value?: number | string | null) => {
+  const normalized = Number(String(value ?? '').replace(',', '.'));
+  if (!Number.isFinite(normalized) || normalized <= 0) {
+    return 1;
+  }
+
+  return Math.round(normalized);
+};
+
 export const buildPortfolioEntryKey = (entry: Partial<ClientPortfolioEntry>) => {
   const profile = normalizeComparableText(entry.profile);
   const category = normalizeComparableText(entry.product_category);
@@ -39,7 +48,8 @@ export const sanitizePortfolioEntry = (entry?: Partial<ClientPortfolioEntry> | n
     id: entry.id || key,
     profile,
     product_category: productCategory,
-    equipment
+    equipment,
+    quantity: normalizePortfolioQuantity(entry.quantity)
   };
 };
 
@@ -64,7 +74,7 @@ export const mergeUniquePortfolioValues = (...groups: Array<Array<string | undef
 };
 
 export const mergePortfolioEntries = (...groups: Array<Array<Partial<ClientPortfolioEntry> | null | undefined> | undefined>) => {
-  const seen = new Set<string>();
+  const byKey = new Map<string, ClientPortfolioEntry>();
   const next: ClientPortfolioEntry[] = [];
 
   for (const group of groups) {
@@ -73,10 +83,21 @@ export const mergePortfolioEntries = (...groups: Array<Array<Partial<ClientPortf
       if (!entry) continue;
 
       const key = buildPortfolioEntryKey(entry);
-      if (!key || seen.has(key)) continue;
+      if (!key) continue;
 
-      seen.add(key);
-      next.push(entry);
+      const existing = byKey.get(key);
+      if (existing) {
+        existing.quantity = normalizePortfolioQuantity(existing.quantity) + normalizePortfolioQuantity(entry.quantity);
+        continue;
+      }
+
+      const nextEntry = {
+        ...entry,
+        quantity: normalizePortfolioQuantity(entry.quantity)
+      };
+
+      byKey.set(key, nextEntry);
+      next.push(nextEntry);
     }
   }
 
@@ -102,6 +123,7 @@ export const getClientPortfolioEntries = (client?: Partial<Client> | null) => {
     id: `${normalizeComparableText(equipment)}-${index}`,
     profile: '',
     product_category: '',
-    equipment
+    equipment,
+    quantity: 1
   }));
 };

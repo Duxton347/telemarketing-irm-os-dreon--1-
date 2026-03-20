@@ -36,6 +36,11 @@ export interface ReportAreaInsight {
 
 export interface ManagementReportInsights {
   totalQuestionnaireInteractions: number;
+  interestCount: number;
+  objectionCount: number;
+  satisfactionPositiveCount: number;
+  satisfactionNegativeCount: number;
+  satisfactionMeasuredCount: number;
   interestRate: number;
   objectionRate: number;
   satisfactionRate: number;
@@ -67,6 +72,7 @@ type AggregateBucket = {
   interestHits: number;
   objectionHits: number;
   satisfactionPositiveHits: number;
+  satisfactionNegativeHits: number;
   satisfactionScoreTotal: number;
   satisfactionScoreCount: number;
   blockerCounts: Map<string, number>;
@@ -247,13 +253,14 @@ const toPerformanceInsights = (source: Map<string, AggregateBucket>): ReportPerf
 
 const getOrCreateBucket = (map: Map<string, AggregateBucket>, label: string) => {
   const current = map.get(label) || {
-    totalInteractions: 0,
-    interestHits: 0,
-    objectionHits: 0,
-    satisfactionPositiveHits: 0,
-    satisfactionScoreTotal: 0,
-    satisfactionScoreCount: 0,
-    blockerCounts: new Map<string, number>()
+      totalInteractions: 0,
+      interestHits: 0,
+      objectionHits: 0,
+      satisfactionPositiveHits: 0,
+      satisfactionNegativeHits: 0,
+      satisfactionScoreTotal: 0,
+      satisfactionScoreCount: 0,
+      blockerCounts: new Map<string, number>()
   };
 
   map.set(label, current);
@@ -286,6 +293,7 @@ export const buildManagementReportInsights = ({
   let totalInterestHits = 0;
   let totalObjectionHits = 0;
   let totalSatisfactionPositiveHits = 0;
+  let totalSatisfactionNegativeHits = 0;
   let totalSatisfactionScore = 0;
   let totalSatisfactionScoreCount = 0;
 
@@ -326,6 +334,8 @@ export const buildManagementReportInsights = ({
         bucket.satisfactionScoreCount += 1;
         if (satisfaction.averageScore >= 70) {
           bucket.satisfactionPositiveHits += 1;
+        } else if (satisfaction.averageScore <= 40) {
+          bucket.satisfactionNegativeHits += 1;
         }
       }
     });
@@ -340,6 +350,7 @@ export const buildManagementReportInsights = ({
       totalSatisfactionScore += satisfaction.averageScore;
       totalSatisfactionScoreCount += 1;
       if (satisfaction.averageScore >= 70) totalSatisfactionPositiveHits += 1;
+      else if (satisfaction.averageScore <= 40) totalSatisfactionNegativeHits += 1;
     }
 
     satisfaction.areaScores.forEach(({ area, score }) => {
@@ -382,6 +393,11 @@ export const buildManagementReportInsights = ({
 
   return {
     totalQuestionnaireInteractions,
+    interestCount: totalInterestHits,
+    objectionCount: totalObjectionHits,
+    satisfactionPositiveCount: totalSatisfactionPositiveHits,
+    satisfactionNegativeCount: totalSatisfactionNegativeHits,
+    satisfactionMeasuredCount: totalSatisfactionScoreCount,
     interestRate: roundPercentage(totalInterestHits, totalQuestionnaireInteractions),
     objectionRate: roundPercentage(totalObjectionHits, totalQuestionnaireInteractions),
     satisfactionRate: roundPercentage(totalSatisfactionPositiveHits, totalSatisfactionScoreCount),
