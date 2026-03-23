@@ -150,7 +150,9 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
         const data = await dataService.getDetailedCallsToday();
         setDetailedData(data);
       } else if (type === 'queue') {
-        const data = await dataService.getDetailedPendingTasks();
+        const filterId = user?.role === UserRole.OPERATOR ? user.id : selectedFilter;
+        const taskFilter = filterId === 'all' ? undefined : filterId;
+        const data = await dataService.getDetailedPendingTasks(taskFilter);
         setDetailedData(data);
       }
     } catch (e) {
@@ -430,18 +432,47 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                                 </div>
                               </td>
                               <td className="py-6 px-4">
-                                <div className="font-black text-slate-900 flex items-center gap-2">
-                                  <Clock size={14} className="text-slate-300" />
-                                  {Math.floor(item.duration / 60)}m {item.duration % 60}s
-                                </div>
+                                {activeModal === 'queue' ? (
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest ${
+                                      item.queueChannel === 'WHATSAPP'
+                                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                                        : 'bg-amber-50 text-amber-700 border border-amber-100'
+                                    }`}>
+                                      {item.queueChannel === 'WHATSAPP' ? <MessageCircle size={12} /> : <PhoneCall size={12} />}
+                                      {item.queueChannel === 'WHATSAPP' ? 'WhatsApp' : 'Ligacao'}
+                                    </span>
+                                    <span className="inline-flex items-center px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest bg-slate-100 text-slate-700 border border-slate-200">
+                                      {item.type || 'Sem tipo'}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div className="font-black text-slate-900 flex items-center gap-2">
+                                    <Clock size={14} className="text-slate-300" />
+                                    {Math.floor(item.duration / 60)}m {item.duration % 60}s
+                                  </div>
+                                )}
                               </td>
                               <td className="py-6 px-4">
-                                <button
-                                  onClick={() => setSelectedAuditCall(item)}
-                                  className="flex items-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest shadow-lg active:scale-95 transition-all"
-                                >
-                                  <Eye size={14} /> Ver Auditoria Completa
-                                </button>
+                                {activeModal === 'queue' ? (
+                                  <div className="space-y-1">
+                                    <p className="font-black text-slate-800">
+                                      {item.scheduledFor
+                                        ? new Date(item.scheduledFor).toLocaleString('pt-BR')
+                                        : new Date(item.deadline || item.createdAt).toLocaleString('pt-BR')}
+                                    </p>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                                      {item.scheduledFor ? 'Agendado para retorno' : 'Entrada original na fila'}
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={() => setSelectedAuditCall(item)}
+                                    className="flex items-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest shadow-lg active:scale-95 transition-all"
+                                  >
+                                    <Eye size={14} /> Ver Auditoria Completa
+                                  </button>
+                                )}
                               </td>
                             </tr>
                           ))}

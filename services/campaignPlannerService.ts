@@ -42,6 +42,17 @@ export interface CampaignDispatch {
   filters: CampaignPlannerFilters;
 }
 
+export interface CampaignDispatchPreview {
+  clients_selected: number;
+  queue_entries_expected: number;
+  voice_entries_expected: number;
+  whatsapp_entries_expected: number;
+  blocked_recent_call: number;
+  blocked_existing_voice_queue: number;
+  blocked_existing_whatsapp_queue: number;
+  fully_blocked_clients: number;
+}
+
 export interface ClientWithLastCall extends Client {
   call_logs_filtradas: CallRecord[];
   ultima_ligacao_filtrada: CallRecord | null;
@@ -142,6 +153,156 @@ const buildPortfolioFilterOptions = (
         Array.from(bucket.values()).sort((a, b) => a.localeCompare(b, 'pt-BR'))
       ])
     )
+  };
+};
+
+const chunkValues = <T,>(values: T[], chunkSize = 200) => {
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += chunkSize) {
+    chunks.push(values.slice(index, index + chunkSize));
+  }
+  return chunks;
+};
+
+const collectIdSet = async (
+  ids: string[],
+  loader: (chunk: string[]) => Promise<string[]>
+) => {
+  const collected = new Set<string>();
+  for (const chunk of chunkValues(ids)) {
+    const values = await loader(chunk);
+    values.filter(Boolean).forEach(value => collected.add(value));
+  }
+  return collected;
+};
+
+const analyzeDispatchTargets = async (
+  dispatch: Pick<CampaignDispatch, 'canal' | 'clientIds'>
+) => {
+  const uniqueClientIds = Array.from(new Set((dispatch.clientIds || []).filter(Boolean)));
+  const wantsVoice = dispatch.canal === 'voz' || dispatch.canal === 'ambos';
+  const wantsWhatsApp = dispatch.canal === 'whatsapp' || dispatch.canal === 'ambos';
+
+  if (uniqueClientIds.length === 0) {
+    return {
+      uniqueClientIds,
+      creatableVoiceClientIds: new Set<string>(),
+      creatableWhatsAppClientIds: new Set<string>(),
+      preview: {
+        clients_selected: 0,
+        queue_entries_expected: 0,
+        voice_entries_expected: 0,
+        whatsapp_entries_expected: 0,
+        blocked_recent_call: 0,
+        blocked_existing_voice_queue: 0,
+        blocked_existing_whatsapp_queue: 0,
+        fully_blocked_clients: 0
+      } as CampaignDispatchPreview
+    };
+  }
+
+  const recentThreshold = new Date();
+  recentThreshold.setDate(recentThreshold.getDate() - 3);
+
+  const [recentCallClients, pendingVoiceClients, scheduledVoiceClients, pendingWhatsAppClients] = await Promise.all([
+    collectIdSet(uniqueClientIds, async chunk => {
+      const { data, error } = await supabase
+        .from('call_logs')
+        .select('client_id')
+        .in('client_id', chunk)
+        .gte('start_time', recentThreshold.toISOString());
+      if (error) throw error;
+      return (data || []).map((row: any) => row.client_id).filter(Boolean);
+    }),
+    wantsVoice
+      ? collectIdSet(uniqueClientIds, async chunk => {
+          const { data, error } = await supabase
+            .from('tasks')
+            .select('client_id')
+            .in('client_id', chunk)
+            .eq('status', 'pending');
+          if (error) throw error;
+          return (data || []).map((row: any) => row.client_id).filter(Boolean);
+        })
+      : Promise.resolve(new Set<string>()),
+    wantsVoice
+      ? collectIdSet(uniqueClientIds, async chunk => {
+          const { data, error } = await supabase
+            .from('call_schedules')
+            .select('customer_id')
+            .in('customer_id', chunk)
+            .in('status', ['APROVADO', 'PENDENTE_APROVACAO']);
+          if (error) throw error;
+          return (data || []).map((row: any) => row.customer_id).filter(Boolean);
+        })
+      : Promise.resolve(new Set<string>()),
+    wantsWhatsApp
+      ? collectIdSet(uniqueClientIds, async chunk => {
+          const { data, error } = await supabase
+            .from('whatsapp_tasks')
+            .select('client_id')
+            .in('client_id', chunk)
+            .in('status', ['pending', 'started']);
+          if (error) throw error;
+          return (data || []).map((row: any) => row.client_id).filter(Boolean);
+        })
+      : Promise.resolve(new Set<string>())
+  ]);
+
+  const creatableVoiceClientIds = new Set<string>();
+  const creatableWhatsAppClientIds = new Set<string>();
+  const blockedRecentCall = new Set<string>();
+  const blockedExistingVoiceQueue = new Set<string>();
+  const blockedExistingWhatsAppQueue = new Set<string>();
+  let fullyBlockedClients = 0;
+
+  uniqueClientIds.forEach(clientId => {
+    let canCreateAnything = false;
+    const hasRecentCall = recentCallClients.has(clientId);
+    const hasPendingVoiceQueue = pendingVoiceClients.has(clientId) || scheduledVoiceClients.has(clientId);
+    const hasPendingWhatsAppQueue = pendingWhatsAppClients.has(clientId);
+
+    if (wantsVoice) {
+      if (hasRecentCall) {
+        blockedRecentCall.add(clientId);
+      } else if (hasPendingVoiceQueue) {
+        blockedExistingVoiceQueue.add(clientId);
+      } else {
+        creatableVoiceClientIds.add(clientId);
+        canCreateAnything = true;
+      }
+    }
+
+    if (wantsWhatsApp) {
+      if (hasRecentCall) {
+        blockedRecentCall.add(clientId);
+      } else if (hasPendingWhatsAppQueue) {
+        blockedExistingWhatsAppQueue.add(clientId);
+      } else {
+        creatableWhatsAppClientIds.add(clientId);
+        canCreateAnything = true;
+      }
+    }
+
+    if (!canCreateAnything) {
+      fullyBlockedClients++;
+    }
+  });
+
+  return {
+    uniqueClientIds,
+    creatableVoiceClientIds,
+    creatableWhatsAppClientIds,
+    preview: {
+      clients_selected: uniqueClientIds.length,
+      queue_entries_expected: creatableVoiceClientIds.size + creatableWhatsAppClientIds.size,
+      voice_entries_expected: creatableVoiceClientIds.size,
+      whatsapp_entries_expected: creatableWhatsAppClientIds.size,
+      blocked_recent_call: blockedRecentCall.size,
+      blocked_existing_voice_queue: blockedExistingVoiceQueue.size,
+      blocked_existing_whatsapp_queue: blockedExistingWhatsAppQueue.size,
+      fully_blocked_clients: fullyBlockedClients
+    } as CampaignDispatchPreview
   };
 };
 
@@ -340,12 +501,6 @@ export const CampaignPlannerService = {
         // Tag Categories matching
         query = query.overlaps('tags', filters.tags); 
       }
-      if (filters.interesses?.length) {
-        query = query.overlaps('offers', filters.interesses);
-      }
-      if (filters.interesses?.length) {
-        query = query.in('interest_product', filters.interesses);
-      }
       if (filters.temEmail === true) {
         query = query.not('email', 'is', null).neq('email', '');
       }
@@ -384,8 +539,20 @@ export const CampaignPlannerService = {
             
             const crResultado = cr.responses?.resultado || '';
             const matchesResultado = !filters.resultados?.length || filters.resultados.includes(crResultado);
+            const targetProduct = cr.responses?.target_product || '';
+            const offerProduct = cr.responses?.offer_product || '';
+            const portfolioScope = cr.responses?.portfolio_scope || '';
+            const matchesTargetProduct = !filters.produtoAlvo || matchesPortfolioFilter([targetProduct], [filters.produtoAlvo]);
+            const matchesOfferProduct = !filters.ofertaAlvo || matchesPortfolioFilter([offerProduct], [filters.ofertaAlvo]);
+            const matchesPortfolioScope = !filters.escopoLinha || normalizeComparableText(portfolioScope) === normalizeComparableText(filters.escopoLinha);
 
-            return matchesData && matchesCallType && matchesResultado && matchesOperador;
+            return matchesData &&
+              matchesCallType &&
+              matchesResultado &&
+              matchesOperador &&
+              matchesTargetProduct &&
+              matchesOfferProduct &&
+              matchesPortfolioScope;
           });
 
           // Map snake_case back to expected format if needed by ClientWithLastCall / UI components
@@ -396,7 +563,10 @@ export const CampaignPlannerService = {
             startTime: cr.start_time,
             operatorId: cr.operator_id,
             clientId: client.id,
-            proposito: cr.proposito
+            proposito: cr.proposito,
+            targetProduct: cr.responses?.target_product,
+            offerProduct: cr.responses?.offer_product,
+            portfolioScope: cr.responses?.portfolio_scope
           })) as CallRecord[];
 
           const ultimaLigacaoFiltrada = [...mappedCallsFiltered].sort(
@@ -442,11 +612,18 @@ export const CampaignPlannerService = {
             filters.operadores?.length ||
             filters.niveisSatisfacao?.length ||
             filters.periodos?.length ||
-            filters.diasAvulsos?.length;
+            filters.diasAvulsos?.length ||
+            filters.produtoAlvo ||
+            filters.ofertaAlvo ||
+            filters.escopoLinha;
 
           const matchesProfiles = matchesPortfolioFilter(client.customer_profiles, filters.perfisCliente);
           const matchesCategories = matchesPortfolioFilter(client.product_categories, filters.categoriasProduto);
           const matchesEquipment = matchesPortfolioFilter(client.equipment_models, filters.equipamentos);
+          const matchesInterests = !filters.interesses?.length || matchesPortfolioFilter(
+            [client.interest_product, ...(client.offers || [])].filter(Boolean),
+            filters.interesses
+          );
           const matchesSatisfaction = !filters.niveisSatisfacao?.length ||
             filters.niveisSatisfacao.includes(client.ultima_satisfacao_nivel || 'SEM_LEITURA');
 
@@ -455,6 +632,7 @@ export const CampaignPlannerService = {
             matchesProfiles &&
             matchesCategories &&
             matchesEquipment &&
+            matchesInterests &&
             matchesSatisfaction;
         }) as any[];
     } catch (err) {
@@ -463,15 +641,46 @@ export const CampaignPlannerService = {
     }
   },
 
+  previewDispatchCampaign: async (
+    dispatch: Pick<CampaignDispatch, 'canal' | 'clientIds'>
+  ): Promise<CampaignDispatchPreview> => {
+    const analysis = await analyzeDispatchTargets(dispatch);
+    return analysis.preview;
+  },
+
   dispatchCampaign: async (dispatch: CampaignDispatch): Promise<{
     campanha_id: string;
+    clients_selected: number;
     tasks_criadas: number;
+    ligacoes_criadas: number;
+    whatsapp_criados: number;
     ignorados: number;
+    bloqueados_contato_recente: number;
+    bloqueados_fila_voz: number;
+    bloqueados_fila_whatsapp: number;
     erros: string[];
   }> => {
-    const result = { campanha_id: '', tasks_criadas: 0, ignorados: 0, erros: [] as string[] };
+    const result = {
+      campanha_id: '',
+      clients_selected: 0,
+      tasks_criadas: 0,
+      ligacoes_criadas: 0,
+      whatsapp_criados: 0,
+      ignorados: 0,
+      bloqueados_contato_recente: 0,
+      bloqueados_fila_voz: 0,
+      bloqueados_fila_whatsapp: 0,
+      erros: [] as string[]
+    };
 
     try {
+      const analysis = await analyzeDispatchTargets(dispatch);
+      result.clients_selected = analysis.preview.clients_selected;
+      result.bloqueados_contato_recente = analysis.preview.blocked_recent_call;
+      result.bloqueados_fila_voz = analysis.preview.blocked_existing_voice_queue;
+      result.bloqueados_fila_whatsapp = analysis.preview.blocked_existing_whatsapp_queue;
+      result.ignorados = analysis.preview.fully_blocked_clients;
+
       const { data: campanha, error: errCamp } = await supabase
         .from('campanhas')
         .insert({
@@ -483,7 +692,7 @@ export const CampaignPlannerService = {
           ativa: true,
           criado_pelo_planner: true,
           filters_usados: dispatch.filters,
-          total_clientes: dispatch.clientIds.length,
+          total_clientes: analysis.uniqueClientIds.length,
           operator_destino_id: dispatch.operatorId,
         })
         .select('id')
@@ -493,39 +702,19 @@ export const CampaignPlannerService = {
       result.campanha_id = campanha.id;
 
       const batchSize = 50;
-      for (let i = 0; i < dispatch.clientIds.length; i += batchSize) {
-        const batch = dispatch.clientIds.slice(i, i + batchSize);
+      for (let i = 0; i < analysis.uniqueClientIds.length; i += batchSize) {
+        const batch = analysis.uniqueClientIds.slice(i, i + batchSize);
 
         for (const clientId of batch) {
           try {
-            const ago3 = new Date();
-            ago3.setDate(ago3.getDate() - 3);
+            const canCreateVoice = analysis.creatableVoiceClientIds.has(clientId);
+            const canCreateWhatsApp = analysis.creatableWhatsAppClientIds.has(clientId);
 
-            const { data: recentCall } = await supabase
-              .from('call_logs').select('id')
-              .eq('client_id', clientId)
-              .gte('start_time', ago3.toISOString())
-              .maybeSingle();
-
-            const { data: pendingTask } = await supabase
-              .from('tasks').select('id')
-              .eq('client_id', clientId)
-              .eq('type', dispatch.callType)
-              .eq('status', 'pending')
-              .maybeSingle();
-
-            const { data: pendingSchedule } = await supabase
-              .from('call_schedules').select('id')
-              .eq('customer_id', clientId)
-              .eq('status', 'APROVADO')
-              .maybeSingle();
-
-            if (recentCall || pendingTask || pendingSchedule) {
-              result.ignorados++;
+            if (!canCreateVoice && !canCreateWhatsApp) {
               continue;
             }
 
-            if (dispatch.canal === 'voz' || dispatch.canal === 'ambos') {
+            if ((dispatch.canal === 'voz' || dispatch.canal === 'ambos') && canCreateVoice) {
               const { error: taskInsertError } = await supabase.from('tasks').insert({
                 client_id: clientId,
                 assigned_to: dispatch.operatorId,
@@ -537,9 +726,10 @@ export const CampaignPlannerService = {
               });
               if (taskInsertError) throw taskInsertError;
               result.tasks_criadas++;
+              result.ligacoes_criadas++;
             }
 
-            if (dispatch.canal === 'whatsapp' || dispatch.canal === 'ambos') {
+            if ((dispatch.canal === 'whatsapp' || dispatch.canal === 'ambos') && canCreateWhatsApp) {
               const { error: waInsertError } = await supabase.from('whatsapp_tasks').insert({
                 client_id: clientId,
                 assigned_to: dispatch.operatorId,
@@ -550,8 +740,8 @@ export const CampaignPlannerService = {
                 updated_at: new Date().toISOString()
               });
               if (waInsertError) throw waInsertError;
-              // assuming whatsapp task acts similar for purpose
               result.tasks_criadas++;
+              result.whatsapp_criados++;
             }
 
             const { error: interactionError } = await supabase.from('campanha_interacoes').insert({

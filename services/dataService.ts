@@ -1937,25 +1937,51 @@ export const dataService = {
     return data || [];
   },
 
-  getDetailedPendingTasks: async () => {
-    const tasks = await dataService.getTasks();
-    const { data: allProfiles } = await supabase
-      .from('profiles')
-      .select('id, username_display, username');
+  getDetailedPendingTasks: async (operatorId?: string) => {
+    const [{ data: allProfiles }, tasks, waTasks] = await Promise.all([
+      supabase
+        .from('profiles')
+        .select('id, username_display, username'),
+      dataService.getTasks(operatorId),
+      dataService.getWhatsAppTasks(operatorId)
+    ]);
+
     const profileMap = new Map((allProfiles || []).map(p => [p.id, p]));
     const now = new Date();
 
-    return tasks
+    const voiceQueue = tasks
       .filter(t => t.status === 'pending')
       .filter(t => !!t.assignedTo)
       .filter(t => t.approvalStatus === 'APPROVED' || !t.approvalStatus)
       .filter(t => !t.scheduledFor || new Date(t.scheduledFor) <= now)
       .map(t => ({
         ...t,
+        queueChannel: 'LIGACAO',
         clients: t.clients || { name: t.clientName || 'Prospecto', phone: t.clientPhone || '' },
         profiles: profileMap.get(t.assignedTo || '') || null,
-        duration: 0
+        duration: 0,
+        report_time: 0
       }));
+
+    const whatsappQueue = waTasks
+      .filter(t => t.status === 'pending')
+      .filter(t => !!t.assignedTo)
+      .map(t => ({
+        ...t,
+        deadline: t.createdAt,
+        scheduledFor: undefined,
+        queueChannel: 'WHATSAPP',
+        clients: { name: t.clientName || 'Cliente Desconhecido', phone: t.clientPhone || '' },
+        profiles: profileMap.get(t.assignedTo || '') || null,
+        duration: 0,
+        report_time: 0
+      }));
+
+    return [...voiceQueue, ...whatsappQueue].sort((a, b) => {
+      const aTime = new Date(a.scheduledFor || a.deadline || a.createdAt || 0).getTime();
+      const bTime = new Date(b.scheduledFor || b.deadline || b.createdAt || 0).getTime();
+      return aTime - bTime;
+    });
   },
 
 
@@ -2236,7 +2262,10 @@ export const dataService = {
   },
 
 
-  upsertClient: async (client: Partial<Client>): Promise<Client> => {
+  upsertClient: async (
+    client: Partial<Client>,
+    options?: { replacePortfolio?: boolean }
+  ): Promise<Client> => {
     const phone = normalizePhone(client.phone || '');
     if (!phone) throw new Error("Telefone obrigatório");
 
@@ -2271,28 +2300,47 @@ export const dataService = {
     }
 
     const catalogConfig = await PortfolioCatalogService.getCatalogConfig();
-      const mergedPortfolioEntries = normalizePortfolioEntriesWithCatalog(
-        mergePortfolioEntries(existing?.portfolio_entries, client.portfolio_entries),
-        catalogConfig
-      );
-      const portfolioMetadata = collectPortfolioMetadata(mergedPortfolioEntries);
-    const equipmentModels = mergeUniquePortfolioValues(
-      existing?.equipment_models,
-      existing?.items,
-      client.equipment_models,
-      client.items,
-      portfolioMetadata.equipment_models
+    const shouldReplacePortfolio = Boolean(options?.replacePortfolio && client.portfolio_entries !== undefined);
+    const mergedPortfolioEntries = normalizePortfolioEntriesWithCatalog(
+      shouldReplacePortfolio
+        ? mergePortfolioEntries(client.portfolio_entries)
+        : mergePortfolioEntries(existing?.portfolio_entries, client.portfolio_entries),
+      catalogConfig
     );
-    const customerProfiles = mergeUniquePortfolioValues(
-      existing?.customer_profiles,
-      client.customer_profiles,
-      portfolioMetadata.customer_profiles
-    );
-    const productCategories = mergeUniquePortfolioValues(
-      existing?.product_categories,
-      client.product_categories,
-      portfolioMetadata.product_categories
-    );
+    const portfolioMetadata = collectPortfolioMetadata(mergedPortfolioEntries);
+    const equipmentModels = shouldReplacePortfolio
+      ? mergeUniquePortfolioValues(
+          client.equipment_models,
+          client.items,
+          portfolioMetadata.equipment_models
+        )
+      : mergeUniquePortfolioValues(
+          existing?.equipment_models,
+          existing?.items,
+          client.equipment_models,
+          client.items,
+          portfolioMetadata.equipment_models
+        );
+    const customerProfiles = shouldReplacePortfolio
+      ? mergeUniquePortfolioValues(
+          client.customer_profiles,
+          portfolioMetadata.customer_profiles
+        )
+      : mergeUniquePortfolioValues(
+          existing?.customer_profiles,
+          client.customer_profiles,
+          portfolioMetadata.customer_profiles
+        );
+    const productCategories = shouldReplacePortfolio
+      ? mergeUniquePortfolioValues(
+          client.product_categories,
+          portfolioMetadata.product_categories
+        )
+      : mergeUniquePortfolioValues(
+          existing?.product_categories,
+          client.product_categories,
+          portfolioMetadata.product_categories
+        );
 
     // Build payload: existing data takes priority, only fill empty fields
     const payload: any = {

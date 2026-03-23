@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   CampaignPlannerService, 
   CampaignPlannerFilters, 
+  CampaignDispatchPreview,
   ClientWithLastCall,
   PortfolioFilterOptions
 } from '../services/campaignPlannerService';
@@ -45,7 +46,7 @@ export const CampaignPlanner: React.FC = () => {
     resultados: [],
     operadores: [],
     niveisSatisfacao: [],
-    statusCliente: ['CLIENT', 'INATIVO', 'LEAD'],
+    statusCliente: ['CLIENT', 'INATIVO'],
     tags: [],
     interesses: [],
     perfisCliente: [],
@@ -64,12 +65,14 @@ export const CampaignPlanner: React.FC = () => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [dispatching, setDispatching] = useState(false);
+  const [dispatchPreview, setDispatchPreview] = useState<CampaignDispatchPreview | null>(null);
+  const [dispatchPreviewLoading, setDispatchPreviewLoading] = useState(false);
 
   // Dispatch state
   const [campNome, setCampNome] = useState('');
   const [campProposito, setCampProposito] = useState('');
   const [campCallType, setCampCallType] = useState<CallType>(CallType.PROSPECCAO);
-  const [campCanal, setCampCanal] = useState<'voz'|'whatsapp'|'ambos'>('ambos');
+  const [campCanal, setCampCanal] = useState<'voz'|'whatsapp'|'ambos'>('voz');
   const [campOperador, setCampOperador] = useState('');
 
   // UI state for date range picker
@@ -249,6 +252,46 @@ export const CampaignPlanner: React.FC = () => {
     setSelectedIds(newSet);
   };
 
+  const selectedClients = clients.filter(client => selectedIds.has(client.id));
+  const selectedLeadCount = selectedClients.filter(client => client.status === 'LEAD').length;
+  const estimatedQueueEntries = dispatchPreview?.queue_entries_expected ?? (selectedIds.size * (campCanal === 'ambos' ? 2 : 1));
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (selectedIds.size === 0) {
+      setDispatchPreview(null);
+      setDispatchPreviewLoading(false);
+      return;
+    }
+
+    setDispatchPreviewLoading(true);
+    CampaignPlannerService.previewDispatchCampaign({
+      canal: campCanal,
+      clientIds: Array.from(selectedIds)
+    })
+      .then(preview => {
+        if (!cancelled) {
+          setDispatchPreview(preview);
+        }
+      })
+      .catch(error => {
+        console.error(error);
+        if (!cancelled) {
+          setDispatchPreview(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setDispatchPreviewLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [campCanal, selectedIds]);
+
   const handleDispatch = async () => {
     if (!campNome || !campOperador) {
       alert("Preencha o nome da campanha e o operador destino.");
@@ -256,6 +299,10 @@ export const CampaignPlanner: React.FC = () => {
     }
     if (selectedIds.size === 0) {
       alert("Selecione pelo menos um cliente para criar a campanha.");
+      return;
+    }
+    if (dispatchPreview && dispatchPreview.queue_entries_expected === 0) {
+      alert("Nenhum cliente elegivel para entrar na fila com o canal escolhido.");
       return;
     }
 
@@ -271,7 +318,18 @@ export const CampaignPlanner: React.FC = () => {
         filters
       });
 
-      alert(`Disparo Concluído!\nTasks Criadas: ${result.tasks_criadas}\nIgnorados (contato recente): ${result.ignorados}\nErros de criação: ${result.erros.length}`);
+      alert(
+        `Disparo Concluído!\n` +
+        `Clientes selecionados: ${result.clients_selected}\n` +
+        `Itens de fila criados: ${result.tasks_criadas}\n` +
+        `- Ligações: ${result.ligacoes_criadas}\n` +
+        `- WhatsApp: ${result.whatsapp_criados}\n` +
+        `Bloqueados por contato recente: ${result.bloqueados_contato_recente}\n` +
+        `Bloqueados por fila de ligacao: ${result.bloqueados_fila_voz}\n` +
+        `Bloqueados por fila de WhatsApp: ${result.bloqueados_fila_whatsapp}\n` +
+        `Clientes sem abertura possivel: ${result.ignorados}\n` +
+        `Erros de criação: ${result.erros.length}`
+      );
       setCampNome('');
       setSelectedIds(new Set());
     } catch (err: any) {
@@ -1050,9 +1108,9 @@ export const CampaignPlanner: React.FC = () => {
                     onChange={e => setCampCanal(e.target.value as any)} 
                     className="w-full bg-slate-800/50 border border-slate-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-blue-500 focus:bg-slate-800 transition-colors cursor-pointer"
                   >
-                    <option value="ambos">Voz + WhatsApp (Livre escolha)</option>
                     <option value="voz">Apenas Voz (Bloquear WhatsApp)</option>
                     <option value="whatsapp">Apenas WhatsApp</option>
+                    <option value="ambos">Voz + WhatsApp (2 itens por cliente)</option>
                   </select>
                 </div>
 
@@ -1067,12 +1125,40 @@ export const CampaignPlanner: React.FC = () => {
                     {operadoresList.map(op => <option key={op.id} value={op.id}>{op.username_display || op.id}</option>)}
                   </select>
                 </div>
+
+                <div className="rounded-2xl border border-slate-700 bg-slate-800/60 p-4 space-y-2">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Prévia da carga</p>
+                  <p className="text-sm font-black text-white">{selectedIds.size} clientes selecionados</p>
+                  <p className="text-xs font-bold text-slate-300">
+                    Previsão bruta de fila: {estimatedQueueEntries} item(ns)
+                    {campCanal === 'ambos' ? ' (voz + WhatsApp para cada cliente)' : campCanal === 'voz' ? ' (somente voz)' : ' (somente WhatsApp)'}
+                  </p>
+                  {dispatchPreviewLoading ? (
+                    <p className="text-xs font-bold text-slate-300">Conferindo fila existente e contato recente...</p>
+                  ) : (
+                    <>
+                      <p className="text-xs font-bold text-slate-400">
+                        PrevisÃ£o validada: {dispatchPreview?.voice_entries_expected || 0} ligaÃ§Ã£o(Ãµes) elegÃ­veis e {dispatchPreview?.whatsapp_entries_expected || 0} WhatsApp(s) elegÃ­veis.
+                      </p>
+                      {(dispatchPreview?.blocked_recent_call || dispatchPreview?.blocked_existing_voice_queue || dispatchPreview?.blocked_existing_whatsapp_queue) ? (
+                        <p className="text-xs font-bold text-amber-300">
+                          Bloqueios atuais: {dispatchPreview?.blocked_recent_call || 0} por contato recente, {dispatchPreview?.blocked_existing_voice_queue || 0} por fila de ligaÃ§Ã£o e {dispatchPreview?.blocked_existing_whatsapp_queue || 0} por fila de WhatsApp.
+                        </p>
+                      ) : null}
+                    </>
+                  )}
+                  {selectedLeadCount > 0 && (
+                    <p className="text-xs font-bold text-amber-300">
+                      {selectedLeadCount} prospecto(s) LEAD estão incluídos na seleção atual.
+                    </p>
+                  )}
+                </div>
               </div>
 
               {/* Summary & Submit */}
               <div className="bg-slate-800/30 backdrop-blur-md border border-slate-700 p-5 rounded-2xl mt-8">
                 <div className="flex items-center justify-between mb-4">
-                  <span className="text-xs font-bold text-slate-400">Total a Despachar:</span>
+                  <span className="text-xs font-bold text-slate-400">Clientes Selecionados:</span>
                   <span className="text-3xl font-black text-blue-400 drop-shadow-[0_0_8px_rgba(96,165,250,0.5)]">{selectedIds.size}</span>
                 </div>
                 

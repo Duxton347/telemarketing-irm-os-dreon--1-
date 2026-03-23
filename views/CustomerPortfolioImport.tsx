@@ -101,7 +101,7 @@ export const CustomerPortfolioImport: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
+  const [importMode, setImportMode] = useState<'merge' | 'replace'>('replace');
   const [previewRows, setPreviewRows] = useState<ParsedPortfolioRow[]>([]);
   const [previewGroups, setPreviewGroups] = useState<ImportGroup[]>([]);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
@@ -308,16 +308,19 @@ export const CustomerPortfolioImport: React.FC = () => {
 
         const metadata = collectPortfolioMetadata(mergedEntries);
 
-        await dataService.upsertClient({
-          id: group.client.id,
-          name: group.client.name,
-          phone: group.client.phone,
-          portfolio_entries: mergedEntries,
-          customer_profiles: metadata.customer_profiles,
-          product_categories: metadata.product_categories,
-          equipment_models: metadata.equipment_models,
-          items: metadata.equipment_models
-        });
+        await dataService.upsertClient(
+          {
+            id: group.client.id,
+            name: group.client.name,
+            phone: group.client.phone,
+            portfolio_entries: mergedEntries,
+            customer_profiles: metadata.customer_profiles,
+            product_categories: metadata.product_categories,
+            equipment_models: metadata.equipment_models,
+            items: metadata.equipment_models
+          },
+          { replacePortfolio: importMode === 'replace' }
+        );
 
         report.updated.push(`${group.client.name} (${group.client.phone || 'sem telefone'})`);
       } catch (error: any) {
@@ -344,7 +347,7 @@ export const CustomerPortfolioImport: React.FC = () => {
             Perfil e Equipamentos do Cliente
           </h1>
           <p className="text-sm text-slate-500 font-medium mt-2">
-            Suba um CSV/Excel com `Nome`, `Telefone`, `Perfil`, `Categoria`, `Equipamento` e `Quantidade` para enriquecer cadastros ja compradores.
+            Suba um CSV/Excel com `Nome`, `Telefone`, `Perfil`, `Categoria`, `Equipamento` e `Quantidade` para corrigir ou substituir a carteira tecnica de clientes ja compradores.
           </p>
         </div>
       </div>
@@ -353,17 +356,6 @@ export const CustomerPortfolioImport: React.FC = () => {
         <div className="rounded-[20px] border border-slate-200 bg-slate-50 p-4 space-y-3">
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Modo da Importacao</p>
           <div className="flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => setImportMode('merge')}
-              className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${
-                importMode === 'merge'
-                  ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-200'
-                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
-              }`}
-            >
-              Mesclar com o cadastro atual
-            </button>
             <button
               type="button"
               onClick={() => setImportMode('replace')}
@@ -375,11 +367,22 @@ export const CustomerPortfolioImport: React.FC = () => {
             >
               Substituir carteira tecnica
             </button>
+            <button
+              type="button"
+              onClick={() => setImportMode('merge')}
+              className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${
+                importMode === 'merge'
+                  ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-200'
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              Adicionar sem apagar
+            </button>
           </div>
           <p className="text-xs font-medium text-slate-500">
-            {importMode === 'merge'
-              ? 'Mesclar adiciona ou atualiza itens sem apagar o que ja existe.'
-              : 'Substituir troca perfil, categorias e equipamentos do cliente pelos dados do arquivo para corrigir cadastros em massa.'}
+            {importMode === 'replace'
+              ? 'Substituir apaga o perfil, categorias e equipamentos tecnicos anteriores do cliente e grava exatamente o que veio no arquivo.'
+              : 'Adicionar sem apagar apenas complementa o cadastro atual e pode manter perfis ou produtos antigos.'}
           </p>
         </div>
 
