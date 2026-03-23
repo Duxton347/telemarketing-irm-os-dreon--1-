@@ -34,12 +34,14 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
 
     const renderQuestionInput = (q: Question) => {
         const key = q.campo_resposta || q.id;
+        const options = Array.isArray(q.options) ? q.options : [];
         
         // Check for special option types
-        const hasTextInput = q.tipo_input === 'text' || q.options.some(o => o === '__TEXT__');
-        const hasTextArea = q.options.some(o => o === '__TEXTAREA__');
-        const dropdownOption = q.options.find(o => o.startsWith('__DROPDOWN__:'));
-        const regularOptions = q.options.filter(o => !o.startsWith('__'));
+        const hasTextInput = q.tipo_input === 'text' || options.some(o => o === '__TEXT__');
+        const hasTextArea = options.some(o => o === '__TEXTAREA__');
+        const dropdownOption = options.find(o => o.startsWith('__DROPDOWN__:'));
+        const regularOptions = options.filter(o => !o.startsWith('__'));
+        const hasNoOptions = regularOptions.length === 0 && !dropdownOption && !hasTextInput && !hasTextArea;
 
         // Dropdown with predefined options
         if (dropdownOption) {
@@ -108,12 +110,12 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
         }
 
         // Textarea
-        if (hasTextArea) {
+        if (hasTextArea || hasNoOptions) {
             return (
                 <textarea
                     value={responses[key] || ''}
                     onChange={e => !readOnly && onResponseChange(key, e.target.value)}
-                    placeholder="Digite aqui..."
+                    placeholder={hasNoOptions ? "Escreva a resposta..." : "Digite aqui..."}
                     disabled={readOnly}
                     rows={3}
                     className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm text-slate-700 outline-none resize-none focus:ring-4 focus:ring-blue-500/10 transition-all"
@@ -124,7 +126,7 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
         // Default: button options (existing behavior)
         return (
             <div className="flex flex-wrap gap-2">
-                {q.options.map(opt => (
+                {options.map(opt => (
                     <button
                         key={opt}
                         type="button"

@@ -1028,7 +1028,13 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                                 {call.offerProduct && <span className="px-2 py-0.5 bg-emerald-100 text-emerald-600 rounded text-[8px] font-black uppercase">{call.offerProduct}</span>}
                               </div>
                             )}
-                            <p className="text-xs font-bold text-slate-700 italic line-clamp-2">"{call.responses?.written_report || 'Sem resumo'}"</p>
+                            <p className="text-xs font-bold text-slate-700 italic line-clamp-2">"{call.responses?.written_report || call.responses?.questionnaire_text_summary || 'Sem resumo'}"</p>
+                            {call.responses?.questionnaire_text_summary && call.responses?.questionnaire_text_summary !== call.responses?.written_report && (
+                              <div className="rounded-xl bg-slate-100 p-2">
+                                <p className="text-[8px] font-black uppercase tracking-widest text-slate-400">Respostas de escrita</p>
+                                <pre className="mt-1 whitespace-pre-wrap text-[10px] font-bold text-slate-600">{call.responses.questionnaire_text_summary}</pre>
+                              </div>
+                            )}
                             {(call.offerInterestLevel || call.offerBlockerReason) && (
                               <div className="pt-2 border-t border-slate-200/60 space-y-1">
                                 {call.offerInterestLevel && <p className="text-[9px] font-black uppercase text-slate-500">Receptividade: <span className="text-slate-700">{call.offerInterestLevel}</span></p>}

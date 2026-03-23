@@ -530,7 +530,7 @@ const Prospects: React.FC = () => {
                                                         <span className="text-[8px] font-black uppercase px-2 py-0.5 bg-slate-200 text-slate-600 rounded">{call.type}</span>
                                                         <span className="text-[8px] font-black text-slate-400 uppercase">{new Date(call.startTime).toLocaleDateString("pt-BR", { hour: '2-digit', minute: '2-digit' })}</span>
                                                     </div>
-                                                    <p className="text-xs font-bold text-slate-700 italic">"{call.responses?.written_report || call.responses?.justificativa || 'Sem notas extras registradas.'}"</p>
+                                                    <p className="text-xs font-bold text-slate-700 italic">"{call.responses?.written_report || call.responses?.questionnaire_text_summary || call.responses?.justificativa || 'Sem notas extras registradas.'}"</p>
                                                     <div className="flex justify-between items-center pt-2 border-t border-slate-200/50">
                                                         <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1"><Clock size={10} /> {Math.floor(call.duration / 60)}m {call.duration % 60}s</span>
                                                         <span className="text-[8px] font-black text-blue-500 uppercase tracking-widest">ID Operador: {call.operatorId.substring(0, 8)}</span>

@@ -12,7 +12,7 @@ import { TagApprovalCard } from '../components/TagApprovalCard';
 import { HelpTooltip } from '../components/HelpTooltip';
 import { PortfolioCategoryBrowser } from '../components/PortfolioCategoryBrowser';
 import { HELP_TEXTS } from '../utils/helpTexts';
-import { enrichQuestionnaireResponses } from '../utils/questionnaireInsights';
+import { buildQuestionnaireTextSummary, enrichQuestionnaireResponses } from '../utils/questionnaireInsights';
 import {
   buildPortfolioCategoryGroups,
   collectPortfolioMetadata,
@@ -637,10 +637,9 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       }
 
       // 2. Save Call Record
-      const normalizedResponses = enrichQuestionnaireResponses(
+      const baseResponses = enrichQuestionnaireResponses(
         {
           ...responses,
-          written_report: callSummary,
           call_type: currentTask.type,
           target_product: currentTask.targetProduct,
           offer_product: currentTask.offerProduct,
@@ -650,8 +649,22 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
           campaign_name: currentTask.campaignName,
           call_purpose: currentTask.proposito
         },
-        questions
+        questions,
+        currentTask.type,
+        currentTask.proposito
       );
+      const questionnaireTextSummary = buildQuestionnaireTextSummary(
+        baseResponses,
+        questions,
+        currentTask.type,
+        currentTask.proposito
+      );
+      const finalWrittenReport = callSummary.trim() || questionnaireTextSummary || '';
+      const normalizedResponses = {
+        ...baseResponses,
+        written_report: finalWrittenReport,
+        questionnaire_text_summary: questionnaireTextSummary || undefined
+      };
       const callData = {
         id: '',
         taskId: currentTask.id,
@@ -991,7 +1004,13 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                           {call.offerProduct && <span className="px-2 py-0.5 bg-emerald-950/30 text-emerald-300 rounded text-[8px] font-black uppercase border border-emerald-900/50">{call.offerProduct}</span>}
                         </div>
                       )}
-                      <p className="text-[10px] font-bold text-slate-300 italic">"{call.responses?.written_report || call.responses?.justificativa || call.responses?.note || 'Sem anotações.'}"</p>
+                      <p className="text-[10px] font-bold text-slate-300 italic">"{call.responses?.written_report || call.responses?.questionnaire_text_summary || call.responses?.justificativa || call.responses?.note || 'Sem anotações.'}"</p>
+                      {call.responses?.questionnaire_text_summary && call.responses?.questionnaire_text_summary !== call.responses?.written_report && (
+                        <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-2">
+                          <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Respostas de escrita</p>
+                          <pre className="mt-1 whitespace-pre-wrap text-[10px] font-medium text-slate-300">{call.responses.questionnaire_text_summary}</pre>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

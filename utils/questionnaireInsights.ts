@@ -296,6 +296,13 @@ const getApplicableQuestions = (
     .filter(question => questionMatchesContext(question, callType, proposito))
     .sort((a, b) => (a.order || 0) - (b.order || 0));
 
+const questionSupportsFreeText = (question: Question) => {
+  const options = Array.isArray(question.options) ? question.options : [];
+  if (question.tipo_input === 'text') return true;
+  if (options.some(option => option === '__TEXT__' || option === '__TEXTAREA__')) return true;
+  return options.filter(option => !option.startsWith('__')).length === 0;
+};
+
 const getLegacyQuestionKeys = (question: Question) => {
   if (!question.order) return [];
 
@@ -400,6 +407,24 @@ export const resolveQuestionnaireEntries = (
       label: resolveQuestionLabel(key, questions),
       value
     }));
+};
+
+export const buildQuestionnaireTextSummary = (
+  responses: Record<string, any>,
+  questions: Question[] = [],
+  callType?: CallType | 'ALL' | string,
+  proposito?: string | null
+) => {
+  const lines = getApplicableQuestions(questions, callType, proposito)
+    .filter(questionSupportsFreeText)
+    .map(question => {
+      const value = resolveStoredResponseForQuestion(responses, question);
+      if (!isMeaningful(value)) return null;
+      return `${question.text}: ${String(value).trim()}`;
+    })
+    .filter(Boolean) as string[];
+
+  return lines.join('\n');
 };
 
 export const enrichQuestionnaireResponses = (
