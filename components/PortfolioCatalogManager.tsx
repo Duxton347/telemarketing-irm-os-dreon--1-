@@ -34,6 +34,11 @@ export const PortfolioCatalogManager: React.FC<PortfolioCatalogManagerProps> = (
   const [feedback, setFeedback] = React.useState('');
   const [newCategoryName, setNewCategoryName] = React.useState('');
   const [newProduct, setNewProduct] = React.useState(createEmptyProductDraft);
+  const onCatalogChangeRef = React.useRef(onCatalogChange);
+
+  React.useEffect(() => {
+    onCatalogChangeRef.current = onCatalogChange;
+  }, [onCatalogChange]);
 
   const loadCatalog = React.useCallback(async () => {
     setLoading(true);
@@ -41,16 +46,16 @@ export const PortfolioCatalogManager: React.FC<PortfolioCatalogManagerProps> = (
     try {
       const nextCatalog = await PortfolioCatalogService.getCatalogConfig();
       setCatalog(nextCatalog);
-      onCatalogChange?.(nextCatalog);
+      onCatalogChangeRef.current?.(nextCatalog);
     } catch (error: any) {
       setFeedback(error?.message || 'Falha ao carregar o catalogo tecnico.');
     } finally {
       setLoading(false);
     }
-  }, [onCatalogChange]);
+  }, []);
 
   React.useEffect(() => {
-    loadCatalog();
+    void loadCatalog();
   }, [loadCatalog]);
 
   const activeCategoryOptions = React.useMemo(
@@ -153,7 +158,7 @@ export const PortfolioCatalogManager: React.FC<PortfolioCatalogManagerProps> = (
       const savedCatalog = await PortfolioCatalogService.saveCatalogConfig(catalog);
       setCatalog(savedCatalog);
       setFeedback('Catalogo salvo com sucesso.');
-      onCatalogChange?.(savedCatalog);
+      onCatalogChangeRef.current?.(savedCatalog);
     } catch (error: any) {
       setFeedback(error?.message || 'Falha ao salvar o catalogo.');
     } finally {
@@ -169,7 +174,7 @@ export const PortfolioCatalogManager: React.FC<PortfolioCatalogManagerProps> = (
       const updatedClients = await PortfolioCatalogService.applyCatalogToAllClients(savedCatalog);
       setCatalog(savedCatalog);
       setFeedback(`Catalogo aplicado em ${updatedClients} cliente(s).`);
-      onCatalogChange?.(savedCatalog);
+      onCatalogChangeRef.current?.(savedCatalog);
     } catch (error: any) {
       setFeedback(error?.message || 'Falha ao aplicar o catalogo na base.');
     } finally {

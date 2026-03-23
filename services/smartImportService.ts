@@ -1,5 +1,11 @@
 import { Client } from '../types';
 import * as xlsx from 'xlsx';
+import {
+  collectPortfolioMetadata,
+  mergePortfolioEntries,
+  normalizePortfolioQuantity,
+  normalizePortfolioValue
+} from '../utils/clientPortfolio';
 
 // Synonyms dictionary for column mapping
 const columnSynonyms: Record<string, string[]> = {
@@ -8,10 +14,14 @@ const columnSynonyms: Record<string, string[]> = {
   phone_secondary: ['telefone 2', 'celular 2', 'tel 2', 'contato 2'],
   email: ['e-mail', 'email', 'correio eletronico'],
   street: ['endereco', 'endereço', 'rua', 'logradouro', 'avenida', 'street'],
-  neighborhood: ['bairro', 'setor', 'neighborhood'],
+  neighborhood: ['bairro', 'neighborhood', 'setor/bairro', 'bairro/setor'],
   city: ['cidade', 'municipio', 'city'],
   state: ['estado', 'uf', 'state'],
-  zip_code: ['cep', 'codigo postal', 'zip']
+  zip_code: ['cep', 'codigo postal', 'zip'],
+  customer_profile: ['perfil', 'segmento', 'tipo cliente', 'tipo de cliente', 'setor', 'ramo', 'nicho'],
+  product_category: ['categoria', 'categoria produto', 'linha', 'linha produto', 'familia', 'grupo produto'],
+  equipment_model: ['equipamento', 'modelo', 'item', 'produto especifico', 'produto especÃ­fico', 'equipamento/modelo'],
+  portfolio_quantity: ['quantidade', 'qtd', 'qtde', 'qte']
 };
 
 export const SmartImportService = {
@@ -121,6 +131,22 @@ export const SmartImportService = {
 
     for (const row of rawData) {
       try {
+        const profile = normalizePortfolioValue(row[mapping['customer_profile']]);
+        const productCategory = normalizePortfolioValue(row[mapping['product_category']]);
+        const equipmentModel = normalizePortfolioValue(row[mapping['equipment_model']]);
+        const portfolioQuantity = normalizePortfolioQuantity(row[mapping['portfolio_quantity']]);
+        const importedPortfolioEntries = mergePortfolioEntries(
+          profile || productCategory || equipmentModel
+            ? [{
+                profile,
+                product_category: productCategory,
+                equipment: equipmentModel,
+                quantity: portfolioQuantity
+              }]
+            : []
+        );
+        const importedPortfolioMetadata = collectPortfolioMetadata(importedPortfolioEntries);
+
         const mappedData: Partial<Client> = {
           name: SmartImportService.normalizeName(row[mapping['name']]),
           phone: SmartImportService.normalizePhone(row[mapping['phone']]),
@@ -132,7 +158,12 @@ export const SmartImportService = {
           zip_code: row[mapping['zip_code']] || '',
           phone_secondary: SmartImportService.normalizePhone(row[mapping['phone_secondary']]),
           status: 'CLIENT',
-          origin: 'CSV_IMPORT'
+          origin: 'CSV_IMPORT',
+          customer_profiles: importedPortfolioMetadata.customer_profiles,
+          product_categories: importedPortfolioMetadata.product_categories,
+          equipment_models: importedPortfolioMetadata.equipment_models,
+          items: importedPortfolioMetadata.equipment_models,
+          portfolio_entries: importedPortfolioEntries
         };
 
         if (!mappedData.phone) continue; // Require phone
@@ -144,7 +175,7 @@ export const SmartImportService = {
         );
 
         if (existingClient) {
-          // Merge logic: prefer existing data, fill in gaps
+          // Merge logic: preserve existing data, fill in gaps, and merge technical profile metadata.
           const updatePayload: Partial<Client> = { id: existingClient.id };
           let changed = false;
 
@@ -157,6 +188,36 @@ export const SmartImportService = {
               changed = true;
             }
           });
+
+          const mergedPortfolioEntries = mergePortfolioEntries(
+            existingClient.portfolio_entries || [],
+            mappedData.portfolio_entries || []
+          );
+          const mergedPortfolioMetadata = collectPortfolioMetadata(mergedPortfolioEntries);
+          const nextProfiles = mergedPortfolioMetadata.customer_profiles;
+          const nextCategories = mergedPortfolioMetadata.product_categories;
+          const nextEquipment = mergedPortfolioMetadata.equipment_models;
+
+          if (JSON.stringify(mergedPortfolioEntries) !== JSON.stringify(existingClient.portfolio_entries || [])) {
+            updatePayload.portfolio_entries = mergedPortfolioEntries;
+            changed = true;
+          }
+
+          if (JSON.stringify(nextProfiles) !== JSON.stringify(existingClient.customer_profiles || [])) {
+            updatePayload.customer_profiles = nextProfiles;
+            changed = true;
+          }
+
+          if (JSON.stringify(nextCategories) !== JSON.stringify(existingClient.product_categories || [])) {
+            updatePayload.product_categories = nextCategories;
+            changed = true;
+          }
+
+          if (JSON.stringify(nextEquipment) !== JSON.stringify(existingClient.equipment_models || [])) {
+            updatePayload.equipment_models = nextEquipment;
+            updatePayload.items = nextEquipment;
+            changed = true;
+          }
 
           if (changed) {
             toUpdate.push(updatePayload);
