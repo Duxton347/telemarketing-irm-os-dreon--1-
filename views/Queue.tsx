@@ -322,7 +322,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     const selectedReason = reason || skipReasonSelected || 'Pulo Direto';
     const finalSkipReason = buildFinalSkipReason(selectedReason);
 
-    if (!confirm("Tem certeza que deseja pular SEM agendar um retorno? O contato poderÃ¡ ficar perdido.")) {
+    if (!confirm("Tem certeza que deseja pular SEM agendar um retorno? O contato poderá ficar perdido.")) {
       if (reopenModal === 'skip') {
         setIsSkipModalOpen(true);
       } else {
@@ -1076,7 +1076,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                     <div className="flex flex-wrap gap-3">
                       {currentTask.proposito && (
                         <span className="px-4 py-2 bg-blue-100 text-blue-700 rounded-2xl text-[10px] font-black uppercase border border-blue-200">
-                          PropÃ³sito: {currentTask.proposito}
+                          Propósito: {currentTask.proposito}
                         </span>
                       )}
                       {currentTask.targetProduct && (
@@ -1100,7 +1100,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   <textarea value={callSummary} onChange={e => setCallSummary(e.target.value)} className="w-full p-8 bg-slate-50 rounded-[40px] border border-slate-100 font-bold text-slate-800 h-48 outline-none resize-none focus:ring-8 focus:ring-blue-500/5 transition-all" placeholder="O que foi conversado? Anote detalhes importantes para o próximo contato." />
                 </section>
 
-                {/* PRODUTO DE INTERESSE E FUNIL (CRM) — Somente para ligações de prospecção */}
+                {/* PRODUTO DE INTERESSE E FUNIL (CRM) - Somente para ligações de prospecção */}
                 {isFillingReport && (currentTask.type === 'PROSPECÇÃO' || client.status === 'LEAD') && (
                   <section className="space-y-6 pt-6 border-t border-slate-100">
                     <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
@@ -1150,26 +1150,26 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                 {isFillingReport && (currentTask.targetProduct || currentTask.offerProduct) && (
                   <section className="space-y-6 pt-6 border-t border-slate-100">
                     <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
-                      <ClipboardList size={18} className="text-cyan-500" /> MÃ©tricas da Oferta e da Linha
+                      <ClipboardList size={18} className="text-cyan-500" /> Métricas da Oferta e da Linha
                     </h5>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-cyan-50/40 p-8 rounded-[40px] border border-cyan-100/70">
                       {currentTask.targetProduct && (
                         <div className="space-y-2">
-                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Escopo do retorno no pÃ³s-venda</label>
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Escopo do retorno no pós-venda</label>
                           <select
                             className="w-full p-4 bg-white rounded-2xl outline-none font-bold text-slate-700 text-sm border border-slate-200 focus:border-cyan-500 transition-all cursor-pointer"
                             value={campaignFeedback.portfolioScope}
                             onChange={e => setCampaignFeedback(prev => ({ ...prev, portfolioScope: e.target.value }))}
                           >
                             <option value="">Selecione...</option>
-                            <option value="somente_linha_alvo">Somente a linha da ligaÃ§Ã£o</option>
+                            <option value="somente_linha_alvo">Somente a linha da ligação</option>
                             <option value="mais_de_uma_linha">Mais de uma linha do cliente</option>
                             <option value="todas_as_linhas">Refere-se a todas as linhas</option>
                           </select>
                         </div>
                       )}
                       <div className="space-y-2">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">NÃ­vel de receptividade</label>
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Nível de receptividade</label>
                         <select
                           className="w-full p-4 bg-white rounded-2xl outline-none font-bold text-slate-700 text-sm border border-slate-200 focus:border-cyan-500 transition-all cursor-pointer"
                           value={campaignFeedback.offerInterestLevel}
@@ -1177,19 +1177,19 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                         >
                           <option value="">Selecione...</option>
                           <option value="ALTO">Alto</option>
-                          <option value="MEDIO">MÃ©dio</option>
+                          <option value="MEDIO">Médio</option>
                           <option value="BAIXO">Baixo</option>
                           <option value="SEM_INTERESSE">Sem interesse</option>
                         </select>
                       </div>
                       <div className="space-y-2 md:col-span-2">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Principal impeditivo para compra/adesÃ£o</label>
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Principal impeditivo para compra/adesão</label>
                         <input
                           type="text"
                           value={campaignFeedback.offerBlockerReason}
                           onChange={e => setCampaignFeedback(prev => ({ ...prev, offerBlockerReason: e.target.value }))}
                           className="w-full p-4 bg-white rounded-2xl outline-none font-bold text-slate-700 text-sm border border-slate-200 focus:border-cyan-500 transition-all"
-                          placeholder="Ex: PreÃ§o, prazo, sem urgÃªncia, jÃ¡ possui estoque..."
+                          placeholder="Ex: Preço, prazo, sem urgência, já possui estoque..."
                         />
                       </div>
                     </div>
@@ -1393,8 +1393,8 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   </div>
                   <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 pb-2">
                     {skipFlowMode === 'direct'
-                      ? 'Ao escolher o motivo, o atendimento serÃ¡ pulado sem criar repique.'
-                      : 'Ao escolher o motivo, vamos abrir as opÃ§Ãµes de repique.'}
+                      ? 'Ao escolher o motivo, o atendimento será pulado sem criar repique.'
+                      : 'Ao escolher o motivo, vamos abrir as opções de repique.'}
                   </p>
                   {SKIP_REASONS.map(reason => (
                     <button

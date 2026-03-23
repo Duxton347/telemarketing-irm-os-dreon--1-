@@ -809,7 +809,7 @@ export const CampaignPlanner: React.FC = () => {
                   <div className="flex flex-wrap gap-2">
                     {[
                       { key: 'ALTA', label: 'Alta', active: 'bg-emerald-500 text-white border-transparent shadow-emerald-500/30' },
-                      { key: 'MEDIA', label: 'MÃ©dia', active: 'bg-amber-500 text-white border-transparent shadow-amber-500/30' },
+                      { key: 'MEDIA', label: 'Média', active: 'bg-amber-500 text-white border-transparent shadow-amber-500/30' },
                       { key: 'BAIXA', label: 'Baixa', active: 'bg-rose-500 text-white border-transparent shadow-rose-500/30' },
                       { key: 'SEM_LEITURA', label: 'Sem leitura', active: 'bg-slate-700 text-white border-transparent shadow-slate-500/20' }
                     ].map(level => (
@@ -1169,11 +1169,11 @@ export const CampaignPlanner: React.FC = () => {
                   ) : (
                     <>
                       <p className="text-xs font-bold text-slate-400">
-                        PrevisÃ£o validada: {dispatchPreview?.voice_entries_expected || 0} ligaÃ§Ã£o(Ãµes) elegÃ­veis e {dispatchPreview?.whatsapp_entries_expected || 0} WhatsApp(s) elegÃ­veis.
+                        Previsão validada: {dispatchPreview?.voice_entries_expected || 0} ligação(ões) elegíveis e {dispatchPreview?.whatsapp_entries_expected || 0} WhatsApp(s) elegíveis.
                       </p>
                       {(dispatchPreview?.blocked_recent_call || dispatchPreview?.blocked_existing_voice_queue || dispatchPreview?.blocked_existing_whatsapp_queue) ? (
                         <p className="text-xs font-bold text-amber-300">
-                          Bloqueios atuais: {dispatchPreview?.blocked_recent_call || 0} por contato recente, {dispatchPreview?.blocked_existing_voice_queue || 0} por fila de ligaÃ§Ã£o e {dispatchPreview?.blocked_existing_whatsapp_queue || 0} por fila de WhatsApp.
+                          Bloqueios atuais: {dispatchPreview?.blocked_recent_call || 0} por contato recente, {dispatchPreview?.blocked_existing_voice_queue || 0} por fila de ligação e {dispatchPreview?.blocked_existing_whatsapp_queue || 0} por fila de WhatsApp.
                         </p>
                       ) : null}
                     </>
