@@ -24,6 +24,8 @@ interface QueueProps {
   user: any;
 }
 
+type SkipFlowMode = 'direct' | 'repique';
+
 const EMPTY_CLIENT_HISTORY: ClientHistoryData = {
   calls: [],
   protocols: [],
@@ -281,16 +283,71 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setIsFillingReport(true);
   };
 
-  const handleSkipDuringCall = () => {
-    setIsSkipModalOpen(true);
-  };
-
   // New state for Skip-Reschedule flow
   const [skipReasonSelected, setSkipReasonSelected] = React.useState<string | null>(null);
+  const [skipFlowMode, setSkipFlowMode] = React.useState<SkipFlowMode>('direct');
   const [whatsappCheck, setWhatsappCheck] = React.useState(false);
   const [isRescheduleModalOpen, setIsRescheduleModalOpen] = React.useState(false);
   const [manualRepDate, setManualRepDate] = React.useState('');
   const [manualRepTime, setManualRepTime] = React.useState('09:00');
+
+  const resetSkipFlowState = () => {
+    setIsSkipModalOpen(false);
+    setIsRescheduleModalOpen(false);
+    setSkipReasonSelected(null);
+    setSkipFlowMode('direct');
+    setWhatsappCheck(false);
+    setManualRepDate('');
+    setManualRepTime('09:00');
+  };
+
+  const openSkipFlow = (mode: SkipFlowMode = 'direct') => {
+    setSkipReasonSelected(null);
+    setSkipFlowMode(mode);
+    setWhatsappCheck(false);
+    setManualRepDate('');
+    setManualRepTime('09:00');
+    setIsRescheduleModalOpen(false);
+    setIsSkipModalOpen(true);
+  };
+
+  const buildFinalSkipReason = (reason: string) => {
+    const skipTimingStr = isCalling ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
+    return `${skipTimingStr}${reason}`;
+  };
+
+  const handleDirectSkip = async (reason?: string, reopenModal: 'skip' | 'repique' = 'skip') => {
+    if (!currentTask) return;
+
+    const selectedReason = reason || skipReasonSelected || 'Pulo Direto';
+    const finalSkipReason = buildFinalSkipReason(selectedReason);
+
+    if (!confirm("Tem certeza que deseja pular SEM agendar um retorno? O contato poderÃ¡ ficar perdido.")) {
+      if (reopenModal === 'skip') {
+        setIsSkipModalOpen(true);
+      } else {
+        setIsRescheduleModalOpen(true);
+      }
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      await dataService.updateTask(currentTask.id, { status: 'skipped', skipReason: finalSkipReason });
+      await dataService.logOperatorEvent(user.id, OperatorEventType.PULAR_ATENDIMENTO, currentTask.id, `Pulo (Sem Repique) - Motivo: ${finalSkipReason}`);
+      await fetchQueue();
+      resetSkipFlowState();
+    } catch (e: any) {
+      console.error('Erro ao pular:', e);
+      alert(`Erro ao pular: ${e?.message || e}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleSkipDuringCall = () => {
+    openSkipFlow();
+  };
 
   const handleCopyPhone = () => {
     if (client) {
@@ -384,13 +441,14 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
             await dataService.updateClientFields(client.id, { invalid: true });
 
             const skipTimingStr = isCalling ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
-            const finalSkipReason = `${skipTimingStr}${reason}`;
+            const finalSkipReason = buildFinalSkipReason(reason);
 
             await dataService.updateTask(currentTask.id, { status: 'skipped', skipReason: finalSkipReason });
             await dataService.logOperatorEvent(user.id, OperatorEventType.PULAR_ATENDIMENTO, currentTask.id, `Marcado como Telefone Inválido: ${finalSkipReason}`);
 
             alert("Cliente marcado com telefone incorreto. Ele foi removido das filas e enviado para o relatório de revisão.");
             await fetchQueue();
+            resetSkipFlowState();
         } catch (e) {
             console.error(e);
             alert("Erro ao marcar cliente como inválido.");
@@ -398,6 +456,11 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
             setIsProcessing(false);
         }
         return; // Bypass reschedule modal
+    }
+
+    if (skipFlowMode === 'direct') {
+      await handleDirectSkip(reason);
+      return;
     }
 
     setIsRescheduleModalOpen(true);
@@ -411,7 +474,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
 
     try {
       const skipTimingStr = isCalling ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
-      const finalSkipReason = `${skipTimingStr}${skipReasonSelected}`;
+      const finalSkipReason = buildFinalSkipReason(skipReasonSelected);
 
       let date: Date;
       if (interval === 'manual' && manualDate) {
@@ -473,9 +536,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       alert(`Erro ao solicitar reagendamento: ${e?.message || e}`);
     } finally {
       setIsProcessing(false);
-      setIsRescheduleModalOpen(false);
-      setSkipReasonSelected(null);
-      setWhatsappCheck(false);
+      resetSkipFlowState();
     }
   };
 
@@ -491,7 +552,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setIsProcessing(true);
     try {
       const skipTimingStr = isCalling ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
-      const finalSkipReason = skipReasonSelected ? `${skipTimingStr}${skipReasonSelected}` : `${skipTimingStr}Pulo com WhatsApp`;
+      const finalSkipReason = buildFinalSkipReason(skipReasonSelected || 'Pulo com WhatsApp');
 
       // Log WhatsApp
       await dataService.saveCall({
@@ -520,7 +581,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       alert("Erro ao finalizar.");
     } finally {
       setIsProcessing(false);
-      setIsRescheduleModalOpen(false);
+      resetSkipFlowState();
     }
   };
 
@@ -947,7 +1008,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
               <button onClick={handleStartCall} className="py-6 bg-blue-600 text-white rounded-[28px] font-black uppercase tracking-widest text-[11px] shadow-2xl flex items-center justify-center gap-3 active:scale-95 transition-all">
                 <Play size={20} /> Iniciar
               </button>
-              <button onClick={() => setIsSkipModalOpen(true)} disabled={isProcessing} className="py-6 bg-slate-200 text-slate-600 rounded-[28px] font-black uppercase tracking-widest text-[11px] shadow-sm flex items-center justify-center gap-3 hover:bg-slate-300 active:scale-95 transition-all">
+              <button onClick={() => openSkipFlow()} disabled={isProcessing} className="py-6 bg-slate-200 text-slate-600 rounded-[28px] font-black uppercase tracking-widest text-[11px] shadow-sm flex items-center justify-center gap-3 hover:bg-slate-300 active:scale-95 transition-all">
                 <SkipForward size={20} /> Pular
               </button>
             </div>
@@ -1292,9 +1353,30 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   <h3 className="text-xl font-black uppercase tracking-tighter">
                     {isCalling ? 'Pular Chamada em Curso' : 'Motivo do Pulo'}
                   </h3>
-                  <button onClick={() => setIsSkipModalOpen(false)}><X size={24} /></button>
+                  <button onClick={resetSkipFlowState}><X size={24} /></button>
                 </div>
                 <div className="p-8 space-y-3">
+                  <div className="grid grid-cols-2 gap-3 pb-2">
+                    <button
+                      onClick={() => setSkipFlowMode('direct')}
+                      className={`p-4 rounded-2xl border text-left transition-all ${skipFlowMode === 'direct' ? 'bg-red-50 border-red-400 text-red-700 shadow-sm' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'}`}
+                    >
+                      <span className="block text-[10px] font-black uppercase tracking-widest">Pular</span>
+                      <span className="block mt-1 text-[11px] font-bold">Sem retorno</span>
+                    </button>
+                    <button
+                      onClick={() => setSkipFlowMode('repique')}
+                      className={`p-4 rounded-2xl border text-left transition-all ${skipFlowMode === 'repique' ? 'bg-orange-50 border-orange-400 text-orange-700 shadow-sm' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'}`}
+                    >
+                      <span className="block text-[10px] font-black uppercase tracking-widest">Repique</span>
+                      <span className="block mt-1 text-[11px] font-bold">Abrir agendamento</span>
+                    </button>
+                  </div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 pb-2">
+                    {skipFlowMode === 'direct'
+                      ? 'Ao escolher o motivo, o atendimento serÃ¡ pulado sem criar repique.'
+                      : 'Ao escolher o motivo, vamos abrir as opÃ§Ãµes de repique.'}
+                  </p>
                   {SKIP_REASONS.map(reason => (
                     <button
                       key={reason}

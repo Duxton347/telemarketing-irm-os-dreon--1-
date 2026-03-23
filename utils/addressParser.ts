@@ -17,9 +17,9 @@ type KnownCityEntry = {
 };
 
 const KNOWN_CITY_ENTRIES: KnownCityEntry[] = [
-    { canonical: 'Ilhabela', aliases: ['ilhabela'] },
+    { canonical: 'Ilhabela', aliases: ['ilhabela', 'ilha bela'] },
     { canonical: 'Caraguatatuba', aliases: ['caraguatatuba', 'caragua'] },
-    { canonical: 'S\u00e3o Sebasti\u00e3o', aliases: ['sao sebastiao', 'sao sebasti\u00e3o', 'sebastiao'] },
+    { canonical: 'S\u00e3o Sebasti\u00e3o', aliases: ['sao sebastiao', 'sao sebasti\u00e3o', 'sao sebastiao sp', 'sao sebasti\u00e3o sp', 'sebastiao'] },
     { canonical: 'Ubatuba', aliases: ['ubatuba'] },
     { canonical: 'Bertioga', aliases: ['bertioga'] },
     { canonical: 'Jacare\u00ed', aliases: ['jacarei', 'jacare\u00ed'] },

@@ -2,6 +2,13 @@ import { supabase } from '../lib/supabase';
 import { Campanha, Client, CallRecord, Task, ClientTag } from '../types';
 import { mergePortfolioEntries, normalizeComparableText } from '../utils/clientPortfolio';
 import {
+  parseAddress,
+  resolveKnownCity,
+  isLikelyInvalidStructuredCity,
+  isLikelyInvalidStructuredNeighborhood
+} from '../utils/addressParser';
+import { normalizeInterestProduct, normalizeInterestProductList } from '../utils/interestCatalog';
+import {
   getActivePortfolioCatalogCategories,
   getActivePortfolioCatalogProducts,
   normalizeClientPortfolioSnapshot
@@ -66,6 +73,58 @@ export interface PortfolioFilterOptions {
   equipments: string[];
   equipmentByCategory: Record<string, string[]>;
 }
+
+const normalizeLocationLabel = (value?: string | null) => {
+  const text = String(value || '').trim().replace(/\s+/g, ' ');
+  return text || undefined;
+};
+
+const resolveCampaignClientLocation = (client: Pick<Client, 'city' | 'neighborhood' | 'address'> | any) => {
+  const rawAddress = String(client?.address || '').trim();
+  const parsed = rawAddress ? parseAddress(rawAddress) : {};
+
+  const currentCity = normalizeLocationLabel(client?.city);
+  const parsedCity = normalizeLocationLabel(parsed.city);
+  const canonicalCurrentCity = currentCity && !isLikelyInvalidStructuredCity(currentCity)
+    ? (resolveKnownCity(currentCity) || currentCity)
+    : undefined;
+  const canonicalParsedCity = parsedCity
+    ? (resolveKnownCity(parsedCity) || parsedCity)
+    : undefined;
+
+  const currentNeighborhood = normalizeLocationLabel(client?.neighborhood);
+  const parsedNeighborhood = normalizeLocationLabel(parsed.neighborhood);
+  const canonicalNeighborhood = currentNeighborhood && !isLikelyInvalidStructuredNeighborhood(currentNeighborhood)
+    ? currentNeighborhood
+    : parsedNeighborhood;
+
+  return {
+    city: canonicalCurrentCity || canonicalParsedCity,
+    neighborhood: canonicalNeighborhood
+  };
+};
+
+const matchesNormalizedLocationFilter = (
+  value: string | undefined,
+  filters: string[] | undefined,
+  mode: 'city' | 'neighborhood'
+) => {
+  if (!filters?.length) return true;
+
+  const normalizedValue = mode === 'city'
+    ? normalizeComparableText(resolveKnownCity(value) || value)
+    : normalizeComparableText(value);
+
+  if (!normalizedValue) return false;
+
+  return filters.some(filter => {
+    const normalizedFilter = mode === 'city'
+      ? normalizeComparableText(resolveKnownCity(filter) || filter)
+      : normalizeComparableText(filter);
+
+    return Boolean(normalizedFilter) && normalizedFilter === normalizedValue;
+  });
+};
 
 const matchesPortfolioFilter = (values: string[] | undefined, filters: string[] | undefined) => {
   if (!filters?.length) return true;
@@ -360,21 +419,51 @@ export const CampaignPlannerService = {
 
   getDistinctCities: async (): Promise<string[]> => {
     try {
-      const { data, error } = await supabase.from('clients').select('city').not('city', 'is', null).neq('city', '');
+      const { data, error } = await supabase
+        .from('clients')
+        .select('city, address, invalid')
+        .neq('invalid', true);
       if (error) throw error;
-      const cities = Array.from(new Set(data.map(r => r.city)));
-      return cities.sort();
+      const bucket = new Map<string, string>();
+      (data || []).forEach((row: any) => {
+        const resolvedCity = resolveCampaignClientLocation(row).city;
+        const normalizedCity = normalizeComparableText(resolvedCity);
+        if (resolvedCity && normalizedCity && !bucket.has(normalizedCity)) {
+          bucket.set(normalizedCity, resolvedCity);
+        }
+      });
+      return Array.from(bucket.values()).sort((a, b) => a.localeCompare(b, 'pt-BR'));
     } catch (e) { console.error(e); return []; }
   },
 
   getDistinctNeighborhoods: async (city?: string): Promise<string[]> => {
     try {
-      let query = supabase.from('clients').select('neighborhood').not('neighborhood', 'is', null).neq('neighborhood', '');
-      if (city) query = query.eq('city', city);
+      const query = supabase
+        .from('clients')
+        .select('city, neighborhood, address, invalid')
+        .neq('invalid', true);
       const { data, error } = await query;
       if (error) throw error;
-      const neighborhoods = Array.from(new Set(data.map(r => r.neighborhood)));
-      return neighborhoods.sort();
+      const normalizedCityFilter = normalizeComparableText(resolveKnownCity(city) || city);
+      const bucket = new Map<string, string>();
+
+      (data || []).forEach((row: any) => {
+        const resolvedLocation = resolveCampaignClientLocation(row);
+        if (
+          normalizedCityFilter &&
+          normalizeComparableText(resolveKnownCity(resolvedLocation.city) || resolvedLocation.city) !== normalizedCityFilter
+        ) {
+          return;
+        }
+
+        const neighborhood = resolvedLocation.neighborhood;
+        const normalizedNeighborhood = normalizeComparableText(neighborhood);
+        if (neighborhood && normalizedNeighborhood && !bucket.has(normalizedNeighborhood)) {
+          bucket.set(normalizedNeighborhood, neighborhood);
+        }
+      });
+
+      return Array.from(bucket.values()).sort((a, b) => a.localeCompare(b, 'pt-BR'));
     } catch (e) { console.error(e); return []; }
   },
 
@@ -435,8 +524,7 @@ export const CampaignPlannerService = {
         ...(quotesData?.map(q => q.interest_product) || [])
       ];
 
-      const uniqueProducts = Array.from(new Set(allProducts.filter(Boolean)));
-      return uniqueProducts.sort();
+      return normalizeInterestProductList(allProducts).sort((a, b) => a.localeCompare(b, 'pt-BR'));
     } catch (e) { console.error(e); return []; }
   },
 
@@ -491,12 +579,6 @@ export const CampaignPlannerService = {
       query = query.neq('invalid', true);
 
       // Exclui prospects que já são clientes (evita duplicidade no disparador)
-      if (filters.bairros?.length) {
-        query = query.in('neighborhood', filters.bairros);
-      }
-      if (filters.cidades?.length) {
-        query = query.in('city', filters.cidades);
-      }
       if (filters.tags?.length) {
         // Tag Categories matching
         query = query.overlaps('tags', filters.tags); 
@@ -588,9 +670,16 @@ export const CampaignPlannerService = {
                 ultimaLigacaoFiltrada.proposito
               )
             : 'SEM_LEITURA';
+          const resolvedLocation = resolveCampaignClientLocation(client as any);
+          const normalizedInterestProduct = normalizeInterestProduct(client.interest_product);
+          const normalizedOffers = normalizeInterestProductList(client.offers || []);
 
           return {
             ...client,
+            city: resolvedLocation.city || client.city,
+            neighborhood: resolvedLocation.neighborhood || client.neighborhood,
+            interest_product: normalizedInterestProduct,
+            offers: normalizedOffers,
             customer_profiles: normalizedSnapshot.customer_profiles,
             product_categories: normalizedSnapshot.product_categories,
             equipment_models: normalizedSnapshot.equipment_models,
@@ -620,6 +709,8 @@ export const CampaignPlannerService = {
           const matchesProfiles = matchesPortfolioFilter(client.customer_profiles, filters.perfisCliente);
           const matchesCategories = matchesPortfolioFilter(client.product_categories, filters.categoriasProduto);
           const matchesEquipment = matchesPortfolioFilter(client.equipment_models, filters.equipamentos);
+          const matchesCities = matchesNormalizedLocationFilter(client.city, filters.cidades, 'city');
+          const matchesNeighborhoods = matchesNormalizedLocationFilter(client.neighborhood, filters.bairros, 'neighborhood');
           const matchesInterests = !filters.interesses?.length || matchesPortfolioFilter(
             [client.interest_product, ...(client.offers || [])].filter(Boolean),
             filters.interesses
@@ -632,6 +723,8 @@ export const CampaignPlannerService = {
             matchesProfiles &&
             matchesCategories &&
             matchesEquipment &&
+            matchesCities &&
+            matchesNeighborhoods &&
             matchesInterests &&
             matchesSatisfaction;
         }) as any[];

@@ -24,6 +24,7 @@ import {
   isLikelyInvalidStructuredNeighborhood,
   resolveKnownCity
 } from '../utils/addressParser';
+import { normalizeInterestProduct, normalizeInterestProductList } from '../utils/interestCatalog';
 import { PortfolioCatalogService } from './portfolioCatalogService';
 
 const normalize = (str: string) =>
@@ -43,6 +44,38 @@ const shouldRepairStructuredCity = (value?: string) =>
 
 const shouldRepairStructuredState = (value?: string) =>
   !value || value.trim().length !== 2;
+
+const isMissingSchemaColumnError = (error: any, tableName: string, columnName: string) => {
+  const message = String(error?.message || '');
+  if (!message) return false;
+
+  return message.includes(`'${columnName}'`)
+    && message.includes(`'${tableName}'`)
+    && (
+      message.toLowerCase().includes('schema cache')
+      || error?.code === 'PGRST204'
+      || error?.code === '42703'
+    );
+};
+
+const removeUpdatedAt = <T extends Record<string, any>>(payload: T): Omit<T, 'updated_at'> => {
+  const { updated_at, ...rest } = payload;
+  return rest;
+};
+
+const runUpdateWithUpdatedAtFallback = async <TResult>(
+  tableName: string,
+  payload: Record<string, any>,
+  updater: (safePayload: Record<string, any>) => Promise<TResult>
+): Promise<TResult> => {
+  let result: any = await updater(payload);
+
+  if (result?.error && payload.updated_at !== undefined && isMissingSchemaColumnError(result.error, tableName, 'updated_at')) {
+    result = await updater(removeUpdatedAt(payload));
+  }
+
+  return result;
+};
 
 const parseLocationFromGoogleAddress = (rawAddress?: string) => {
   const address = getTrimmedText(rawAddress);
@@ -70,8 +103,8 @@ const resolveStructuredAddressFields = (
   const fallbackStreet = getTrimmedText(fallback?.street);
   const primaryNeighborhood = getTrimmedText(primary?.neighborhood);
   const fallbackNeighborhood = getTrimmedText(fallback?.neighborhood);
-  const primaryCity = getTrimmedText(primary?.city);
-  const fallbackCity = getTrimmedText(fallback?.city);
+  const primaryCity = resolveKnownCity(getTrimmedText(primary?.city) || undefined) || getTrimmedText(primary?.city);
+  const fallbackCity = resolveKnownCity(getTrimmedText(fallback?.city) || undefined) || getTrimmedText(fallback?.city);
   const primaryState = getTrimmedText(primary?.state)?.toUpperCase();
   const fallbackState = getTrimmedText(fallback?.state)?.toUpperCase();
   const primaryZip = getTrimmedText(primary?.zip_code);
@@ -94,9 +127,15 @@ const resolveStructuredAddressFields = (
     neighborhood: shouldRepairStructuredNeighborhood(neighborhoodCandidate)
       ? (parsedNeighborhood || neighborhoodCandidate)
       : neighborhoodCandidate,
-    city: shouldRepairStructuredCity(cityCandidate)
-      ? (parsedCity || cityCandidate)
-      : cityCandidate,
+    city: resolveKnownCity(
+      shouldRepairStructuredCity(cityCandidate)
+        ? (parsedCity || cityCandidate)
+        : cityCandidate
+    ) || (
+      shouldRepairStructuredCity(cityCandidate)
+        ? (parsedCity || cityCandidate)
+        : cityCandidate
+    ),
     state: shouldRepairStructuredState(stateCandidate)
       ? (parsedState || stateCandidate)
       : stateCandidate,
@@ -875,7 +914,7 @@ const mapClientRecord = (record: any): Client => {
     phone: record.phone || '',
     address: structuredAddress.address || record.address || '',
     items: equipmentModels,
-    offers: record.offers || [],
+    offers: normalizeInterestProductList(record.offers || []),
     invalid: record.invalid,
     acceptance: (record.acceptance as any) || 'medium',
     satisfaction: (record.satisfaction as any) || 'medium',
@@ -885,7 +924,7 @@ const mapClientRecord = (record: any): Client => {
     status: record.status || 'CLIENT',
     responsible_phone: record.responsible_phone,
     buyer_name: record.buyer_name,
-    interest_product: record.interest_product,
+    interest_product: normalizeInterestProduct(record.interest_product),
     preferred_channel: record.preferred_channel,
     funnel_status: record.funnel_status,
     external_id: record.external_id,
@@ -1524,7 +1563,11 @@ export const dataService = {
     payload.updated_at = new Date().toISOString();
     
     // Attempt update on legacy tasks
-    const { data: updatedTasks, error: tError } = await supabase.from('tasks').update(payload).eq('id', taskId).select('id');
+    const { data: updatedTasks, error: tError } = await runUpdateWithUpdatedAtFallback(
+      'tasks',
+      payload,
+      (safePayload) => supabase.from('tasks').update(safePayload).eq('id', taskId).select('id')
+    );
     if (tError) throw tError;
     const count = updatedTasks?.length || 0;
     
@@ -1542,7 +1585,11 @@ export const dataService = {
        schedulePayload.updated_at = new Date().toISOString();
        
        if (Object.keys(schedulePayload).length > 0) {
-         const { error: schedError } = await supabase.from('call_schedules').update(schedulePayload).eq('id', taskId);
+         const { error: schedError } = await runUpdateWithUpdatedAtFallback(
+           'call_schedules',
+           schedulePayload,
+           (safePayload) => supabase.from('call_schedules').update(safePayload).eq('id', taskId)
+         );
          if (schedError) throw schedError;
        }
     }
@@ -1565,11 +1612,21 @@ export const dataService = {
   },
 
   updateTaskStatus: async (taskId: string, status: 'pending' | 'completed' | 'skipped'): Promise<{ error: any }> => {
-    return await supabase.from('tasks').update({ status, updated_at: new Date().toISOString() }).eq('id', taskId);
+    const payload = { status, updated_at: new Date().toISOString() };
+    return await runUpdateWithUpdatedAtFallback(
+      'tasks',
+      payload,
+      (safePayload) => supabase.from('tasks').update(safePayload).eq('id', taskId)
+    );
   },
 
   updateWhatsAppTaskStatus: async (taskId: string, status: 'pending' | 'started' | 'completed' | 'skipped'): Promise<{ error: any }> => {
-    return await supabase.from('whatsapp_tasks').update({ status, updated_at: new Date().toISOString() }).eq('id', taskId);
+    const payload = { status, updated_at: new Date().toISOString() };
+    return await runUpdateWithUpdatedAtFallback(
+      'whatsapp_tasks',
+      payload,
+      (safePayload) => supabase.from('whatsapp_tasks').update(safePayload).eq('id', taskId)
+    );
   },
 
   deleteTask: async (taskId: string): Promise<void> => {
@@ -1859,10 +1916,19 @@ export const dataService = {
       call.type,
       call.proposito
     );
+    const normalizedResponseInterestProduct = normalizeInterestProduct(campaignInsights.enrichedResponses.interest_product);
+    const normalizedTargetProduct = normalizeInterestProduct(
+      call.targetProduct || campaignInsights.enrichedResponses.target_product
+    );
+    const normalizedOfferProduct = normalizeInterestProduct(
+      call.offerProduct || campaignInsights.enrichedResponses.offer_product
+    );
     const enrichedCallResponses = {
       ...campaignInsights.enrichedResponses,
-      target_product: call.targetProduct || campaignInsights.enrichedResponses.target_product,
-      offer_product: call.offerProduct || campaignInsights.enrichedResponses.offer_product,
+      interest_product: normalizedResponseInterestProduct || campaignInsights.enrichedResponses.interest_product,
+      upsell_interesse_produto: normalizedResponseInterestProduct || campaignInsights.enrichedResponses.upsell_interesse_produto,
+      target_product: normalizedTargetProduct || campaignInsights.enrichedResponses.target_product,
+      offer_product: normalizedOfferProduct || campaignInsights.enrichedResponses.offer_product,
       portfolio_scope: call.portfolioScope || campaignInsights.portfolioScope || campaignInsights.enrichedResponses.portfolio_scope,
       offer_interest_level: call.offerInterestLevel || campaignInsights.offerInterestLevel || campaignInsights.enrichedResponses.offer_interest_level,
       offer_blocker_reason: call.offerBlockerReason || campaignInsights.offerBlockerReason || campaignInsights.enrichedResponses.offer_blocker_reason,
@@ -1889,7 +1955,7 @@ export const dataService = {
 
     const clientUpdates: any = { last_interaction: new Date().toISOString() };
     if (email) clientUpdates.email = email;
-    if (interestProduct) clientUpdates.interest_product = interestProduct;
+    if (interestProduct) clientUpdates.interest_product = normalizeInterestProduct(interestProduct);
     if (buyerName) clientUpdates.buyer_name = buyerName;
     if (responsiblePhone) clientUpdates.responsible_phone = responsiblePhone;
 
@@ -2424,6 +2490,8 @@ export const dataService = {
           client.product_categories,
           portfolioMetadata.product_categories
         );
+    const normalizedOffers = normalizeInterestProductList([...(existing?.offers || []), ...(client.offers || [])]);
+    const normalizedInterestProduct = normalizeInterestProduct(existing?.interest_product || client.interest_product);
 
     // Build payload: existing data takes priority, only fill empty fields
     const payload: any = {
@@ -2431,7 +2499,7 @@ export const dataService = {
       phone,
       address: existing?.address || structuredAddress.address || '',
       items: equipmentModels,
-      offers: Array.from(new Set([...(existing?.offers || []), ...(client.offers || [])])),
+      offers: normalizedOffers,
       last_interaction: existing?.last_interaction || new Date().toISOString(),
       origin: existing?.origin || client.origin || 'MANUAL',
       email: existing?.email || client.email,
@@ -2442,7 +2510,7 @@ export const dataService = {
         (client.status === 'CLIENT' ? 'CLIENT' : (existing?.status === 'CLIENT' ? 'CLIENT' : (existing?.status || client.status || 'CLIENT'))),
       responsible_phone: existing?.responsible_phone || client.responsible_phone,
       buyer_name: existing?.buyer_name || client.buyer_name,
-      interest_product: existing?.interest_product || client.interest_product,
+      interest_product: normalizedInterestProduct,
       preferred_channel: existing?.preferred_channel || client.preferred_channel,
       funnel_status: existing?.funnel_status || client.funnel_status || 'NEW',
       // Address & Phone fields — fill only if empty
@@ -2531,13 +2599,17 @@ export const dataService = {
           updates.product_categories,
           portfolioMetadata.product_categories
         );
+    const normalizedOffers = normalizeInterestProductList(updates.offers ?? existing.offers ?? []);
+    const normalizedInterestProduct = normalizeInterestProduct(
+      updates.interest_product ?? existing.interest_product ?? undefined
+    );
 
     const payload: any = {
       name: updates.name ?? existing.name ?? 'Sem Nome',
       phone: nextPhone,
       address: structuredAddress.address,
       items: equipmentModels,
-      offers: updates.offers ?? existing.offers ?? [],
+      offers: normalizedOffers,
       last_interaction: existing.last_interaction || new Date().toISOString(),
       origin: updates.origin ?? existing.origin ?? 'MANUAL',
       email: updates.email ?? existing.email ?? null,
@@ -2549,7 +2621,7 @@ export const dataService = {
           : (existing.status === 'CLIENT' ? 'CLIENT' : (updates.status ?? existing.status ?? 'CLIENT'))),
       responsible_phone: updates.responsible_phone ?? existing.responsible_phone ?? null,
       buyer_name: updates.buyer_name ?? existing.buyer_name ?? null,
-      interest_product: updates.interest_product ?? existing.interest_product ?? null,
+      interest_product: normalizedInterestProduct ?? null,
       preferred_channel: updates.preferred_channel ?? existing.preferred_channel ?? null,
       funnel_status: updates.funnel_status ?? existing.funnel_status ?? 'NEW',
       external_id: updates.external_id ?? existing.external_id ?? null,
@@ -2594,6 +2666,10 @@ export const dataService = {
 
     const payload: any = { ...updates };
     if (updates.phone) payload.phone = normalizePhone(updates.phone);
+    if (updates.offers !== undefined) payload.offers = normalizeInterestProductList(updates.offers);
+    if (updates.interest_product !== undefined) {
+      payload.interest_product = normalizeInterestProduct(updates.interest_product) ?? null;
+    }
 
     const { error } = await supabase.from('clients').update(payload).eq('id', clientId);
     if (error) throw error;
@@ -2654,7 +2730,7 @@ export const dataService = {
       duplicate.equipment_models,
       mergedMetadata.equipment_models
     );
-    const mergedOffers = Array.from(new Set([...(keeper.offers || []), ...(duplicate.offers || [])]));
+    const mergedOffers = normalizeInterestProductList([...(keeper.offers || []), ...(duplicate.offers || [])]);
 
     const updatePayload: any = {
       items: mergedItems,
@@ -2916,31 +2992,52 @@ export const dataService = {
       from += pageSize;
     }
 
-    return rows;
+    return rows.map(quote => ({
+      ...quote,
+      interest_product: normalizeInterestProduct(quote.interest_product)
+    }));
   },
 
   saveQuote: async (quote: Partial<Quote>): Promise<Quote> => {
-    const { data, error } = await supabase.from('quotes').insert(quote).select().single();
+    const normalizedInterestProduct = normalizeInterestProduct(quote.interest_product);
+    const payload = {
+      ...quote,
+      interest_product: normalizedInterestProduct
+    };
+    const { data, error } = await supabase.from('quotes').insert(payload).select().single();
     if (error) throw error;
 
     // Sync interest_product back to the client so it can be filtered in Campaign Planner
-    if (quote.interest_product && quote.client_id) {
-       await supabase.from('clients').update({ interest_product: quote.interest_product }).eq('id', quote.client_id);
+    if (normalizedInterestProduct && quote.client_id) {
+       await supabase.from('clients').update({ interest_product: normalizedInterestProduct }).eq('id', quote.client_id);
     }
 
-    return data;
+    return {
+      ...data,
+      interest_product: normalizeInterestProduct(data?.interest_product)
+    };
   },
 
   updateQuote: async (id: string, updates: Partial<Quote>): Promise<Quote> => {
-    const { data, error } = await supabase.from('quotes').update(updates).eq('id', id).select().single();
+    const normalizedInterestProduct = updates.interest_product !== undefined
+      ? normalizeInterestProduct(updates.interest_product)
+      : undefined;
+    const payload = {
+      ...updates,
+      ...(updates.interest_product !== undefined ? { interest_product: normalizedInterestProduct } : {})
+    };
+    const { data, error } = await supabase.from('quotes').update(payload).eq('id', id).select().single();
     if (error) throw error;
 
     // Sync interest_product back to the client so it can be filtered in Campaign Planner
-    if (updates.interest_product && data?.client_id) {
-       await supabase.from('clients').update({ interest_product: updates.interest_product }).eq('id', data.client_id);
+    if (normalizedInterestProduct && data?.client_id) {
+       await supabase.from('clients').update({ interest_product: normalizedInterestProduct }).eq('id', data.client_id);
     }
 
-    return data;
+    return {
+      ...data,
+      interest_product: normalizeInterestProduct(data?.interest_product)
+    };
   },
 
   deleteQuote: async (id: string): Promise<void> => {

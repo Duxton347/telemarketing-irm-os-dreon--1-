@@ -7,6 +7,8 @@ import {
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { Client, CallType, User } from '../types';
+import { normalizeComparableText } from '../utils/clientPortfolio';
+import { resolveKnownCity } from '../utils/addressParser';
 
 const FUNNEL_STAGES = [
     { id: 'NEW', label: 'Novo Lead', color: 'bg-blue-100 text-blue-700' },
@@ -25,6 +27,22 @@ const ORIGIN_TYPES = [
 ];
 
 import { CampaignPlannerService } from '../services/campaignPlannerService';
+
+const normalizeProspectCity = (value?: string) =>
+    resolveKnownCity(value) || value || '';
+
+const matchesProspectLocation = (value?: string, filter?: string, mode: 'city' | 'neighborhood' = 'city') => {
+    if (!filter || filter === 'ALL') return true;
+
+    const normalizedValue = mode === 'city'
+        ? normalizeComparableText(normalizeProspectCity(value))
+        : normalizeComparableText(value);
+    const normalizedFilter = mode === 'city'
+        ? normalizeComparableText(normalizeProspectCity(filter))
+        : normalizeComparableText(filter);
+
+    return Boolean(normalizedValue) && normalizedValue === normalizedFilter;
+};
 
 // INTEREST_PRODUCTS is now dynamically loaded from DB
 
@@ -188,8 +206,8 @@ const Prospects: React.FC = () => {
         if (selectedStage !== 'ALL' && (p.funnel_status || 'NEW') !== selectedStage) return false;
         if (selectedOrigin !== 'ALL' && (p.origin || 'MANUAL') !== selectedOrigin) return false;
         if (selectedInterest !== 'ALL' && (p.interest_product || '') !== selectedInterest) return false;
-        if (neighborhoodFilter !== 'ALL' && p.neighborhood !== neighborhoodFilter) return false;
-        if (cityFilter !== 'ALL' && p.city !== cityFilter) return false;
+        if (!matchesProspectLocation(p.neighborhood, neighborhoodFilter, 'neighborhood')) return false;
+        if (!matchesProspectLocation(p.city, cityFilter, 'city')) return false;
         if (searchTerm) {
             const lower = searchTerm.toLowerCase();
             return p.name.toLowerCase().includes(lower) ||
@@ -199,8 +217,27 @@ const Prospects: React.FC = () => {
         return true;
     });
 
-    const neighborhoods = Array.from(new Set(prospects.map(p => p.neighborhood).filter(Boolean))).sort() as string[];
-    const cities = Array.from(new Set(prospects.map(p => p.city).filter(Boolean))).sort() as string[];
+    const neighborhoods = Array.from(
+        prospects.reduce((bucket, prospect) => {
+            const neighborhood = String(prospect.neighborhood || '').trim();
+            const normalized = normalizeComparableText(neighborhood);
+            if (neighborhood && normalized && !bucket.has(normalized)) {
+                bucket.set(normalized, neighborhood);
+            }
+            return bucket;
+        }, new Map<string, string>()).values()
+    ).sort((a, b) => a.localeCompare(b, 'pt-BR')) as string[];
+
+    const cities = Array.from(
+        prospects.reduce((bucket, prospect) => {
+            const city = normalizeProspectCity(prospect.city)?.trim();
+            const normalized = normalizeComparableText(city);
+            if (city && normalized && !bucket.has(normalized)) {
+                bucket.set(normalized, city);
+            }
+            return bucket;
+        }, new Map<string, string>()).values()
+    ).sort((a, b) => a.localeCompare(b, 'pt-BR')) as string[];
 
     const totalLeads = prospects.length;
     const novosLeads = prospects.filter(p => ['NEW', 'CONTACT_ATTEMPT'].includes(p.funnel_status || 'NEW')).length;

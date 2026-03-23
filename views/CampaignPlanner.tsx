@@ -13,12 +13,43 @@ import { Calendar, Filter, Users, Send, Search, Save, X, Settings2, MapPin, Phon
 import { PortfolioCatalogManager } from '../components/PortfolioCatalogManager';
 import { HelpTooltip } from '../components/HelpTooltip';
 import { HELP_TEXTS } from '../utils/helpTexts';
+import { normalizeComparableText } from '../utils/clientPortfolio';
+import { resolveKnownCity } from '../utils/addressParser';
+import { normalizeInterestProduct } from '../utils/interestCatalog';
 import {
   PortfolioCatalogConfig,
   getCatalogProductsByCategory
 } from '../utils/portfolioCatalog';
 
 export const CampaignPlanner: React.FC = () => {
+  const findMatchingListOption = React.useCallback((rawValue: string, options: string[], mode: 'city' | 'neighborhood') => {
+    const trimmed = rawValue.trim();
+    if (!trimmed) return undefined;
+
+    const normalizedTarget = mode === 'city'
+      ? normalizeComparableText(resolveKnownCity(trimmed) || trimmed)
+      : normalizeComparableText(trimmed);
+
+    return options.find(option => {
+      const normalizedOption = mode === 'city'
+        ? normalizeComparableText(resolveKnownCity(option) || option)
+        : normalizeComparableText(option);
+
+      return Boolean(normalizedOption) && normalizedOption === normalizedTarget;
+    });
+  }, []);
+
+  const findMatchingInterestOption = React.useCallback((rawValue: string, options: string[]) => {
+    const trimmed = rawValue.trim();
+    if (!trimmed) return undefined;
+
+    const normalizedTarget = normalizeComparableText(normalizeInterestProduct(trimmed) || trimmed);
+
+    return options.find(option =>
+      normalizeComparableText(normalizeInterestProduct(option) || option) === normalizedTarget
+    );
+  }, []);
+
   // Dynamic filter lists from DB
   const [citiesList, setCitiesList] = useState<string[]>([]);
   const [neighborhoodsList, setNeighborhoodsList] = useState<string[]>([]);
@@ -453,18 +484,18 @@ export const CampaignPlanner: React.FC = () => {
                       placeholder="Buscar Produto de Interesse..."
                       className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-purple-500 focus:bg-white transition-all shadow-inner"
                       onChange={(e) => {
-                        const val = e.target.value.trim();
-                        if (interestProductsList.includes(val)) {
-                          if (!filters.interesses?.includes(val)) setFilters({ ...filters, interesses: [...(filters.interesses || []), val] });
+                        const matchedInterest = findMatchingInterestOption(e.target.value, interestProductsList);
+                        if (matchedInterest) {
+                          if (!filters.interesses?.includes(matchedInterest)) setFilters({ ...filters, interesses: [...(filters.interesses || []), matchedInterest] });
                           e.target.value = '';
                         }
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          const val = e.currentTarget.value.trim();
-                          if (val && !filters.interesses?.includes(val)) {
-                            setFilters({ ...filters, interesses: [...(filters.interesses || []), val] });
+                          const matchedInterest = findMatchingInterestOption(e.currentTarget.value, interestProductsList);
+                          if (matchedInterest && !filters.interesses?.includes(matchedInterest)) {
+                            setFilters({ ...filters, interesses: [...(filters.interesses || []), matchedInterest] });
                             e.currentTarget.value = '';
                           }
                         }
@@ -585,18 +616,18 @@ export const CampaignPlanner: React.FC = () => {
                       placeholder="Buscar Cidade..."
                       className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-blue-500 focus:bg-white transition-all shadow-inner"
                       onChange={(e) => {
-                        const val = e.target.value.trim();
-                        if (citiesList.includes(val)) {
-                          if (!filters.cidades?.includes(val)) setFilters({ ...filters, cidades: [...(filters.cidades || []), val] });
+                        const matchedCity = findMatchingListOption(e.target.value, citiesList, 'city');
+                        if (matchedCity) {
+                          if (!filters.cidades?.includes(matchedCity)) setFilters({ ...filters, cidades: [...(filters.cidades || []), matchedCity] });
                           e.target.value = '';
                         }
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          const val = e.currentTarget.value.trim();
-                          if (val && !filters.cidades?.includes(val)) {
-                            setFilters({ ...filters, cidades: [...(filters.cidades || []), val] });
+                          const matchedCity = findMatchingListOption(e.currentTarget.value, citiesList, 'city');
+                          if (matchedCity && !filters.cidades?.includes(matchedCity)) {
+                            setFilters({ ...filters, cidades: [...(filters.cidades || []), matchedCity] });
                             e.currentTarget.value = '';
                           }
                         }
@@ -623,18 +654,18 @@ export const CampaignPlanner: React.FC = () => {
                       placeholder="Buscar Bairro..."
                       className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-blue-500 focus:bg-white transition-all shadow-inner"
                       onChange={(e) => {
-                        const val = e.target.value.trim();
-                        if (neighborhoodsList.includes(val)) {
-                          if (!filters.bairros?.includes(val)) setFilters({ ...filters, bairros: [...(filters.bairros || []), val] });
+                        const matchedNeighborhood = findMatchingListOption(e.target.value, neighborhoodsList, 'neighborhood');
+                        if (matchedNeighborhood) {
+                          if (!filters.bairros?.includes(matchedNeighborhood)) setFilters({ ...filters, bairros: [...(filters.bairros || []), matchedNeighborhood] });
                           e.target.value = '';
                         }
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          const val = e.currentTarget.value.trim();
-                          if (val && !filters.bairros?.includes(val)) {
-                            setFilters({ ...filters, bairros: [...(filters.bairros || []), val] });
+                          const matchedNeighborhood = findMatchingListOption(e.currentTarget.value, neighborhoodsList, 'neighborhood');
+                          if (matchedNeighborhood && !filters.bairros?.includes(matchedNeighborhood)) {
+                            setFilters({ ...filters, bairros: [...(filters.bairros || []), matchedNeighborhood] });
                             e.currentTarget.value = '';
                           }
                         }
