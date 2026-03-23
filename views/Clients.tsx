@@ -12,7 +12,15 @@ import { PortfolioCategoryBrowser } from '../components/PortfolioCategoryBrowser
 import { HELP_TEXTS } from '../utils/helpTexts';
 import { EmailService } from '../services/emailService';
 import { Mail, ShieldCheck, Tag as TagIcon, Plus, Sparkles } from 'lucide-react';
-import { buildPortfolioCategoryGroups, collectPortfolioMetadata, getClientPortfolioEntries, mergePortfolioEntries } from '../utils/clientPortfolio';
+import {
+  buildPortfolioCategoryGroups,
+  collectPortfolioMetadata,
+  getClientPortfolioEntries,
+  mergePortfolioEntries,
+  mergeUniquePortfolioValues,
+  normalizeComparableText,
+  normalizePortfolioValue
+} from '../utils/clientPortfolio';
 
 const EMPTY_CLIENT_HISTORY: ClientHistoryData = {
   calls: [],
@@ -38,6 +46,7 @@ type ClientFormState = {
   city: string;
   state: string;
   zip_code: string;
+  customer_profiles: string[];
   portfolio_entries: ClientPortfolioEntry[];
 };
 
@@ -60,8 +69,26 @@ const createEmptyClientData = (): ClientFormState => ({
   city: '',
   state: '',
   zip_code: '',
+  customer_profiles: [],
   portfolio_entries: [createEmptyPortfolioEntry()]
 });
+
+const buildClientPortfolioMetadata = (
+  entries: ClientPortfolioEntry[],
+  clientProfiles?: string[]
+) => {
+  const metadata = collectPortfolioMetadata(entries);
+  return {
+    ...metadata,
+    customer_profiles: mergeUniquePortfolioValues(clientProfiles, metadata.customer_profiles)
+  };
+};
+
+const stripPortfolioEntryProfiles = (entries: ClientPortfolioEntry[]) =>
+  entries.map(entry => ({
+    ...entry,
+    profile: ''
+  }));
 
 const Clients: React.FC<{ user: any }> = ({ user }) => {
   const [clients, setClients] = React.useState<Client[]>([]);
@@ -83,22 +110,29 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
   const [newEmail, setNewEmail] = React.useState('');
   const [expandedCategory, setExpandedCategory] = React.useState<string | null>(null);
   const [isQuickPortfolioEditorOpen, setIsQuickPortfolioEditorOpen] = React.useState(false);
+  const [clientProfileDraft, setClientProfileDraft] = React.useState('');
 
   const [clientData, setClientData] = React.useState<ClientFormState>(createEmptyClientData);
-  const resetClientForm = React.useCallback(() => setClientData(createEmptyClientData()), []);
+  const resetClientForm = React.useCallback(() => {
+    setClientData(createEmptyClientData());
+    setClientProfileDraft('');
+  }, []);
 
-  const selectedPortfolioEntries = React.useMemo(() => getClientPortfolioEntries(selectedClient), [selectedClient]);
+  const selectedPortfolioEntries = React.useMemo(
+    () => stripPortfolioEntryProfiles(getClientPortfolioEntries(selectedClient)),
+    [selectedClient]
+  );
   const selectedPortfolioMetadata = React.useMemo(
-    () => collectPortfolioMetadata(selectedPortfolioEntries),
-    [selectedPortfolioEntries]
+    () => buildClientPortfolioMetadata(selectedPortfolioEntries, selectedClient?.customer_profiles),
+    [selectedClient?.customer_profiles, selectedPortfolioEntries]
   );
   const editingPortfolioEntries = React.useMemo(
-    () => mergePortfolioEntries(clientData.portfolio_entries),
+    () => mergePortfolioEntries(stripPortfolioEntryProfiles(clientData.portfolio_entries)),
     [clientData.portfolio_entries]
   );
   const editingPortfolioMetadata = React.useMemo(
-    () => collectPortfolioMetadata(editingPortfolioEntries),
-    [editingPortfolioEntries]
+    () => buildClientPortfolioMetadata(editingPortfolioEntries, clientData.customer_profiles),
+    [clientData.customer_profiles, editingPortfolioEntries]
   );
   const selectedCategoryGroups = React.useMemo(
     () => buildPortfolioCategoryGroups(selectedPortfolioEntries),
@@ -107,9 +141,12 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
   const portfolioFormOptions = React.useMemo(() => {
     const allEntries = clients.flatMap(client => getClientPortfolioEntries(client));
     const metadata = collectPortfolioMetadata(allEntries);
+    const customerProfiles = mergeUniquePortfolioValues(
+      ...clients.map(client => client.customer_profiles || [])
+    );
 
     return {
-      profiles: metadata.customer_profiles,
+      profiles: mergeUniquePortfolioValues(customerProfiles, metadata.customer_profiles),
       categories: metadata.product_categories,
       equipments: metadata.equipment_models
     };
@@ -119,6 +156,25 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
     setClientData(prev => ({
       ...prev,
       portfolio_entries: [...prev.portfolio_entries, createEmptyPortfolioEntry()]
+    }));
+  };
+
+  const addClientProfile = (rawValue?: string) => {
+    const nextProfile = normalizePortfolioValue(rawValue ?? clientProfileDraft);
+    if (!nextProfile) return;
+
+    setClientData(prev => ({
+      ...prev,
+      customer_profiles: mergeUniquePortfolioValues(prev.customer_profiles, [nextProfile])
+    }));
+    setClientProfileDraft('');
+  };
+
+  const removeClientProfile = (profileToRemove: string) => {
+    const comparableProfile = normalizeComparableText(profileToRemove);
+    setClientData(prev => ({
+      ...prev,
+      customer_profiles: prev.customer_profiles.filter(profile => normalizeComparableText(profile) !== comparableProfile)
     }));
   };
 
@@ -142,7 +198,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
   };
 
   const populateClientFormFromClient = React.useCallback((c: Client) => {
-    const portfolioEntries = getClientPortfolioEntries(c);
+    const portfolioEntries = stripPortfolioEntryProfiles(getClientPortfolioEntries(c));
     setClientData({
       id: c.id,
       name: c.name,
@@ -154,8 +210,10 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
       city: c.city || '',
       state: c.state || '',
       zip_code: c.zip_code || '',
+      customer_profiles: mergeUniquePortfolioValues(c.customer_profiles),
       portfolio_entries: portfolioEntries.length > 0 ? portfolioEntries : [createEmptyPortfolioEntry()]
     });
+    setClientProfileDraft('');
   }, []);
 
   const loadClients = async () => {
@@ -237,8 +295,8 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
   const persistClientForm = async () => {
     setIsProcessing(true);
     try {
-      const portfolioEntries = mergePortfolioEntries(clientData.portfolio_entries);
-      const portfolioMetadata = collectPortfolioMetadata(portfolioEntries);
+      const portfolioEntries = mergePortfolioEntries(stripPortfolioEntryProfiles(clientData.portfolio_entries));
+      const portfolioMetadata = buildClientPortfolioMetadata(portfolioEntries, clientData.customer_profiles);
       let savedClient: Client;
 
       if (editMode && clientData.id) {
@@ -649,7 +707,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-blue-100 pb-4">
                         <div>
                           <h5 className="text-[10px] font-black uppercase tracking-widest text-blue-700">Edicao Rapida do Portfolio</h5>
-                          <p className="text-sm font-bold text-slate-500 mt-1">Adicione, altere ou exclua perfil, categoria e equipamento sem sair da ficha.</p>
+                          <p className="text-sm font-bold text-slate-500 mt-1">Altere o perfil do cliente separadamente e edite abaixo apenas categoria, equipamento e quantidade.</p>
                         </div>
                         <div className="flex flex-wrap gap-2">
                           <button
@@ -683,12 +741,41 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
 
                       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
                         <div className="rounded-[24px] border border-amber-100 bg-white p-4 space-y-3">
-                          <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Perfis em Edicao</p>
+                          <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Perfil do Cliente</p>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={clientProfileDraft}
+                              list="client-profile-options"
+                              onChange={e => setClientProfileDraft(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  addClientProfile();
+                                }
+                              }}
+                              placeholder="Ex: Construtor"
+                              className="flex-1 px-4 py-3 bg-amber-50 border border-amber-200 rounded-xl font-bold text-sm outline-none focus:border-amber-500"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => addClientProfile()}
+                              className="px-4 py-3 rounded-xl bg-amber-600 text-white text-[10px] font-black uppercase tracking-widest hover:bg-amber-700 transition-all"
+                            >
+                              Aplicar
+                            </button>
+                          </div>
                           <div className="flex flex-wrap gap-2">
                             {editingPortfolioMetadata.customer_profiles.length > 0 ? editingPortfolioMetadata.customer_profiles.map(profile => (
-                              <span key={profile} className="px-3 py-1 rounded-xl border border-amber-200 bg-amber-50 text-[10px] font-black uppercase text-amber-700">
+                              <button
+                                key={profile}
+                                type="button"
+                                onClick={() => removeClientProfile(profile)}
+                                className="inline-flex items-center gap-2 px-3 py-1 rounded-xl border border-amber-200 bg-amber-50 text-[10px] font-black uppercase text-amber-700 hover:bg-amber-100 transition-all"
+                              >
                                 {profile}
-                              </span>
+                                <X size={12} />
+                              </button>
                             )) : (
                               <span className="text-xs font-bold text-slate-400 italic">Nenhum perfil definido.</span>
                             )}
@@ -724,18 +811,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
 
                       <div className="space-y-4">
                         {clientData.portfolio_entries.map((entry, index) => (
-                          <div key={entry.id || `${index}`} className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_1fr_110px_auto] gap-3 items-end bg-white rounded-[24px] border border-slate-200 p-4">
-                            <div className="space-y-1.5">
-                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Perfil</label>
-                              <input
-                                type="text"
-                                value={entry.profile}
-                                list="client-profile-options"
-                                onChange={e => updatePortfolioEntry(index, 'profile', e.target.value)}
-                                placeholder="Ex: Construtor"
-                                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:border-amber-500"
-                              />
-                            </div>
+                          <div key={entry.id || `${index}`} className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_110px_auto] gap-3 items-end bg-white rounded-[24px] border border-slate-200 p-4">
                             <div className="space-y-1.5">
                               <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Categoria</label>
                               <input
@@ -861,10 +937,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                     </h5>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       {selectedPortfolioEntries.length > 0 ? selectedPortfolioEntries.map((entry, index) => (
-                        <div key={entry.id || `${entry.profile}-${entry.product_category}-${entry.equipment}-${index}`} className="p-4 bg-slate-50 rounded-[24px] border border-slate-100 space-y-2">
-                          {entry.profile && (
-                            <p className="text-[9px] font-black uppercase tracking-widest text-amber-600">Perfil: <span className="text-slate-700">{entry.profile}</span></p>
-                          )}
+                        <div key={entry.id || `${entry.product_category}-${entry.equipment}-${index}`} className="p-4 bg-slate-50 rounded-[24px] border border-slate-100 space-y-2">
                           {entry.product_category && (
                             <p className="text-[9px] font-black uppercase tracking-widest text-cyan-600">Categoria: <span className="text-slate-700">{entry.product_category}</span></p>
                           )}
@@ -1040,8 +1113,8 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
               <div className="bg-slate-50 p-6 rounded-[32px] border border-slate-100 space-y-5">
                 <div className="flex items-center justify-between gap-4 border-b border-slate-200 pb-3">
                   <div>
-                    <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Perfil, Categoria e Equipamento</h4>
-                    <p className="text-xs font-bold text-slate-400 mt-1">Cada linha representa um vínculo técnico do cliente.</p>
+                    <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Perfil do Cliente e Carteira Tecnica</h4>
+                    <p className="text-xs font-bold text-slate-400 mt-1">Perfil do cliente fica separado. Cada linha abaixo representa categoria, equipamento e quantidade.</p>
                   </div>
                   <button
                     type="button"
@@ -1054,12 +1127,41 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
 
                 <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
                   <div className="rounded-[24px] border border-amber-100 bg-amber-50/70 p-4 space-y-3">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Perfis Vinculados</p>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Perfil do Cliente</p>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={clientProfileDraft}
+                        list="client-profile-options"
+                        onChange={e => setClientProfileDraft(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            addClientProfile();
+                          }
+                        }}
+                        placeholder="Ex: Arquiteto"
+                        className="flex-1 px-4 py-3 bg-white border border-amber-200 rounded-xl font-bold text-sm outline-none focus:border-amber-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => addClientProfile()}
+                        className="px-4 py-3 rounded-xl bg-amber-600 text-white text-[10px] font-black uppercase tracking-widest hover:bg-amber-700 transition-all"
+                      >
+                        Aplicar
+                      </button>
+                    </div>
                     <div className="flex flex-wrap gap-2">
                       {editingPortfolioMetadata.customer_profiles.length > 0 ? editingPortfolioMetadata.customer_profiles.map(profile => (
-                        <span key={profile} className="px-3 py-1 rounded-xl border border-amber-200 bg-white text-[10px] font-black uppercase text-amber-700">
+                        <button
+                          key={profile}
+                          type="button"
+                          onClick={() => removeClientProfile(profile)}
+                          className="inline-flex items-center gap-2 px-3 py-1 rounded-xl border border-amber-200 bg-white text-[10px] font-black uppercase text-amber-700 hover:bg-amber-100 transition-all"
+                        >
                           {profile}
-                        </span>
+                          <X size={12} />
+                        </button>
                       )) : (
                         <span className="text-xs font-bold text-slate-400 italic">Nenhum perfil em edicao.</span>
                       )}
@@ -1095,18 +1197,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
 
                 <div className="space-y-4">
                   {clientData.portfolio_entries.map((entry, index) => (
-                    <div key={entry.id || `${index}`} className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_1fr_120px_auto] gap-3 items-end bg-white rounded-[24px] border border-slate-200 p-4">
-                      <div className="space-y-1.5">
-                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Perfil</label>
-                        <input
-                          type="text"
-                          value={entry.profile}
-                          list="client-profile-options"
-                          onChange={e => updatePortfolioEntry(index, 'profile', e.target.value)}
-                          placeholder="Ex: Construtor"
-                          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:border-amber-500"
-                        />
-                      </div>
+                    <div key={entry.id || `${index}`} className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_120px_auto] gap-3 items-end bg-white rounded-[24px] border border-slate-200 p-4">
                       <div className="space-y-1.5">
                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Categoria</label>
                         <input

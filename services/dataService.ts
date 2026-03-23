@@ -18,10 +18,91 @@ import {
   mergeUniquePortfolioValues
 } from '../utils/clientPortfolio';
 import { normalizePortfolioEntriesWithCatalog } from '../utils/portfolioCatalog';
+import {
+  parseAddress,
+  isLikelyInvalidStructuredCity,
+  isLikelyInvalidStructuredNeighborhood,
+  resolveKnownCity
+} from '../utils/addressParser';
 import { PortfolioCatalogService } from './portfolioCatalogService';
 
 const normalize = (str: string) =>
   str ? str.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, "") : "";
+
+const getTrimmedText = (value?: unknown) => {
+  if (value === null || value === undefined) return undefined;
+  const text = String(value).trim();
+  return text.length > 0 ? text : undefined;
+};
+
+const shouldRepairStructuredNeighborhood = (value?: string) =>
+  !value || value.includes(',') || value.includes(' - ') || isLikelyInvalidStructuredNeighborhood(value);
+
+const shouldRepairStructuredCity = (value?: string) =>
+  !value || value.includes(',') || value.includes(' - ') || isLikelyInvalidStructuredCity(value);
+
+const shouldRepairStructuredState = (value?: string) =>
+  !value || value.trim().length !== 2;
+
+const parseLocationFromGoogleAddress = (rawAddress?: string) => {
+  const address = getTrimmedText(rawAddress);
+  if (!address) {
+    return { neighborhood: undefined, city: undefined, state: undefined };
+  }
+  const parsed = parseAddress(address);
+
+  return {
+    neighborhood: getTrimmedText(parsed.neighborhood),
+    city: resolveKnownCity(getTrimmedText(parsed.city) || undefined) || getTrimmedText(parsed.city),
+    state: getTrimmedText(parsed.state)?.toUpperCase()
+  };
+};
+
+const resolveStructuredAddressFields = (
+  primary?: Partial<Client> | null,
+  fallback?: Partial<Client> | null
+) => {
+  const address = getTrimmedText(primary?.address) || getTrimmedText(fallback?.address) || '';
+  const parsed = address ? parseAddress(address.replace(/\s*,?\s*Brasil$/i, '').trim()) : {};
+  const googleParsed = parseLocationFromGoogleAddress(address);
+
+  const primaryStreet = getTrimmedText(primary?.street);
+  const fallbackStreet = getTrimmedText(fallback?.street);
+  const primaryNeighborhood = getTrimmedText(primary?.neighborhood);
+  const fallbackNeighborhood = getTrimmedText(fallback?.neighborhood);
+  const primaryCity = getTrimmedText(primary?.city);
+  const fallbackCity = getTrimmedText(fallback?.city);
+  const primaryState = getTrimmedText(primary?.state)?.toUpperCase();
+  const fallbackState = getTrimmedText(fallback?.state)?.toUpperCase();
+  const primaryZip = getTrimmedText(primary?.zip_code);
+  const fallbackZip = getTrimmedText(fallback?.zip_code);
+
+  const parsedStreet = getTrimmedText(parsed.street);
+  const parsedNeighborhood = getTrimmedText(parsed.neighborhood) || googleParsed.neighborhood;
+  const parsedCity = resolveKnownCity(getTrimmedText(parsed.city) || undefined) || getTrimmedText(parsed.city) || googleParsed.city;
+  const parsedState = getTrimmedText(parsed.state)?.toUpperCase() || googleParsed.state;
+  const parsedZip = getTrimmedText(parsed.zip_code);
+
+  const neighborhoodCandidate = primaryNeighborhood || fallbackNeighborhood;
+  const cityCandidate = primaryCity || fallbackCity;
+  const stateCandidate = primaryState || fallbackState;
+  const zipCandidate = primaryZip || fallbackZip;
+
+  return {
+    address,
+    street: primaryStreet || fallbackStreet || parsedStreet,
+    neighborhood: shouldRepairStructuredNeighborhood(neighborhoodCandidate)
+      ? (parsedNeighborhood || neighborhoodCandidate)
+      : neighborhoodCandidate,
+    city: shouldRepairStructuredCity(cityCandidate)
+      ? (parsedCity || cityCandidate)
+      : cityCandidate,
+    state: shouldRepairStructuredState(stateCandidate)
+      ? (parsedState || stateCandidate)
+      : stateCandidate,
+    zip_code: zipCandidate || parsedZip
+  };
+};
 
 const mapCallTypeToDb = (type: string): string => {
   const clean = normalize(type).toUpperCase();
@@ -786,12 +867,13 @@ const mapClientRecord = (record: any): Client => {
   const portfolioEntries = getClientPortfolioEntries(record);
   const portfolioMetadata = collectPortfolioMetadata(portfolioEntries);
   const equipmentModels = mergeUniquePortfolioValues(record?.equipment_models, record?.items, portfolioMetadata.equipment_models);
+  const structuredAddress = resolveStructuredAddressFields(record);
 
   return {
     id: record.id,
     name: record.name || 'Sem Nome',
     phone: record.phone || '',
-    address: record.address || '',
+    address: structuredAddress.address || record.address || '',
     items: equipmentModels,
     offers: record.offers || [],
     invalid: record.invalid,
@@ -808,11 +890,11 @@ const mapClientRecord = (record: any): Client => {
     funnel_status: record.funnel_status,
     external_id: record.external_id,
     phone_secondary: record.phone_secondary,
-    street: record.street,
-    neighborhood: record.neighborhood,
-    city: record.city,
-    state: record.state,
-    zip_code: record.zip_code,
+    street: structuredAddress.street,
+    neighborhood: structuredAddress.neighborhood,
+    city: structuredAddress.city,
+    state: structuredAddress.state,
+    zip_code: structuredAddress.zip_code,
     last_purchase_date: record.last_purchase_date,
     customer_profiles: mergeUniquePortfolioValues(record?.customer_profiles, portfolioMetadata.customer_profiles),
     product_categories: mergeUniquePortfolioValues(record?.product_categories, portfolioMetadata.product_categories),
@@ -2290,15 +2372,16 @@ export const dataService = {
     }
 
     // Step 3: Match by name + street (fuzzy — ilike for name)
-    if (!existing && client.name && client.street) {
+    if (!existing && client.name && resolveStructuredAddressFields(client).street) {
       const { data } = await supabase.from('clients')
         .select('*')
         .ilike('name', client.name)
-        .ilike('street', client.street)
+        .ilike('street', resolveStructuredAddressFields(client).street || '')
         .maybeSingle();
       if (data) existing = data;
     }
 
+    const structuredAddress = resolveStructuredAddressFields(client, existing);
     const catalogConfig = await PortfolioCatalogService.getCatalogConfig();
     const shouldReplacePortfolio = Boolean(options?.replacePortfolio && client.portfolio_entries !== undefined);
     const mergedPortfolioEntries = normalizePortfolioEntriesWithCatalog(
@@ -2346,7 +2429,7 @@ export const dataService = {
     const payload: any = {
       name: existing?.name || client.name || 'Sem Nome',
       phone,
-      address: existing?.address || client.address || '',
+      address: existing?.address || structuredAddress.address || '',
       items: equipmentModels,
       offers: Array.from(new Set([...(existing?.offers || []), ...(client.offers || [])])),
       last_interaction: existing?.last_interaction || new Date().toISOString(),
@@ -2365,11 +2448,11 @@ export const dataService = {
       // Address & Phone fields — fill only if empty
       external_id: existing?.external_id || client.external_id,
       phone_secondary: existing?.phone_secondary || client.phone_secondary,
-      street: existing?.street || client.street,
-      neighborhood: existing?.neighborhood || client.neighborhood,
-      city: existing?.city || client.city,
-      state: existing?.state || client.state,
-      zip_code: existing?.zip_code || client.zip_code,
+      street: structuredAddress.street || null,
+      neighborhood: structuredAddress.neighborhood || null,
+      city: structuredAddress.city || null,
+      state: structuredAddress.state || null,
+      zip_code: structuredAddress.zip_code || null,
       last_purchase_date: client.last_purchase_date || existing?.last_purchase_date,
       customer_profiles: customerProfiles,
       product_categories: productCategories,
@@ -2405,6 +2488,7 @@ export const dataService = {
     const nextPhone = normalizePhone(updates.phone || existing.phone || '');
     if (!nextPhone) throw new Error('Telefone obrigatório');
 
+    const structuredAddress = resolveStructuredAddressFields(updates, existing);
     const hasPortfolioUpdate = updates.portfolio_entries !== undefined;
     const catalogConfig = await PortfolioCatalogService.getCatalogConfig();
     const nextPortfolioEntries = normalizePortfolioEntriesWithCatalog(
@@ -2451,7 +2535,7 @@ export const dataService = {
     const payload: any = {
       name: updates.name ?? existing.name ?? 'Sem Nome',
       phone: nextPhone,
-      address: updates.address ?? existing.address ?? '',
+      address: structuredAddress.address,
       items: equipmentModels,
       offers: updates.offers ?? existing.offers ?? [],
       last_interaction: existing.last_interaction || new Date().toISOString(),
@@ -2470,11 +2554,11 @@ export const dataService = {
       funnel_status: updates.funnel_status ?? existing.funnel_status ?? 'NEW',
       external_id: updates.external_id ?? existing.external_id ?? null,
       phone_secondary: updates.phone_secondary ?? existing.phone_secondary ?? null,
-      street: updates.street ?? existing.street ?? null,
-      neighborhood: updates.neighborhood ?? existing.neighborhood ?? null,
-      city: updates.city ?? existing.city ?? null,
-      state: updates.state ?? existing.state ?? null,
-      zip_code: updates.zip_code ?? existing.zip_code ?? null,
+      street: structuredAddress.street || null,
+      neighborhood: structuredAddress.neighborhood || null,
+      city: structuredAddress.city || null,
+      state: structuredAddress.state || null,
+      zip_code: structuredAddress.zip_code || null,
       last_purchase_date: updates.last_purchase_date ?? existing.last_purchase_date ?? null,
       customer_profiles: customerProfiles,
       product_categories: productCategories,
@@ -2491,6 +2575,14 @@ export const dataService = {
 
   updateClientFields: async (clientId: string, updates: Partial<Client>): Promise<void> => {
     if (
+      updates.name !== undefined ||
+      updates.phone !== undefined ||
+      updates.address !== undefined ||
+      updates.street !== undefined ||
+      updates.neighborhood !== undefined ||
+      updates.city !== undefined ||
+      updates.state !== undefined ||
+      updates.zip_code !== undefined ||
       updates.portfolio_entries !== undefined ||
       updates.customer_profiles !== undefined ||
       updates.product_categories !== undefined ||
