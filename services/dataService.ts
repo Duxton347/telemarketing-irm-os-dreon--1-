@@ -26,6 +26,7 @@ import {
 } from '../utils/addressParser';
 import { normalizeInterestProduct, normalizeInterestProductList } from '../utils/interestCatalog';
 import { PortfolioCatalogService } from './portfolioCatalogService';
+import { decodeLatin1 } from '../utils/textEncoding';
 
 const normalize = (str: string) =>
   str ? str.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, "") : "";
@@ -1450,6 +1451,12 @@ export const dataService = {
       .map(t => {
         const clientObj = Array.isArray(t.clients) ? t.clients[0] : t.clients;
         const campaignContext = campaignContextMap.get(t.campanha_id) || {};
+        const campaignContextProposito = decodeLatin1(campaignContext.proposito);
+        const campaignContextCampaignName = decodeLatin1(campaignContext.campaignName);
+        const campaignContextTargetProduct = decodeLatin1(campaignContext.targetProduct);
+        const campaignContextOfferProduct = decodeLatin1(campaignContext.offerProduct);
+        const campaignContextPortfolioScope = decodeLatin1(campaignContext.portfolioScope);
+        const resolvedProposito = decodeLatin1(t.proposito) || campaignContextProposito;
         // Ensure that tasks dispatched with a specific call type (e.g., from Campaign Planner) retain it,
         // unless it's explicitly a reativation logic condition.
         // We will prefer the explicitly assigned task type, falling back to logic based on client status.
@@ -1469,12 +1476,12 @@ export const dataService = {
           approvalStatus: t.approval_status as any,
           scheduledFor: t.scheduled_for,
           scheduleReason: t.schedule_reason,
-          proposito: t.proposito || campaignContext.proposito,
+          proposito: resolvedProposito,
           campanha_id: t.campanha_id,
-          campaignName: campaignContext.campaignName,
-          targetProduct: campaignContext.targetProduct,
-          offerProduct: campaignContext.offerProduct,
-          portfolioScope: campaignContext.portfolioScope,
+          campaignName: campaignContextCampaignName,
+          targetProduct: campaignContextTargetProduct,
+          offerProduct: campaignContextOfferProduct,
+          portfolioScope: campaignContextPortfolioScope,
           createdAt: t.created_at,
           updatedAt: t.updated_at
         };
@@ -1858,14 +1865,21 @@ export const dataService = {
 
     const { data, error } = await query;
     if (error) throw error;
-    const campaignContextMap = await loadCampaignContextMap((data || []).map((call: any) => call.campanha_id).filter(Boolean));
+      const campaignContextMap = await loadCampaignContextMap((data || []).map((call: any) => call.campanha_id).filter(Boolean));
     return (data || []).map(c => {
       const campaignInsights = extractCampaignInsightsFromResponses(c.responses || {});
+      const context = campaignContextMap.get(c.campanha_id) || {};
+      const callProposito = decodeLatin1(c.proposito) || decodeLatin1(context.proposito);
+      const callCampaignName = decodeLatin1(context.campaignName);
+      const callTargetProduct = decodeLatin1(context.targetProduct);
+      const callOfferProduct = decodeLatin1(context.offerProduct);
+      const callPortfolioScope = decodeLatin1(context.portfolioScope);
+
       return {
-      id: c.id,
-      taskId: c.task_id,
-      operatorId: c.operator_id,
-      clientId: c.client_id,
+        id: c.id,
+        taskId: c.task_id,
+        operatorId: c.operator_id,
+        clientId: c.client_id,
       startTime: c.start_time,
       endTime: c.end_time,
       duration: c.duration,
@@ -1875,12 +1889,12 @@ export const dataService = {
       protocolId: c.protocol_id,
       clientName: (c as any).clients?.name || 'Cliente Desconhecido',
       clientPhone: (c as any).clients?.phone || '',
-      proposito: c.proposito || campaignContextMap.get(c.campanha_id)?.proposito,
-      campanha_id: c.campanha_id,
-      campaignName: campaignContextMap.get(c.campanha_id)?.campaignName,
-      targetProduct: c.responses?.target_product || campaignContextMap.get(c.campanha_id)?.targetProduct,
-      offerProduct: c.responses?.offer_product || campaignContextMap.get(c.campanha_id)?.offerProduct,
-      portfolioScope: c.responses?.portfolio_scope || campaignInsights.portfolioScope || campaignContextMap.get(c.campanha_id)?.portfolioScope,
+        proposito: callProposito,
+        campanha_id: c.campanha_id,
+        campaignName: callCampaignName,
+        targetProduct: c.responses?.target_product || callTargetProduct,
+        offerProduct: c.responses?.offer_product || callOfferProduct,
+        portfolioScope: c.responses?.portfolio_scope || campaignInsights.portfolioScope || callPortfolioScope,
       offerInterestLevel: c.responses?.offer_interest_level || campaignInsights.offerInterestLevel,
       offerBlockerReason: c.responses?.offer_blocker_reason || campaignInsights.offerBlockerReason
     };
@@ -2227,6 +2241,13 @@ export const dataService = {
 
       const mappedCalls: CallRecord[] = (callsData || []).map(c => {
         const campaignInsights = extractCampaignInsightsFromResponses(c.responses || {});
+        const context = campaignContextMap.get(c.campanha_id) || {};
+        const callProposito = decodeLatin1(c.proposito) || decodeLatin1(context.proposito);
+        const callCampaignName = decodeLatin1(context.campaignName);
+        const callTargetProduct = decodeLatin1(context.targetProduct);
+        const callOfferProduct = decodeLatin1(context.offerProduct);
+        const callPortfolioScope = decodeLatin1(context.portfolioScope);
+
         return {
           id: c.id,
           taskId: c.task_id,
@@ -2239,12 +2260,12 @@ export const dataService = {
           responses: c.responses || {},
           type: mapStoredCallTypeToApp(c.call_type),
           protocolId: c.protocol_id,
-          proposito: c.proposito || campaignContextMap.get(c.campanha_id)?.proposito,
+          proposito: callProposito,
           campanha_id: c.campanha_id,
-          campaignName: campaignContextMap.get(c.campanha_id)?.campaignName,
-          targetProduct: c.responses?.target_product || campaignContextMap.get(c.campanha_id)?.targetProduct,
-          offerProduct: c.responses?.offer_product || campaignContextMap.get(c.campanha_id)?.offerProduct,
-          portfolioScope: c.responses?.portfolio_scope || campaignInsights.portfolioScope || campaignContextMap.get(c.campanha_id)?.portfolioScope,
+          campaignName: callCampaignName,
+          targetProduct: c.responses?.target_product || callTargetProduct,
+          offerProduct: c.responses?.offer_product || callOfferProduct,
+          portfolioScope: c.responses?.portfolio_scope || campaignInsights.portfolioScope || callPortfolioScope,
           offerInterestLevel: c.responses?.offer_interest_level || campaignInsights.offerInterestLevel,
           offerBlockerReason: c.responses?.offer_blocker_reason || campaignInsights.offerBlockerReason
         };
