@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
 import { 
   CampaignPlannerService, 
   CampaignPlannerFilters, 
-  ClientWithLastCall 
+  ClientWithLastCall,
+  PortfolioFilterOptions
 } from '../services/campaignPlannerService';
 import { PortfolioCatalogService } from '../services/portfolioCatalogService';
 import { CallType } from '../types';
@@ -14,7 +14,6 @@ import { HelpTooltip } from '../components/HelpTooltip';
 import { HELP_TEXTS } from '../utils/helpTexts';
 import {
   PortfolioCatalogConfig,
-  getActivePortfolioCatalogCategories,
   getCatalogProductsByCategory
 } from '../utils/portfolioCatalog';
 
@@ -30,6 +29,12 @@ export const CampaignPlanner: React.FC = () => {
   const [operadoresList, setOperadoresList] = useState<any[]>([]);
   const [interestProductsList, setInterestProductsList] = useState<string[]>([]);
   const [catalogConfig, setCatalogConfig] = useState<PortfolioCatalogConfig | null>(null);
+  const [portfolioFilterOptions, setPortfolioFilterOptions] = useState<PortfolioFilterOptions>({
+    profiles: [],
+    categories: [],
+    equipments: [],
+    equipmentByCategory: {}
+  });
   const [isCatalogManagerOpen, setIsCatalogManagerOpen] = useState(false);
 
   // Selected filters
@@ -77,7 +82,7 @@ export const CampaignPlanner: React.FC = () => {
       users,
       cities,
       catalog,
-      profiles,
+      portfolioOptions,
       callTypes,
       tagCategories,
       interestProducts
@@ -85,7 +90,7 @@ export const CampaignPlanner: React.FC = () => {
       dataService.getUsers(),
       CampaignPlannerService.getDistinctCities(),
       PortfolioCatalogService.getCatalogConfig(),
-      CampaignPlannerService.getDistinctCustomerProfiles(),
+      CampaignPlannerService.getPortfolioFilterOptions(),
       CampaignPlannerService.getDistinctCallTypes(),
       CampaignPlannerService.getDistinctTagCategories(),
       CampaignPlannerService.getDistinctInterestProducts()
@@ -95,9 +100,10 @@ export const CampaignPlanner: React.FC = () => {
     setOperadoresList(activeOperators.map(u => ({ id: u.id, username_display: u.name })));
     setCitiesList(cities);
     setCatalogConfig(catalog);
-    setItemsList(getCatalogProductsByCategory(catalog).map(product => product.name));
-    setProductCategoriesList(getActivePortfolioCatalogCategories(catalog).map(category => category.name));
-    setProfilesList(profiles);
+    setPortfolioFilterOptions(portfolioOptions);
+    setItemsList(portfolioOptions.equipments);
+    setProductCategoriesList(portfolioOptions.categories);
+    setProfilesList(portfolioOptions.profiles);
     setCallTypesList(callTypes);
     setTagCategoriesList(tagCategories);
     setInterestProductsList(interestProducts);
@@ -119,12 +125,55 @@ export const CampaignPlanner: React.FC = () => {
   }, [filters.cidades]);
 
   const filteredEquipmentOptions = React.useMemo(() => {
-    if (!catalogConfig) return itemsList;
+    if (!filters.categoriasProduto?.length) {
+      return itemsList;
+    }
 
-    return getCatalogProductsByCategory(catalogConfig, filters.categoriasProduto)
-      .map(product => product.name)
-      .sort((a, b) => a.localeCompare(b, 'pt-BR'));
-  }, [catalogConfig, filters.categoriasProduto, itemsList]);
+    const fromPortfolio = filters.categoriasProduto.flatMap(category => {
+      const normalizedCategory = category
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim();
+
+      return portfolioFilterOptions.equipmentByCategory[normalizedCategory] || [];
+    });
+
+    const fromCatalog = catalogConfig
+      ? getCatalogProductsByCategory(catalogConfig, filters.categoriasProduto).map(product => product.name)
+      : [];
+
+    const merged = Array.from(new Set([...fromPortfolio, ...fromCatalog, ...itemsList]))
+      .filter(item => {
+        if (!filters.categoriasProduto?.length) return true;
+
+        const normalizedItem = item
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .trim();
+
+        return filters.categoriasProduto.some(category => {
+          const normalizedCategory = category
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .trim();
+
+          const fromMap = portfolioFilterOptions.equipmentByCategory[normalizedCategory] || [];
+          return fromMap.some(mapped => {
+            const normalizedMapped = mapped
+              .toLowerCase()
+              .normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '')
+              .trim();
+            return normalizedMapped === normalizedItem;
+          });
+        });
+      });
+
+    return merged.sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [catalogConfig, filters.categoriasProduto, itemsList, portfolioFilterOptions.equipmentByCategory]);
 
   const getSatisfactionMeta = (client: ClientWithLastCall) => {
     const scoreLabel =
@@ -716,21 +765,44 @@ export const CampaignPlanner: React.FC = () => {
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
                     <TagIcon size={12} /> Categorias / Tags de Resposta
                   </label>
-                  <div className="flex flex-wrap gap-2">
-                    {tagCategoriesList.length === 0 ? <span className="text-xs text-slate-400">Sem tags mapeadas</span> : null}
-                    {tagCategoriesList.map(cat => (
-                      <button
-                        key={cat}
-                        onClick={() => toggleFilterArray('tags', cat)}
-                        className={`px-3 py-1.5 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-all duration-300 border shadow-sm ${
-                          filters.tags?.includes(cat) 
-                            ? 'bg-gradient-to-r from-rose-500 to-pink-500 text-white border-transparent shadow-rose-500/30' 
-                            : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
-                        }`}
-                      >
-                        {cat}
-                      </button>
-                    ))}
+                  <div className="rounded-[20px] border border-slate-200 bg-white/80 p-3">
+                    <div className="max-h-56 overflow-y-auto pr-1 custom-scrollbar">
+                      <div className="flex flex-wrap gap-2 content-start">
+                        {tagCategoriesList.length === 0 ? <span className="text-xs text-slate-400">Sem tags mapeadas</span> : null}
+                        {tagCategoriesList.map(cat => (
+                          <button
+                            key={cat}
+                            onClick={() => toggleFilterArray('tags', cat)}
+                            className={`px-3 py-1.5 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-all duration-300 border shadow-sm ${
+                              filters.tags?.includes(cat) 
+                                ? 'bg-gradient-to-r from-rose-500 to-pink-500 text-white border-transparent shadow-rose-500/30' 
+                                : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                            }`}
+                          >
+                            {cat}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {filters.tags && filters.tags.length > 0 && (
+                      <div className="mt-3 border-t border-slate-100 pt-3">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+                          Tags Selecionadas ({filters.tags.length})
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {filters.tags.map(tag => (
+                            <span
+                              key={tag}
+                              className="inline-flex items-center gap-1 bg-gradient-to-r from-rose-500 to-pink-500 text-white shadow-sm px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase"
+                            >
+                              {tag}
+                              <X size={12} className="cursor-pointer hover:text-rose-100 transition-colors" onClick={() => toggleFilterArray('tags', tag)} />
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1065,8 +1137,7 @@ export const CampaignPlanner: React.FC = () => {
               <PortfolioCatalogManager
                 onCatalogChange={(nextCatalog) => {
                   setCatalogConfig(nextCatalog);
-                  setItemsList(getCatalogProductsByCategory(nextCatalog).map(product => product.name));
-                  setProductCategoriesList(getActivePortfolioCatalogCategories(nextCatalog).map(category => category.name));
+                  void loadReferenceData();
                 }}
               />
             </div>

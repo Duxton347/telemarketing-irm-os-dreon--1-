@@ -8,6 +8,7 @@ import {
 } from '../types';
 import { TagDecisionEngine } from './tagDecisionEngine';
 import { SCORE_MAP, STAGE_CONFIG } from '../constants';
+import { formatUnknownError } from '../utils/errorFormatting';
 import { extractCampaignInsightsFromResponses, extractClientInsightsFromResponses, questionMatchesContext, resolveStoredResponseForQuestion } from '../utils/questionnaireInsights';
 import {
   collectPortfolioMetadata,
@@ -301,23 +302,18 @@ const buildUnifiedReportFallback = async (
   operatorId?: string,
   statusFilter?: string
 ): Promise<UnifiedReportRow[]> => {
-  let clientsQuery = supabase.from('clients').select('id, name, phone, status');
   let callsQuery = supabase
     .from('call_logs')
     .select('id, client_id, operator_id, start_time, call_type, responses, proposito');
   let tasksQuery = supabase
     .from('tasks')
-    .select('id, client_id, assigned_to, type, status, skip_reason, updated_at, created_at');
+    .select('id, client_id, assigned_to, type, status, skip_reason, created_at');
   let whatsappQuery = supabase
     .from('whatsapp_tasks')
     .select('id, client_id, assigned_to, type, status, skip_reason, created_at, completed_at, responses');
   let salesQuery = supabase
     .from('sales')
-    .select('id, client_id, operator_id, registered_at, status');
-
-  if (statusFilter) {
-    clientsQuery = clientsQuery.eq('status', statusFilter);
-  }
+    .select('id, client_id, customer_id, operator_id, registered_at, status');
 
   if (operatorId) {
     callsQuery = callsQuery.eq('operator_id', operatorId);
@@ -326,29 +322,58 @@ const buildUnifiedReportFallback = async (
     salesQuery = salesQuery.eq('operator_id', operatorId);
   }
 
+  const loadFallbackClients = async () => {
+    const rows: Array<{ id: string; name: string; phone: string; status: string }> = [];
+    const pageSize = 1000;
+    let from = 0;
+
+    while (true) {
+      let query = supabase
+        .from('clients')
+        .select('id, name, phone, status')
+        .order('name')
+        .range(from, from + pageSize - 1);
+
+      if (statusFilter) {
+        query = query.eq('status', statusFilter);
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      rows.push(...(data || []));
+
+      if (!data || data.length < pageSize) {
+        break;
+      }
+
+      from += pageSize;
+    }
+
+    return rows;
+  };
+
   const [
     questions,
-    clientsResult,
+    clients,
     callsResult,
     tasksResult,
     whatsappResult,
     salesResult
   ] = await Promise.all([
     loadActiveQuestions(),
-    clientsQuery,
+    loadFallbackClients(),
     callsQuery,
     tasksQuery,
     whatsappQuery,
     salesQuery
   ]);
 
-  if (clientsResult.error) throw clientsResult.error;
   if (callsResult.error) throw callsResult.error;
   if (tasksResult.error) throw tasksResult.error;
   if (whatsappResult.error) throw whatsappResult.error;
   if (salesResult.error) throw salesResult.error;
 
-  const clients = clientsResult.data || [];
   const relevantCalls = (callsResult.data || []).filter(call => isPostSaleRemarketingCallType(call.call_type));
   const relevantTasks = (tasksResult.data || []).filter(task => isPostSaleRemarketingCallType(task.type));
   const whatsappTasks = whatsappResult.data || [];
@@ -372,7 +397,8 @@ const buildUnifiedReportFallback = async (
     if (task.client_id) clientIds.add(task.client_id);
   });
   validSales.forEach(sale => {
-    if (sale.client_id) clientIds.add(sale.client_id);
+    const saleClientId = sale.client_id || sale.customer_id;
+    if (saleClientId) clientIds.add(saleClientId);
   });
 
   const rows = Array.from(clientIds).map(clientId => {
@@ -380,7 +406,7 @@ const buildUnifiedReportFallback = async (
     const clientCalls = relevantCalls.filter(call => call.client_id === clientId);
     const clientSkippedTasks = relevantTasks.filter(task => task.client_id === clientId && task.status === 'skipped');
     const clientWhatsapp = whatsappTasks.filter(task => task.client_id === clientId && (task.status === 'completed' || task.status === 'skipped'));
-    const clientSales = validSales.filter(sale => sale.client_id === clientId);
+    const clientSales = validSales.filter(sale => (sale.client_id || sale.customer_id) === clientId);
 
     const events: Array<{
       timestamp?: string;
@@ -409,7 +435,7 @@ const buildUnifiedReportFallback = async (
 
     clientSkippedTasks.forEach(task => {
       events.push({
-        timestamp: task.updated_at || task.created_at,
+        timestamp: task.created_at,
         outcome: String(mapStoredCallTypeToApp(task.type) || 'Ligação'),
         responseStatus: 'Sem Resposta',
         operatorId: task.assigned_to,
@@ -1007,19 +1033,38 @@ export const dataService = {
 
   // --- MÓDULO DE VENDAS ---
   getSales: async (startDate?: string, endDate?: string): Promise<Sale[]> => {
-    let query = supabase.from('sales').select('*').order('registered_at', { ascending: false });
+    const rows: any[] = [];
+    const pageSize = 1000;
+    let from = 0;
 
-    if (startDate && endDate) {
-      query = query.gte('registered_at', `${startDate}T00:00:00`).lte('registered_at', `${endDate}T23:59:59`);
+    while (true) {
+      let query = supabase
+        .from('sales')
+        .select('*')
+        .order('registered_at', { ascending: false })
+        .range(from, from + pageSize - 1);
+
+      if (startDate && endDate) {
+        query = query
+          .gte('registered_at', `${startDate}T00:00:00`)
+          .lte('registered_at', `${endDate}T23:59:59`);
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      const batch = data || [];
+      rows.push(...batch);
+
+      if (batch.length < pageSize) break;
+      from += pageSize;
     }
 
-    const { data, error } = await query;
-    if (error) throw error;
-    return (data || []).map(s => ({
+    return rows.map(s => ({
       id: s.id,
       saleNumber: s.sale_number,
-      clientId: s.customer_id,
-      clientName: s.client_name,
+      clientId: s.customer_id || s.client_id,
+      clientName: s.client_name || s.customer_name || 'Cliente sem nome',
       address: s.address,
       category: s.category,
       channel: s.channel,
@@ -1192,6 +1237,38 @@ export const dataService = {
       role: profile.role as UserRole,
       active: profile.active
     };
+  },
+
+  getCurrentSignedUser: async (): Promise<User | null> => {
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError) throw sessionError;
+
+    const sessionUser = sessionData.session?.user;
+    if (!sessionUser) {
+      return null;
+    }
+
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', sessionUser.id)
+      .maybeSingle();
+
+    if (profileError) throw profileError;
+    if (!profile) return null;
+
+    return {
+      id: profile.id,
+      name: profile.username_display || 'Sem Nome',
+      username: profile.username_slug || '',
+      role: (profile.role as UserRole) || UserRole.OPERATOR,
+      active: profile.active ?? true
+    };
+  },
+
+  signOut: async (): Promise<void> => {
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
   },
 
   getQuestions: async (callType?: CallType | 'ALL', proposito?: string): Promise<Question[]> => {
@@ -2193,7 +2270,7 @@ export const dataService = {
       if (data) existing = data;
     }
 
-      const catalogConfig = await PortfolioCatalogService.getCatalogConfig();
+    const catalogConfig = await PortfolioCatalogService.getCatalogConfig();
       const mergedPortfolioEntries = normalizePortfolioEntriesWithCatalog(
         mergePortfolioEntries(existing?.portfolio_entries, client.portfolio_entries),
         catalogConfig
@@ -2280,28 +2357,48 @@ export const dataService = {
     const nextPhone = normalizePhone(updates.phone || existing.phone || '');
     if (!nextPhone) throw new Error('Telefone obrigatório');
 
-      const catalogConfig = await PortfolioCatalogService.getCatalogConfig();
-      const nextPortfolioEntries = normalizePortfolioEntriesWithCatalog(
-        updates.portfolio_entries !== undefined
-          ? mergePortfolioEntries(updates.portfolio_entries)
-          : mergePortfolioEntries(existing.portfolio_entries),
-        catalogConfig
-      );
-      const portfolioMetadata = collectPortfolioMetadata(nextPortfolioEntries);
-      const equipmentModels = mergeUniquePortfolioValues(
-        updates.equipment_models,
-        updates.items,
-        portfolioMetadata.equipment_models
-      );
-      const customerProfiles = mergeUniquePortfolioValues(
-        updates.customer_profiles,
-        existing.customer_profiles,
-        portfolioMetadata.customer_profiles
-      );
-      const productCategories = mergeUniquePortfolioValues(
-        updates.product_categories,
-        portfolioMetadata.product_categories
-      );
+    const hasPortfolioUpdate = updates.portfolio_entries !== undefined;
+    const catalogConfig = await PortfolioCatalogService.getCatalogConfig();
+    const nextPortfolioEntries = normalizePortfolioEntriesWithCatalog(
+      hasPortfolioUpdate
+        ? mergePortfolioEntries(updates.portfolio_entries)
+        : mergePortfolioEntries(existing.portfolio_entries),
+      catalogConfig
+    );
+    const portfolioMetadata = collectPortfolioMetadata(nextPortfolioEntries);
+    const equipmentModels = hasPortfolioUpdate
+      ? mergeUniquePortfolioValues(
+          updates.equipment_models,
+          updates.items,
+          portfolioMetadata.equipment_models
+        )
+      : mergeUniquePortfolioValues(
+          existing.equipment_models,
+          existing.items,
+          updates.equipment_models,
+          updates.items,
+          portfolioMetadata.equipment_models
+        );
+    const customerProfiles = hasPortfolioUpdate
+      ? mergeUniquePortfolioValues(
+          updates.customer_profiles,
+          portfolioMetadata.customer_profiles
+        )
+      : mergeUniquePortfolioValues(
+          existing.customer_profiles,
+          updates.customer_profiles,
+          portfolioMetadata.customer_profiles
+        );
+    const productCategories = hasPortfolioUpdate
+      ? mergeUniquePortfolioValues(
+          updates.product_categories,
+          portfolioMetadata.product_categories
+        )
+      : mergeUniquePortfolioValues(
+          existing.product_categories,
+          updates.product_categories,
+          portfolioMetadata.product_categories
+        );
 
     const payload: any = {
       name: updates.name ?? existing.name ?? 'Sem Nome',
@@ -2659,9 +2756,27 @@ export const dataService = {
   // --- VISITAS ---
   // --- QUOTES (ORÇAMENTOS) ---
   getQuotes: async (): Promise<Quote[]> => {
-    const { data, error } = await supabase.from('quotes').select('*').order('created_at', { ascending: false });
-    if (error) throw error;
-    return data || [];
+    const rows: Quote[] = [];
+    const pageSize = 1000;
+    let from = 0;
+
+    while (true) {
+      const { data, error } = await supabase
+        .from('quotes')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(from, from + pageSize - 1);
+
+      if (error) throw error;
+
+      const batch = data || [];
+      rows.push(...batch);
+
+      if (batch.length < pageSize) break;
+      from += pageSize;
+    }
+
+    return rows;
   },
 
   saveQuote: async (quote: Partial<Quote>): Promise<Quote> => {
@@ -3160,7 +3275,11 @@ export const dataService = {
       }));
     } catch (error) {
       console.warn('Unified remarketing RPC unavailable, using fallback aggregation.', error);
-      return buildUnifiedReportFallback(operatorId, statusFilter);
+      try {
+        return await buildUnifiedReportFallback(operatorId, statusFilter);
+      } catch (fallbackError) {
+        throw new Error(formatUnknownError(fallbackError));
+      }
     }
   },
 

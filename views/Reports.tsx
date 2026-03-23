@@ -15,7 +15,8 @@ import { dataService } from '../services/dataService';
 import { CallRecord, User, Client, Protocol, Question, Task, OperatorEvent, OperatorEventType, Visit, Sale, SaleStatus, WhatsAppTask, CallType, ClientTag } from '../types';
 import PostSaleRemarketingReport from './PostSaleRemarketingReport';
 import ProspectHistoryDrawer from '../components/ProspectHistoryDrawer';
-import { buildManagementReportInsights } from '../utils/managementReportInsights';
+import { buildManagementReportInsights, EMPTY_MANAGEMENT_REPORT_INSIGHTS } from '../utils/managementReportInsights';
+import { formatUnknownError } from '../utils/errorFormatting';
 import { resolveQuestionnaireEntries } from '../utils/questionnaireInsights';
 
 // --- HELPER COMPONENTS ---
@@ -144,6 +145,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
    const [questions, setQuestions] = React.useState<Question[]>([]);
    const [visits, setVisits] = React.useState<Visit[]>([]);
    const [prospects, setProspects] = React.useState<Client[]>([]);
+   const [loadWarnings, setLoadWarnings] = React.useState<string[]>([]);
 
    // Derived Metrics State
    const [metrics, setMetrics] = React.useState<any>({
@@ -166,22 +168,9 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
 
    const loadData = React.useCallback(async () => {
       setIsLoading(true);
+      setLoadWarnings([]);
       try {
-         const [
-            fetchedCalls,
-            fetchedTasks,
-            fetchedWa,
-            fetchedSales,
-            fetchedOps,
-            fetchedClients,
-
-            fetchedEvents,
-            fetchedQuestions,
-            fetchedVisits,
-            fetchedProspects,
-            fetchedTags,
-            fetchedInvalid
-         ] = await Promise.all([
+         const results = await Promise.allSettled([
             dataService.getCalls(dateRange.start, dateRange.end),
             dataService.getTasks(), // Tasks history is tricky, might need filter update in future
             dataService.getWhatsAppTasks(undefined, dateRange.start, dateRange.end),
@@ -197,12 +186,33 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
             dataService.getInvalidClients()
          ]);
 
+         const warnings: string[] = [];
+         const resolveResult = <T,>(result: PromiseSettledResult<T>, label: string, fallback: T): T => {
+            if (result.status === 'fulfilled') return result.value;
+
+            const message = formatUnknownError(result.reason);
+            console.error(`Failed to load reports source: ${label}`, result.reason);
+            warnings.push(`${label}: ${message}`);
+            return fallback;
+         };
+
+         const fetchedCalls = resolveResult(results[0], 'Ligacoes', [] as CallRecord[]);
+         const fetchedTasks = resolveResult(results[1], 'Tarefas', [] as Task[]);
+         const fetchedWa = resolveResult(results[2], 'WhatsApp', [] as WhatsAppTask[]);
+         const fetchedSales = resolveResult(results[3], 'Vendas', [] as Sale[]);
+         const fetchedOps = resolveResult(results[4], 'Usuarios', [] as User[]);
+         const fetchedClients = resolveResult(results[5], 'Clientes', [] as Client[]);
+         const fetchedEvents = resolveResult(results[6], 'Eventos de operador', [] as OperatorEvent[]);
+         const fetchedQuestions = resolveResult(results[7], 'Perguntas', [] as Question[]);
+         const fetchedVisits = resolveResult(results[8], 'Visitas', [] as Visit[]);
+         const fetchedProspects = resolveResult(results[9], 'Prospects', [] as Client[]);
+         const fetchedTags = resolveResult(results[10], 'Tags', [] as ClientTag[]);
+         const fetchedInvalid = resolveResult(results[11], 'Telefones invalidos', [] as Client[]);
+
          setCalls(fetchedCalls);
          setTasks(fetchedTasks); // Note: filter by date if needed for history
          setWhatsappTasks(fetchedWa);
          setSales(fetchedSales);
-         setOperators(fetchedOps);
-         setClients(fetchedClients);
          setOperators(fetchedOps);
          setClients(fetchedClients);
          setEvents(fetchedEvents);
@@ -210,6 +220,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
          setVisits(fetchedVisits);
          setProspects(fetchedProspects);
          setInvalidClients(fetchedInvalid);
+         setLoadWarnings(warnings);
 
          // --- CALCULATE BASE METRICS ---
          // Revenue now counts ALL sales except CANCELADA
@@ -413,6 +424,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
 
       } catch (e) {
          console.error("Failed to load reports data", e);
+         setLoadWarnings(['Falha inesperada ao montar o relatorio.']);
       } finally {
          setIsLoading(false);
       }
@@ -420,12 +432,19 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
 
    React.useEffect(() => { loadData(); }, [loadData]);
 
-   const managementInsights = React.useMemo(() => buildManagementReportInsights({
-      calls,
-      whatsappTasks,
-      questions,
-      operators
-   }), [calls, whatsappTasks, questions, operators]);
+   const managementInsights = React.useMemo(() => {
+      try {
+         return buildManagementReportInsights({
+            calls,
+            whatsappTasks,
+            questions,
+            operators
+         });
+      } catch (error) {
+         console.error('Failed to build management insights', error);
+         return EMPTY_MANAGEMENT_REPORT_INSIGHTS;
+      }
+   }, [calls, whatsappTasks, questions, operators]);
 
    // --- EXPORT FUNCTION ---
    const handleExport = (type: 'csv' | 'xls') => {
@@ -790,6 +809,17 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                </button>
             ))}
          </div>
+
+         {loadWarnings.length > 0 && (
+            <div className="rounded-[32px] border border-amber-200 bg-amber-50 px-6 py-5 text-amber-900">
+               <p className="text-[10px] font-black uppercase tracking-widest mb-2">Carga Parcial</p>
+               <p className="text-sm font-bold">Algumas fontes falharam, mas os blocos saudaveis continuam carregados.</p>
+               <p className="text-xs font-medium mt-2">
+                  {loadWarnings.slice(0, 4).join(' | ')}
+                  {loadWarnings.length > 4 ? ' | ...' : ''}
+               </p>
+            </div>
+         )}
 
          {isLoading ? (
             <div className="h-96 flex flex-col items-center justify-center text-slate-400">

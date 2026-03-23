@@ -4,7 +4,8 @@ import { UnifiedReportRow, User, CallType, CallRecord, Question } from '../types
 import { Loader2, Calendar, Filter, Users, Tag, CheckSquare, Square, RefreshCcw, Search, ChevronRight } from 'lucide-react';
 import BulkRescheduleModal from '../components/BulkRescheduleModal';
 import BulkUpsellModal from '../components/BulkUpsellModal';
-import { buildManagementReportInsights } from '../utils/managementReportInsights';
+import { buildManagementReportInsights, EMPTY_MANAGEMENT_REPORT_INSIGHTS } from '../utils/managementReportInsights';
+import { formatUnknownError } from '../utils/errorFormatting';
 
 interface Props {
     user: User;
@@ -34,6 +35,7 @@ const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenPro
     const [calls, setCalls] = useState<CallRecord[]>([]);
     const [questions, setQuestions] = useState<Question[]>([]);
     const [loading, setLoading] = useState(false);
+    const [loadWarnings, setLoadWarnings] = useState<string[]>([]);
 
     // Selection
     const [selectedIds, setSelectedIds] = useState<string[]>([]);
@@ -49,24 +51,41 @@ const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenPro
 
     const loadReport = async () => {
         setLoading(true);
+        setLoadWarnings([]);
         try {
             // If operator is NOT admin, perhaps filter by their ID? Or Admin sees all.
             // Based on rules, admin sees all, ops see their own or all depending on CRM rule.
             // We pass undefined to RPC to get all, then filter frontend if needed, or pass user.id if not admin.
             const opsId = user.role !== 'ADMIN' ? user.id : undefined;
-            const [rows, allCalls, allQuestions] = await Promise.all([
+            const results = await Promise.allSettled([
                 dataService.listUnifiedReport(opsId),
                 dataService.getCalls(dateRange.start, dateRange.end),
                 dataService.getQuestions()
             ]);
+
+            const warnings: string[] = [];
+            const resolveResult = <T,>(result: PromiseSettledResult<T>, label: string, fallback: T): T => {
+                if (result.status === 'fulfilled') return result.value;
+
+                const message = formatUnknownError(result.reason);
+                console.error(`Failed to load post-sale source: ${label}`, result.reason);
+                warnings.push(`${label}: ${message}`);
+                return fallback;
+            };
+
+            const rows = resolveResult(results[0], 'Relatorio unificado', [] as UnifiedReportRow[]);
+            const allCalls = resolveResult(results[1], 'Ligacoes', [] as CallRecord[]);
+            const allQuestions = resolveResult(results[2], 'Perguntas', [] as Question[]);
 
             const relevantCalls = allCalls.filter(call => isPostSaleRemarketingType(call.type));
 
             setData(rows);
             setCalls(relevantCalls);
             setQuestions(allQuestions);
+            setLoadWarnings(warnings);
         } catch (e) {
             console.error(e);
+            setLoadWarnings(['Falha inesperada ao montar o pos-venda.']);
         } finally {
             setLoading(false);
         }
@@ -76,12 +95,19 @@ const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenPro
         loadReport();
     }, [user.id, dateRange.start, dateRange.end]);
 
-    const reportInsights = React.useMemo(() => buildManagementReportInsights({
-        calls,
-        whatsappTasks: [],
-        questions,
-        operators
-    }), [calls, questions, operators]);
+    const reportInsights = React.useMemo(() => {
+        try {
+            return buildManagementReportInsights({
+                calls,
+                whatsappTasks: [],
+                questions,
+                operators
+            });
+        } catch (error) {
+            console.error('Failed to build post-sale insights', error);
+            return EMPTY_MANAGEMENT_REPORT_INSIGHTS;
+        }
+    }, [calls, questions, operators]);
 
     const toggleSelect = (id: string) => {
         setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -139,6 +165,17 @@ const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenPro
 
     return (
         <div className="space-y-6">
+            {loadWarnings.length > 0 && (
+                <div className="rounded-[28px] border border-amber-200 bg-amber-50 px-5 py-4 text-amber-900">
+                    <p className="text-[10px] font-black uppercase tracking-widest mb-2">Carga Parcial</p>
+                    <p className="text-sm font-bold">Parte das fontes falhou, mas o relatorio seguiu com os dados disponiveis.</p>
+                    <p className="text-xs font-medium mt-2">
+                        {loadWarnings.slice(0, 3).join(' | ')}
+                        {loadWarnings.length > 3 ? ' | ...' : ''}
+                    </p>
+                </div>
+            )}
+
             {/* Metrics Cards at the Top */}
             <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
                 {[

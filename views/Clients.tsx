@@ -76,10 +76,13 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
 
   const [neighborhoodFilter, setNeighborhoodFilter] = React.useState('');
   const [cityFilter, setCityFilter] = React.useState('');
+  const [profileFilter, setProfileFilter] = React.useState('');
+  const [productCategoryFilter, setProductCategoryFilter] = React.useState('');
   const [clientTags, setClientTags] = React.useState<ClientTag[]>([]);
   const [isEmailModalOpen, setIsEmailModalOpen] = React.useState(false);
   const [newEmail, setNewEmail] = React.useState('');
   const [expandedCategory, setExpandedCategory] = React.useState<string | null>(null);
+  const [isQuickPortfolioEditorOpen, setIsQuickPortfolioEditorOpen] = React.useState(false);
 
   const [clientData, setClientData] = React.useState<ClientFormState>(createEmptyClientData);
   const resetClientForm = React.useCallback(() => setClientData(createEmptyClientData()), []);
@@ -89,10 +92,28 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
     () => collectPortfolioMetadata(selectedPortfolioEntries),
     [selectedPortfolioEntries]
   );
+  const editingPortfolioEntries = React.useMemo(
+    () => mergePortfolioEntries(clientData.portfolio_entries),
+    [clientData.portfolio_entries]
+  );
+  const editingPortfolioMetadata = React.useMemo(
+    () => collectPortfolioMetadata(editingPortfolioEntries),
+    [editingPortfolioEntries]
+  );
   const selectedCategoryGroups = React.useMemo(
     () => buildPortfolioCategoryGroups(selectedPortfolioEntries),
     [selectedPortfolioEntries]
   );
+  const portfolioFormOptions = React.useMemo(() => {
+    const allEntries = clients.flatMap(client => getClientPortfolioEntries(client));
+    const metadata = collectPortfolioMetadata(allEntries);
+
+    return {
+      profiles: metadata.customer_profiles,
+      categories: metadata.product_categories,
+      equipments: metadata.equipment_models
+    };
+  }, [clients]);
 
   const addPortfolioEntry = () => {
     setClientData(prev => ({
@@ -119,6 +140,23 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
       };
     });
   };
+
+  const populateClientFormFromClient = React.useCallback((c: Client) => {
+    const portfolioEntries = getClientPortfolioEntries(c);
+    setClientData({
+      id: c.id,
+      name: c.name,
+      phone: c.phone,
+      phone_secondary: c.phone_secondary || '',
+      address: c.address || '',
+      street: c.street || '',
+      neighborhood: c.neighborhood || '',
+      city: c.city || '',
+      state: c.state || '',
+      zip_code: c.zip_code || '',
+      portfolio_entries: portfolioEntries.length > 0 ? portfolioEntries : [createEmptyPortfolioEntry()]
+    });
+  }, []);
 
   const loadClients = async () => {
     setIsLoading(true);
@@ -165,6 +203,10 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
   }, [selectedClient?.id]);
 
   React.useEffect(() => {
+    setIsQuickPortfolioEditorOpen(false);
+  }, [selectedClient?.id]);
+
+  React.useEffect(() => {
     if (selectedCategoryGroups.length === 0) {
       setExpandedCategory(null);
       return;
@@ -192,10 +234,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
     }
   };
 
-  const handleSaveClient = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!clientData.name || !clientData.phone) return;
-
+  const persistClientForm = async () => {
     setIsProcessing(true);
     try {
       const portfolioEntries = mergePortfolioEntries(clientData.portfolio_entries);
@@ -241,35 +280,64 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
 
       setSelectedClient(savedClient);
 
-      setIsModalOpen(false);
-      setEditMode(false);
-      resetClientForm();
       await loadClients();
+      return savedClient;
     } catch (e) { alert("Erro ao salvar cliente."); }
     finally { setIsProcessing(false); }
+    return null;
+  };
+
+  const handleSaveClient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!clientData.name || !clientData.phone) return;
+
+    const savedClient = await persistClientForm();
+    if (!savedClient) return;
+
+    setIsModalOpen(false);
+    setEditMode(false);
+    resetClientForm();
   };
 
   const startEdit = (c: Client) => {
-    const portfolioEntries = getClientPortfolioEntries(c);
-    setClientData({
-      id: c.id,
-      name: c.name,
-      phone: c.phone,
-      phone_secondary: c.phone_secondary || '',
-      address: c.address || '',
-      street: c.street || '',
-      neighborhood: c.neighborhood || '',
-      city: c.city || '',
-      state: c.state || '',
-      zip_code: c.zip_code || '',
-      portfolio_entries: portfolioEntries.length > 0 ? portfolioEntries : [createEmptyPortfolioEntry()]
-    });
+    populateClientFormFromClient(c);
     setEditMode(true);
     setIsModalOpen(true);
   };
 
+  const openQuickPortfolioEditor = (c: Client, options?: { addLine?: boolean }) => {
+    populateClientFormFromClient(c);
+    setEditMode(true);
+    setIsQuickPortfolioEditorOpen(true);
+
+    if (options?.addLine) {
+      setClientData(prev => ({
+        ...prev,
+        portfolio_entries: [...prev.portfolio_entries, createEmptyPortfolioEntry()]
+      }));
+    }
+  };
+
+  const handleSaveQuickPortfolio = async () => {
+    if (!selectedClient) return;
+
+    const savedClient = await persistClientForm();
+    if (!savedClient) return;
+
+    setSelectedClient(savedClient);
+    setIsQuickPortfolioEditorOpen(false);
+  };
+
   const neighborhoods = Array.from(new Set(clients.map(c => c.neighborhood).filter(Boolean))) as string[];
   const cities = Array.from(new Set(clients.map(c => c.city).filter(Boolean))) as string[];
+  const clientPortfolioFilterMap = React.useMemo(
+    () => new Map(clients.map(client => [client.id, collectPortfolioMetadata(getClientPortfolioEntries(client))])),
+    [clients]
+  );
+  const portfolioFilterOptions = React.useMemo(() => {
+    const allEntries = clients.flatMap(client => getClientPortfolioEntries(client));
+    return collectPortfolioMetadata(allEntries);
+  }, [clients]);
 
   const filtered = (clients || []).filter(c => {
     const matchSearch = (c.name || '').toLowerCase().includes(search.toLowerCase()) ||
@@ -277,7 +345,18 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
       (c.phone_secondary || '').includes(search);
     const matchNeighborhood = neighborhoodFilter ? c.neighborhood === neighborhoodFilter : true;
     const matchCity = cityFilter ? c.city === cityFilter : true;
-    return matchSearch && matchNeighborhood && matchCity;
+    const clientPortfolioMetadata = clientPortfolioFilterMap.get(c.id) || {
+      customer_profiles: [],
+      product_categories: [],
+      equipment_models: []
+    };
+    const matchProfile = profileFilter
+      ? clientPortfolioMetadata.customer_profiles.includes(profileFilter)
+      : true;
+    const matchProductCategory = productCategoryFilter
+      ? clientPortfolioMetadata.product_categories.includes(productCategoryFilter)
+      : true;
+    return matchSearch && matchNeighborhood && matchCity && matchProfile && matchProductCategory;
   });
 
   const isAdmin = user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR;
@@ -339,22 +418,28 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
         </div>
       </header>
 
-      <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm flex flex-col md:flex-row items-center gap-4">
-        <div className="flex items-center gap-2 flex-1 w-full">
-          <Search className="text-slate-400 shrink-0" size={20} />
-          <input
-            type="text"
-            placeholder="Pesquisar por nome ou telefone..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="w-full bg-transparent border-none outline-none font-bold text-slate-700 placeholder:text-slate-300"
-          />
+      <div className="bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm space-y-4">
+        <div className="flex flex-col md:flex-row items-center gap-4">
+          <div className="flex items-center gap-2 flex-1 w-full">
+            <Search className="text-slate-400 shrink-0" size={20} />
+            <input
+              type="text"
+              placeholder="Pesquisar por nome ou telefone..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              className="w-full bg-transparent border-none outline-none font-bold text-slate-700 placeholder:text-slate-300"
+            />
+          </div>
+          <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 whitespace-nowrap">
+            {filtered.length} cliente(s)
+          </div>
         </div>
-        <div className="flex items-center gap-4 w-full md:w-auto">
+
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
           <select
             value={neighborhoodFilter}
             onChange={e => setNeighborhoodFilter(e.target.value)}
-            className="px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 outline-none"
+            className="px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 outline-none"
           >
             <option value="">Todos os Bairros</option>
             {neighborhoods.sort().map(n => <option key={n} value={n}>{n}</option>)}
@@ -362,10 +447,26 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
           <select
             value={cityFilter}
             onChange={e => setCityFilter(e.target.value)}
-            className="px-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 outline-none"
+            className="px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 outline-none"
           >
             <option value="">Todas as Cidades</option>
             {cities.sort().map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select
+            value={profileFilter}
+            onChange={e => setProfileFilter(e.target.value)}
+            className="px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 outline-none"
+          >
+            <option value="">Todos os Perfis</option>
+            {portfolioFilterOptions.customer_profiles.map(profile => <option key={profile} value={profile}>{profile}</option>)}
+          </select>
+          <select
+            value={productCategoryFilter}
+            onChange={e => setProductCategoryFilter(e.target.value)}
+            className="px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 outline-none"
+          >
+            <option value="">Todas as Categorias</option>
+            {portfolioFilterOptions.product_categories.map(category => <option key={category} value={category}>{category}</option>)}
           </select>
         </div>
       </div>
@@ -473,9 +574,23 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                 <div className="flex flex-col items-center gap-2">
                   <div className="text-6xl drop-shadow-md">{SATISFACTION_EMOJIS[selectedClient.satisfaction] || '😐'}</div>
                   {isAdmin && (
-                    <button onClick={() => startEdit(selectedClient)} className="mt-4 px-6 py-2 bg-slate-900 text-white rounded-xl text-[9px] font-black uppercase tracking-widest shadow-lg hover:bg-slate-800 transition-all flex items-center gap-2">
-                      <Edit2 size={12} /> Editar
-                    </button>
+                    <div className="mt-4 flex flex-col gap-2">
+                      <button
+                        onClick={() => openQuickPortfolioEditor(selectedClient)}
+                        className="px-6 py-2 bg-blue-600 text-white rounded-xl text-[9px] font-black uppercase tracking-widest shadow-lg hover:bg-blue-700 transition-all flex items-center gap-2"
+                      >
+                        <Edit2 size={12} /> Editar Perfil e Produtos
+                      </button>
+                      <button
+                        onClick={() => openQuickPortfolioEditor(selectedClient, { addLine: true })}
+                        className="px-6 py-2 bg-emerald-600 text-white rounded-xl text-[9px] font-black uppercase tracking-widest shadow-lg hover:bg-emerald-700 transition-all flex items-center gap-2"
+                      >
+                        <Plus size={12} /> Adicionar Item
+                      </button>
+                      <button onClick={() => startEdit(selectedClient)} className="px-6 py-2 bg-slate-900 text-white rounded-xl text-[9px] font-black uppercase tracking-widest shadow-lg hover:bg-slate-800 transition-all flex items-center gap-2">
+                        <Edit2 size={12} /> Editar Cadastro Completo
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -528,6 +643,160 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                       emptySelectionLabel="Clique em uma categoria para ver os produtos relacionados."
                     />
                   </div>
+
+                  {isAdmin && isQuickPortfolioEditorOpen && (
+                    <div className="rounded-[32px] border border-blue-100 bg-blue-50/60 p-6 space-y-5">
+                      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-blue-100 pb-4">
+                        <div>
+                          <h5 className="text-[10px] font-black uppercase tracking-widest text-blue-700">Edicao Rapida do Portfolio</h5>
+                          <p className="text-sm font-bold text-slate-500 mt-1">Adicione, altere ou exclua perfil, categoria e equipamento sem sair da ficha.</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={addPortfolioEntry}
+                            className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-[10px] font-black uppercase tracking-widest flex items-center gap-2 hover:bg-emerald-700 transition-all"
+                          >
+                            <Plus size={14} /> Nova Linha
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (selectedClient) populateClientFormFromClient(selectedClient);
+                              setIsQuickPortfolioEditorOpen(false);
+                            }}
+                            className="px-4 py-2 rounded-xl bg-white text-slate-600 text-[10px] font-black uppercase tracking-widest border border-slate-200 hover:bg-slate-50 transition-all"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleSaveQuickPortfolio}
+                            disabled={isProcessing}
+                            className="px-4 py-2 rounded-xl bg-blue-600 text-white text-[10px] font-black uppercase tracking-widest flex items-center gap-2 hover:bg-blue-700 transition-all disabled:opacity-50"
+                          >
+                            {isProcessing ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                            Salvar Alteracoes
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                        <div className="rounded-[24px] border border-amber-100 bg-white p-4 space-y-3">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Perfis em Edicao</p>
+                          <div className="flex flex-wrap gap-2">
+                            {editingPortfolioMetadata.customer_profiles.length > 0 ? editingPortfolioMetadata.customer_profiles.map(profile => (
+                              <span key={profile} className="px-3 py-1 rounded-xl border border-amber-200 bg-amber-50 text-[10px] font-black uppercase text-amber-700">
+                                {profile}
+                              </span>
+                            )) : (
+                              <span className="text-xs font-bold text-slate-400 italic">Nenhum perfil definido.</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="rounded-[24px] border border-cyan-100 bg-white p-4 space-y-3">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-cyan-700">Categorias em Edicao</p>
+                          <div className="flex flex-wrap gap-2">
+                            {editingPortfolioMetadata.product_categories.length > 0 ? editingPortfolioMetadata.product_categories.map(category => (
+                              <span key={category} className="px-3 py-1 rounded-xl border border-cyan-200 bg-cyan-50 text-[10px] font-black uppercase text-cyan-700">
+                                {category}
+                              </span>
+                            )) : (
+                              <span className="text-xs font-bold text-slate-400 italic">Nenhuma categoria definida.</span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="rounded-[24px] border border-blue-100 bg-white p-4 space-y-3">
+                          <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Equipamentos em Edicao</p>
+                          <div className="flex flex-wrap gap-2">
+                            {editingPortfolioMetadata.equipment_models.length > 0 ? editingPortfolioMetadata.equipment_models.map(equipment => (
+                              <span key={equipment} className="px-3 py-1 rounded-xl border border-blue-200 bg-blue-50 text-[10px] font-black uppercase text-blue-700">
+                                {equipment}
+                              </span>
+                            )) : (
+                              <span className="text-xs font-bold text-slate-400 italic">Nenhum equipamento definido.</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-4">
+                        {clientData.portfolio_entries.map((entry, index) => (
+                          <div key={entry.id || `${index}`} className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_1fr_110px_auto] gap-3 items-end bg-white rounded-[24px] border border-slate-200 p-4">
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Perfil</label>
+                              <input
+                                type="text"
+                                value={entry.profile}
+                                list="client-profile-options"
+                                onChange={e => updatePortfolioEntry(index, 'profile', e.target.value)}
+                                placeholder="Ex: Construtor"
+                                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:border-amber-500"
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Categoria</label>
+                              <input
+                                type="text"
+                                value={entry.product_category}
+                                list="client-category-options"
+                                onChange={e => updatePortfolioEntry(index, 'product_category', e.target.value)}
+                                placeholder="Ex: Boiler"
+                                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:border-cyan-500"
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Equipamento</label>
+                              <input
+                                type="text"
+                                value={entry.equipment}
+                                list="client-equipment-options"
+                                onChange={e => updatePortfolioEntry(index, 'equipment', e.target.value)}
+                                placeholder="Ex: BZ30"
+                                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:border-blue-500"
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Qtd</label>
+                              <input
+                                type="number"
+                                min={1}
+                                step={1}
+                                value={entry.quantity || 1}
+                                onChange={e => updatePortfolioEntry(index, 'quantity', Number(e.target.value || 1))}
+                                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:border-emerald-500"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => removePortfolioEntry(index)}
+                              className="h-11 px-4 rounded-xl bg-rose-50 text-rose-600 text-[10px] font-black uppercase tracking-widest border border-rose-100 hover:bg-rose-100 transition-all"
+                            >
+                              Excluir
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <datalist id="client-profile-options">
+                    {portfolioFormOptions.profiles.map(profile => (
+                      <option key={profile} value={profile} />
+                    ))}
+                  </datalist>
+                  <datalist id="client-category-options">
+                    {portfolioFormOptions.categories.map(category => (
+                      <option key={category} value={category} />
+                    ))}
+                  </datalist>
+                  <datalist id="client-equipment-options">
+                    {portfolioFormOptions.equipments.map(equipment => (
+                      <option key={equipment} value={equipment} />
+                    ))}
+                  </datalist>
 
                   <div className="hidden">
                     <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2">
@@ -783,6 +1052,47 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                   </button>
                 </div>
 
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+                  <div className="rounded-[24px] border border-amber-100 bg-amber-50/70 p-4 space-y-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Perfis Vinculados</p>
+                    <div className="flex flex-wrap gap-2">
+                      {editingPortfolioMetadata.customer_profiles.length > 0 ? editingPortfolioMetadata.customer_profiles.map(profile => (
+                        <span key={profile} className="px-3 py-1 rounded-xl border border-amber-200 bg-white text-[10px] font-black uppercase text-amber-700">
+                          {profile}
+                        </span>
+                      )) : (
+                        <span className="text-xs font-bold text-slate-400 italic">Nenhum perfil em edicao.</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-[24px] border border-cyan-100 bg-cyan-50/70 p-4 space-y-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-cyan-700">Categorias Vinculadas</p>
+                    <div className="flex flex-wrap gap-2">
+                      {editingPortfolioMetadata.product_categories.length > 0 ? editingPortfolioMetadata.product_categories.map(category => (
+                        <span key={category} className="px-3 py-1 rounded-xl border border-cyan-200 bg-white text-[10px] font-black uppercase text-cyan-700">
+                          {category}
+                        </span>
+                      )) : (
+                        <span className="text-xs font-bold text-slate-400 italic">Nenhuma categoria em edicao.</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-[24px] border border-blue-100 bg-blue-50/70 p-4 space-y-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Equipamentos Comprados</p>
+                    <div className="flex flex-wrap gap-2">
+                      {editingPortfolioMetadata.equipment_models.length > 0 ? editingPortfolioMetadata.equipment_models.map(equipment => (
+                        <span key={equipment} className="px-3 py-1 rounded-xl border border-blue-200 bg-white text-[10px] font-black uppercase text-blue-700">
+                          {equipment}
+                        </span>
+                      )) : (
+                        <span className="text-xs font-bold text-slate-400 italic">Nenhum equipamento em edicao.</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
                 <div className="space-y-4">
                   {clientData.portfolio_entries.map((entry, index) => (
                     <div key={entry.id || `${index}`} className="grid grid-cols-1 lg:grid-cols-[1fr_1fr_1fr_120px_auto] gap-3 items-end bg-white rounded-[24px] border border-slate-200 p-4">
@@ -791,6 +1101,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                         <input
                           type="text"
                           value={entry.profile}
+                          list="client-profile-options"
                           onChange={e => updatePortfolioEntry(index, 'profile', e.target.value)}
                           placeholder="Ex: Construtor"
                           className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:border-amber-500"
@@ -801,6 +1112,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                         <input
                           type="text"
                           value={entry.product_category}
+                          list="client-category-options"
                           onChange={e => updatePortfolioEntry(index, 'product_category', e.target.value)}
                           placeholder="Ex: Boiler com Placa Solar"
                           className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:border-cyan-500"
@@ -811,6 +1123,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                         <input
                           type="text"
                           value={entry.equipment}
+                          list="client-equipment-options"
                           onChange={e => updatePortfolioEntry(index, 'equipment', e.target.value)}
                           placeholder="Ex: BZ20"
                           className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:border-blue-500"
@@ -837,6 +1150,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                     </div>
                   ))}
                 </div>
+
               </div>
 
               <div className="bg-slate-50 p-6 rounded-[32px] border border-slate-100 space-y-4">

@@ -2,8 +2,10 @@ import React, { useState, useEffect, useMemo } from 'react';
 import {
     Search, Plus, FileText, CheckCircle, XCircle,
     DollarSign, User, Calendar, Loader2, ArrowRight,
-    Filter, LayoutGrid, X
+    Filter, LayoutGrid, X, Download
 } from 'lucide-react';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { dataService } from '../services/dataService';
 import { Quote, QuoteStatus, Client, SaleStatus, SaleCategory, SaleChannel } from '../types';
 import { CurrencyInput } from '../components/CurrencyInput';
@@ -14,6 +16,18 @@ interface QuotesProps {
 }
 
 import { CampaignPlannerService } from '../services/campaignPlannerService';
+
+type ProbabilityFilter = 'ALL' | 'HIGH' | 'MEDIUM' | 'LOW';
+
+const formatCurrency = (value: number) =>
+    new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value) || 0);
+
+const matchesProbabilityFilter = (value: number, filter: ProbabilityFilter) => {
+    if (filter === 'ALL') return true;
+    if (filter === 'HIGH') return value >= 70;
+    if (filter === 'MEDIUM') return value >= 40 && value < 70;
+    return value < 40;
+};
 
 export const Quotes: React.FC<QuotesProps> = ({ user }) => {
     const [quotes, setQuotes] = useState<Quote[]>([]);
@@ -26,6 +40,7 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState<'ALL' | 'OPEN' | 'WON' | 'LOST'>('OPEN');
     const [salespersonFilter, setSalespersonFilter] = useState('ALL');
+    const [probabilityFilter, setProbabilityFilter] = useState<ProbabilityFilter>('ALL');
 
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isConverting, setIsConverting] = useState(false);
@@ -64,29 +79,39 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
 
     const filteredQuotes = useMemo(() => {
         return quotes.filter(q => {
-            const matchSearch = q.client_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                                q.quote_number.toLowerCase().includes(searchTerm.toLowerCase());
+            const normalizedSearch = searchTerm.toLowerCase().trim();
+            const matchSearch =
+                !normalizedSearch ||
+                q.client_name.toLowerCase().includes(normalizedSearch) ||
+                q.quote_number.toLowerCase().includes(normalizedSearch) ||
+                (q.interest_product || '').toLowerCase().includes(normalizedSearch);
             const matchStatus = statusFilter === 'ALL' || q.status === statusFilter;
             const matchSalesperson = salespersonFilter === 'ALL' || q.salesperson_name === salespersonFilter;
-            return matchSearch && matchStatus && matchSalesperson;
+            const matchProbability = matchesProbabilityFilter(Number(q.win_probability) || 0, probabilityFilter);
+            return matchSearch && matchStatus && matchSalesperson && matchProbability;
         });
-    }, [quotes, searchTerm, statusFilter, salespersonFilter]);
+    }, [quotes, searchTerm, statusFilter, salespersonFilter, probabilityFilter]);
 
     // Metrics
     const metrics = useMemo(() => {
-        const open = quotes.filter(q => q.status === 'OPEN');
-        const won = quotes.filter(q => q.status === 'WON');
+        const open = filteredQuotes.filter(q => q.status === 'OPEN');
+        const won = filteredQuotes.filter(q => q.status === 'WON');
         const openValue = open.reduce((acc, val) => acc + Number(val.value), 0);
 
         // Group by salesperson
         const bySalesperson: Record<string, number> = {};
-        open.forEach(q => {
+        filteredQuotes.forEach(q => {
             bySalesperson[q.salesperson_name] = (bySalesperson[q.salesperson_name] || 0) + 1;
         });
         const topSalespeople = Object.entries(bySalesperson).sort((a, b) => b[1] - a[1]).slice(0, 3);
 
-        return { openCount: open.length, openValue, wonCount: won.length, topSalespeople };
-    }, [quotes]);
+        return {
+            openCount: open.length,
+            openValue,
+            wonCount: won.length,
+            topSalespeople
+        };
+    }, [filteredQuotes]);
 
     const handleSaveQuote = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -176,8 +201,76 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
 
     const allSalespeopleNames = Array.from(new Set([
         ...users.map(u => u.name),
-        ...externalSalespeople.map(e => e.name)
-    ]));
+        ...externalSalespeople.map(e => e.name),
+        ...quotes.map(q => q.salesperson_name).filter(Boolean)
+    ])).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+    const handleExportQuotes = () => {
+        if (filteredQuotes.length === 0) {
+            alert('Nao ha orcamentos para exportar com os filtros atuais.');
+            return;
+        }
+
+        const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+        const today = new Date().toISOString().slice(0, 10);
+        const totalOpenValue = filteredQuotes
+            .filter(quote => quote.status === 'OPEN')
+            .reduce((acc, quote) => acc + Number(quote.value || 0), 0);
+
+        pdf.setFontSize(16);
+        pdf.text('Relatorio de Orcamentos', 14, 16);
+        pdf.setFontSize(9);
+        pdf.text(`Gerado em ${today}`, 14, 23);
+        pdf.text(`Registros: ${filteredQuotes.length}`, 14, 28);
+        pdf.text(`Valor em aberto: ${formatCurrency(totalOpenValue)}`, 14, 33);
+
+        autoTable(pdf, {
+            startY: 38,
+            head: [[
+                'Nº Orçamento',
+                'Cliente',
+                'Vendedor',
+                'Valor',
+                'Chance',
+                'Status',
+                'Produto de Interesse'
+            ]],
+            body: filteredQuotes.map(quote => ([
+                quote.quote_number,
+                quote.client_name,
+                quote.salesperson_name,
+                formatCurrency(Number(quote.value || 0)),
+                `${Number(quote.win_probability || 0)}%`,
+                quote.status,
+                quote.interest_product || 'Nao informado'
+            ])),
+            styles: {
+                fontSize: 8,
+                cellPadding: 2.5,
+                valign: 'middle'
+            },
+            headStyles: {
+                fillColor: [15, 23, 42],
+                textColor: [255, 255, 255],
+                fontStyle: 'bold'
+            },
+            columnStyles: {
+                0: { cellWidth: 34 },
+                1: { cellWidth: 55 },
+                2: { cellWidth: 45 },
+                3: { cellWidth: 28, halign: 'right' },
+                4: { cellWidth: 20, halign: 'center' },
+                5: { cellWidth: 24, halign: 'center' },
+                6: { cellWidth: 65 }
+            },
+            alternateRowStyles: {
+                fillColor: [248, 250, 252]
+            },
+            margin: { left: 14, right: 14 }
+        });
+
+        pdf.save(`orcamentos-${today}.pdf`);
+    };
 
     return (
         <div className="p-8 space-y-8 h-full overflow-y-auto">
@@ -186,28 +279,36 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
                     <h1 className="text-3xl font-black text-slate-800 uppercase tracking-tighter">Orçamentos</h1>
                     <p className="text-slate-500 font-medium">Acompanhe e converta suas cotações em vendas.</p>
                 </div>
-                <button
-                    onClick={() => { setNewQuote({ status: 'OPEN', win_probability: 50, value: 0 }); setIsModalOpen(true); }}
-                    className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors flex items-center gap-2"
-                >
-                    <Plus size={18} /> Novo Orçamento
-                </button>
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={handleExportQuotes}
+                        className="px-5 py-3 bg-white text-slate-700 rounded-xl font-bold border border-slate-200 hover:border-blue-300 hover:text-blue-700 transition-colors flex items-center gap-2"
+                    >
+                        <Download size={18} /> Exportar PDF
+                    </button>
+                    <button
+                        onClick={() => { setNewQuote({ status: 'OPEN', win_probability: 50, value: 0 }); setIsModalOpen(true); }}
+                        className="px-6 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors flex items-center gap-2"
+                    >
+                        <Plus size={18} /> Novo Orçamento
+                    </button>
+                </div>
             </header>
 
             {/* DASHBOARD */}
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="bg-white p-6 rounded-2xl border shadow-sm border-blue-100 border-l-4 border-l-blue-500">
                     <p className="text-xs text-slate-500 font-bold uppercase mb-1">Orçamentos em Aberto</p>
                     <h3 className="text-3xl font-black text-slate-800">{metrics.openCount}</h3>
                 </div>
                 <div className="bg-white p-6 rounded-2xl border shadow-sm border-green-100 border-l-4 border-l-green-500">
-                    <p className="text-xs text-slate-500 font-bold uppercase mb-1">Valor Total (Em Aberto)</p>
+                    <p className="text-xs text-slate-500 font-bold uppercase mb-1">Valor Total (Em Aberto / Filtro Atual)</p>
                     <h3 className="text-3xl font-black text-slate-800">
-                        {new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(metrics.openValue)}
+                        {formatCurrency(metrics.openValue)}
                     </h3>
                 </div>
-                <div className="bg-white p-6 rounded-2xl border shadow-sm border-slate-100 md:col-span-2">
-                    <p className="text-xs text-slate-500 font-bold uppercase mb-2">Top Vendedores (Em Aberto)</p>
+                <div className="bg-white p-6 rounded-2xl border shadow-sm border-slate-100">
+                    <p className="text-xs text-slate-500 font-bold uppercase mb-2">Top Vendedores (Filtro Atual)</p>
                     <div className="flex gap-4">
                         {metrics.topSalespeople.map(([name, count]) => (
                             <div key={name} className="flex-1 bg-slate-50 rounded-lg p-3 border border-slate-100 text-center cursor-pointer hover:border-blue-300 transition-colors" onClick={() => setSalespersonFilter(name)}>
@@ -258,6 +359,19 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
                         ))}
                     </select>
                 </div>
+                <div className="flex items-center gap-2">
+                    <LayoutGrid size={18} className="text-slate-400" />
+                    <select
+                        value={probabilityFilter}
+                        onChange={e => setProbabilityFilter(e.target.value as ProbabilityFilter)}
+                        className="p-2 bg-slate-50 rounded-lg font-medium text-sm outline-none border-transparent focus:border-blue-500 cursor-pointer"
+                    >
+                        <option value="ALL">Todas as Chances</option>
+                        <option value="HIGH">Chance Alta (70%+)</option>
+                        <option value="MEDIUM">Chance Média (40% a 69%)</option>
+                        <option value="LOW">Chance Baixa (até 39%)</option>
+                    </select>
+                </div>
             </div>
 
             {/* TABLE */}
@@ -270,6 +384,7 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
                             <tr>
                                 <th className="p-4">Nº Orçamento</th>
                                 <th className="p-4">Cliente / Lead</th>
+                                <th className="p-4">Produto de Interesse</th>
                                 <th className="p-4">Vendedor</th>
                                 <th className="p-4">Valor</th>
                                 <th className="p-4">Probabilidade</th>
@@ -279,14 +394,15 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
                         </thead>
                         <tbody className="divide-y divide-slate-100">
                             {filteredQuotes.length === 0 && (
-                                <tr><td colSpan={7} className="p-8 text-center text-slate-400 font-medium">Nenhum orçamento encontrado.</td></tr>
+                                <tr><td colSpan={8} className="p-8 text-center text-slate-400 font-medium">Nenhum orçamento encontrado.</td></tr>
                             )}
                             {filteredQuotes.map(q => (
                                 <tr key={q.id} className="hover:bg-slate-50/50 transition-colors group">
                                     <td className="p-4 font-mono text-sm font-bold text-slate-600">{q.quote_number}</td>
                                     <td className="p-4 font-bold text-slate-800">{q.client_name}</td>
+                                    <td className="p-4 text-sm font-semibold text-slate-600">{q.interest_product || 'Não informado'}</td>
                                     <td className="p-4 text-sm font-medium text-slate-600">{q.salesperson_name}</td>
-                                    <td className="p-4 font-bold text-slate-800">{new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(q.value)}</td>
+                                    <td className="p-4 font-bold text-slate-800">{formatCurrency(q.value)}</td>
                                     <td className="p-4">
                                         <div className="flex items-center gap-2">
                                             <div className="w-16 h-2 bg-slate-200 rounded-full overflow-hidden">

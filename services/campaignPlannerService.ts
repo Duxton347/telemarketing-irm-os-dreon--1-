@@ -1,6 +1,6 @@
 import { supabase } from '../lib/supabase';
 import { Campanha, Client, CallRecord, Task, ClientTag } from '../types';
-import { mergePortfolioEntries } from '../utils/clientPortfolio';
+import { mergePortfolioEntries, normalizeComparableText } from '../utils/clientPortfolio';
 import {
   getActivePortfolioCatalogCategories,
   getActivePortfolioCatalogProducts,
@@ -48,6 +48,102 @@ export interface ClientWithLastCall extends Client {
   ultima_satisfacao_nivel?: 'ALTA' | 'MEDIA' | 'BAIXA' | 'SEM_LEITURA';
   ultima_satisfacao_score?: number | null;
 }
+
+export interface PortfolioFilterOptions {
+  profiles: string[];
+  categories: string[];
+  equipments: string[];
+  equipmentByCategory: Record<string, string[]>;
+}
+
+const matchesPortfolioFilter = (values: string[] | undefined, filters: string[] | undefined) => {
+  if (!filters?.length) return true;
+
+  const normalizedValues = (values || [])
+    .map(value => normalizeComparableText(value))
+    .filter(Boolean);
+
+  return filters.some(filter => {
+    const normalizedFilter = normalizeComparableText(filter);
+    if (!normalizedFilter) return false;
+
+    return normalizedValues.some(value =>
+      value === normalizedFilter ||
+      value.includes(normalizedFilter) ||
+      normalizedFilter.includes(value)
+    );
+  });
+};
+
+const addUniqueComparableValue = (bucket: Map<string, string>, value?: string) => {
+  const normalizedValue = normalizeComparableText(value);
+  if (!normalizedValue) return;
+  if (!bucket.has(normalizedValue)) {
+    bucket.set(normalizedValue, value!.trim());
+  }
+};
+
+const sortPortfolioValues = (bucket: Map<string, string>) =>
+  Array.from(bucket.values()).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+const buildPortfolioFilterOptions = (
+  catalog: Awaited<ReturnType<typeof PortfolioCatalogService.getCatalogConfig>>,
+  clients: any[]
+): PortfolioFilterOptions => {
+  const profiles = new Map<string, string>();
+  const categories = new Map<string, string>();
+  const equipments = new Map<string, string>();
+  const equipmentByCategory = new Map<string, Map<string, string>>();
+
+  const linkCategoryEquipment = (category?: string, equipment?: string) => {
+    const normalizedCategory = normalizeComparableText(category);
+    const normalizedEquipment = normalizeComparableText(equipment);
+    if (!normalizedCategory || !normalizedEquipment) return;
+
+    const currentBucket = equipmentByCategory.get(normalizedCategory) || new Map<string, string>();
+    if (!currentBucket.has(normalizedEquipment)) {
+      currentBucket.set(normalizedEquipment, equipment!.trim());
+    }
+    equipmentByCategory.set(normalizedCategory, currentBucket);
+  };
+
+  getActivePortfolioCatalogCategories(catalog).forEach(category => {
+    addUniqueComparableValue(categories, category.name);
+  });
+
+  getActivePortfolioCatalogProducts(catalog).forEach(product => {
+    addUniqueComparableValue(equipments, product.name);
+    addUniqueComparableValue(categories, product.category);
+    linkCategoryEquipment(product.category, product.name);
+  });
+
+  clients.forEach(client => {
+    const snapshot = normalizeClientPortfolioSnapshot(client as any, catalog);
+
+    snapshot.customer_profiles.forEach(profile => addUniqueComparableValue(profiles, profile));
+    snapshot.product_categories.forEach(category => addUniqueComparableValue(categories, category));
+    snapshot.equipment_models.forEach(equipment => addUniqueComparableValue(equipments, equipment));
+
+    snapshot.portfolio_entries.forEach(entry => {
+      addUniqueComparableValue(profiles, entry.profile);
+      addUniqueComparableValue(categories, entry.product_category);
+      addUniqueComparableValue(equipments, entry.equipment);
+      linkCategoryEquipment(entry.product_category, entry.equipment);
+    });
+  });
+
+  return {
+    profiles: sortPortfolioValues(profiles),
+    categories: sortPortfolioValues(categories),
+    equipments: sortPortfolioValues(equipments),
+    equipmentByCategory: Object.fromEntries(
+      Array.from(equipmentByCategory.entries()).map(([categoryKey, bucket]) => [
+        categoryKey,
+        Array.from(bucket.values()).sort((a, b) => a.localeCompare(b, 'pt-BR'))
+      ])
+    )
+  };
+};
 
 export const CampaignPlannerService = {
   getCampaigns: async (): Promise<Campanha[]> => {
@@ -123,34 +219,46 @@ export const CampaignPlannerService = {
 
   getDistinctItems: async (): Promise<string[]> => {
     try {
-      const catalog = await PortfolioCatalogService.getCatalogConfig();
-      return getActivePortfolioCatalogProducts(catalog)
-        .map(product => product.name)
-        .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+      const options = await CampaignPlannerService.getPortfolioFilterOptions();
+      return options.equipments;
     } catch (e) { console.error(e); return []; }
   },
 
   getDistinctCustomerProfiles: async (): Promise<string[]> => {
     try {
-      const { data, error } = await supabase.from('clients').select('*');
-      if (error) throw error;
-
-      const values = (data || []).flatMap((row: any) => [
-        ...(row.customer_profiles || []),
-        ...((row.portfolio_entries || []).map((entry: any) => entry?.profile).filter(Boolean))
-      ]);
-
-      return Array.from(new Set(values.filter(Boolean))).sort();
+      const options = await CampaignPlannerService.getPortfolioFilterOptions();
+      return options.profiles;
     } catch (e) { console.error(e); return []; }
   },
 
   getDistinctProductCategories: async (): Promise<string[]> => {
     try {
-      const catalog = await PortfolioCatalogService.getCatalogConfig();
-      return getActivePortfolioCatalogCategories(catalog)
-        .map(category => category.name)
-        .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+      const options = await CampaignPlannerService.getPortfolioFilterOptions();
+      return options.categories;
     } catch (e) { console.error(e); return []; }
+  },
+
+  getPortfolioFilterOptions: async (): Promise<PortfolioFilterOptions> => {
+    try {
+      const [catalog, { data, error }] = await Promise.all([
+        PortfolioCatalogService.getCatalogConfig(),
+        supabase
+          .from('clients')
+          .select('customer_profiles, product_categories, equipment_models, portfolio_entries, invalid')
+          .neq('invalid', true)
+      ]);
+
+      if (error) throw error;
+      return buildPortfolioFilterOptions(catalog, data || []);
+    } catch (e) {
+      console.error(e);
+      return {
+        profiles: [],
+        categories: [],
+        equipments: [],
+        equipmentByCategory: {}
+      };
+    }
   },
 
   getDistinctInterestProducts: async (): Promise<string[]> => {
@@ -222,7 +330,6 @@ export const CampaignPlannerService = {
       query = query.neq('invalid', true);
 
       // Exclui prospects que já são clientes (evita duplicidade no disparador)
-      query = query.not('tags', 'cs', '{"JA_CLIENTE"}');
       if (filters.bairros?.length) {
         query = query.in('neighborhood', filters.bairros);
       }
@@ -326,6 +433,10 @@ export const CampaignPlannerService = {
           };
         })
         .filter(client => {
+          const isLeadAlreadyClient =
+            client.status === 'LEAD' &&
+            Array.isArray(client.tags) &&
+            client.tags.includes('JA_CLIENTE');
           const temFiltroLigacao = filters.callTypes?.length ||
             filters.resultados?.length ||
             filters.operadores?.length ||
@@ -333,16 +444,14 @@ export const CampaignPlannerService = {
             filters.periodos?.length ||
             filters.diasAvulsos?.length;
 
-          const matchesProfiles = !filters.perfisCliente?.length ||
-            filters.perfisCliente.some(profile => client.customer_profiles?.includes(profile));
-          const matchesCategories = !filters.categoriasProduto?.length ||
-            filters.categoriasProduto.some(category => client.product_categories?.includes(category));
-          const matchesEquipment = !filters.equipamentos?.length ||
-            filters.equipamentos.some(equipment => client.equipment_models?.includes(equipment));
+          const matchesProfiles = matchesPortfolioFilter(client.customer_profiles, filters.perfisCliente);
+          const matchesCategories = matchesPortfolioFilter(client.product_categories, filters.categoriasProduto);
+          const matchesEquipment = matchesPortfolioFilter(client.equipment_models, filters.equipamentos);
           const matchesSatisfaction = !filters.niveisSatisfacao?.length ||
             filters.niveisSatisfacao.includes(client.ultima_satisfacao_nivel || 'SEM_LEITURA');
 
-          return (!temFiltroLigacao || client.call_logs_filtradas.length > 0) &&
+          return !isLeadAlreadyClient &&
+            (!temFiltroLigacao || client.call_logs_filtradas.length > 0) &&
             matchesProfiles &&
             matchesCategories &&
             matchesEquipment &&

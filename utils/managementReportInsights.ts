@@ -61,6 +61,25 @@ export interface ManagementReportInsights {
   satisfactionAreas: ReportAreaInsight[];
 }
 
+export const EMPTY_MANAGEMENT_REPORT_INSIGHTS: ManagementReportInsights = {
+  totalQuestionnaireInteractions: 0,
+  interestCount: 0,
+  objectionCount: 0,
+  satisfactionPositiveCount: 0,
+  satisfactionNegativeCount: 0,
+  satisfactionMeasuredCount: 0,
+  interestRate: 0,
+  objectionRate: 0,
+  satisfactionRate: 0,
+  averageSatisfactionScore: 0,
+  blockerBreakdown: [],
+  questionBreakdowns: [],
+  productInsights: [],
+  operatorInsights: [],
+  processInsights: [],
+  satisfactionAreas: []
+};
+
 type InteractionLike = {
   id: string;
   responses?: Record<string, any>;

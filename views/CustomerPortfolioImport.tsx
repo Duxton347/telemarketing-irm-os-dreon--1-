@@ -101,6 +101,7 @@ export const CustomerPortfolioImport: React.FC = () => {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
   const [previewRows, setPreviewRows] = useState<ParsedPortfolioRow[]>([]);
   const [previewGroups, setPreviewGroups] = useState<ImportGroup[]>([]);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
@@ -296,7 +297,9 @@ export const CustomerPortfolioImport: React.FC = () => {
     for (const group of previewGroups) {
       try {
         const existingEntries = mergePortfolioEntries(group.client.portfolio_entries || []);
-        const mergedEntries = mergePortfolioEntries(existingEntries, group.entries);
+        const mergedEntries = importMode === 'replace'
+          ? mergePortfolioEntries(group.entries)
+          : mergePortfolioEntries(existingEntries, group.entries);
 
         if (JSON.stringify(mergedEntries) === JSON.stringify(existingEntries)) {
           report.unchanged.push(`${group.client.name} (${group.client.phone || 'sem telefone'})`);
@@ -327,7 +330,7 @@ export const CustomerPortfolioImport: React.FC = () => {
 
     setImportReport(report);
     setResultMessage(
-      `Importacao concluida: ${report.updated.length} cliente(s) atualizados, ${report.unchanged.length} sem novidade e ${report.errors.length} com erro.`
+      `Importacao concluida em modo ${importMode === 'replace' ? 'substituicao' : 'mesclagem'}: ${report.updated.length} cliente(s) atualizados, ${report.unchanged.length} sem novidade e ${report.errors.length} com erro.`
     );
     setImporting(false);
   };
@@ -347,6 +350,39 @@ export const CustomerPortfolioImport: React.FC = () => {
       </div>
 
       <div className="bg-white p-6 rounded-[24px] shadow-sm border border-slate-200 space-y-6">
+        <div className="rounded-[20px] border border-slate-200 bg-slate-50 p-4 space-y-3">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Modo da Importacao</p>
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={() => setImportMode('merge')}
+              className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${
+                importMode === 'merge'
+                  ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-200'
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              Mesclar com o cadastro atual
+            </button>
+            <button
+              type="button"
+              onClick={() => setImportMode('replace')}
+              className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${
+                importMode === 'replace'
+                  ? 'bg-amber-600 text-white border-amber-600 shadow-lg shadow-amber-200'
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              Substituir carteira tecnica
+            </button>
+          </div>
+          <p className="text-xs font-medium text-slate-500">
+            {importMode === 'merge'
+              ? 'Mesclar adiciona ou atualiza itens sem apagar o que ja existe.'
+              : 'Substituir troca perfil, categorias e equipamentos do cliente pelos dados do arquivo para corrigir cadastros em massa.'}
+          </p>
+        </div>
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="space-y-3">
             <h2 className="text-lg font-black text-slate-800">Como montar a planilha</h2>
@@ -451,7 +487,9 @@ export const CustomerPortfolioImport: React.FC = () => {
                         ))}
                       </div>
                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                        {group.sourceRows.length} linha(s) da planilha serao adicionadas a este cliente
+                        {importMode === 'replace'
+                          ? `${group.sourceRows.length} linha(s) da planilha vao substituir a carteira tecnica deste cliente`
+                          : `${group.sourceRows.length} linha(s) da planilha serao mescladas a este cliente`}
                       </p>
                     </div>
                   );
@@ -596,7 +634,7 @@ export const CustomerPortfolioImport: React.FC = () => {
                   </>
                 ) : (
                   <>
-                    Vincular aos Cadastros <ArrowRight size={18} />
+                    {importMode === 'replace' ? 'Corrigir Cadastros em Massa' : 'Vincular aos Cadastros'} <ArrowRight size={18} />
                   </>
                 )}
               </button>
