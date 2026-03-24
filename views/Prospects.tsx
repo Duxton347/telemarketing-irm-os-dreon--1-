@@ -3,7 +3,7 @@ import {
     Search, Filter, Plus, Phone, MessageCircle, Calendar,
     UserPlus, CheckCircle2, MapPin, Globe, Mail, DollarSign,
     Target, Loader2, Users, ChevronRight, X, Send, BarChart3, Clock, Play, FileText,
-    History, ClipboardList, Map
+    History, ClipboardList, Map as MapIcon
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { Client, CallType, User } from '../types';
@@ -43,6 +43,71 @@ const matchesProspectLocation = (value?: string, filter?: string, mode: 'city' |
 
     return Boolean(normalizedValue) && normalizedValue === normalizedFilter;
 };
+
+const buildProspectAddressLabel = (client?: Partial<Client> | null) =>
+    client?.address || [client?.street, client?.neighborhood, client?.city, client?.state].filter(Boolean).join(', ');
+
+const formatHistoryTimestamp = (value?: string) => {
+    if (!value) return 'Data indisponivel';
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+        return 'Data invalida';
+    }
+
+    return parsed.toLocaleString('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+};
+
+const formatHistoryDuration = (value?: number | null) => {
+    const duration = Number(value);
+    if (!Number.isFinite(duration) || duration < 0) {
+        return 'Duracao indisponivel';
+    }
+
+    return `${Math.floor(duration / 60)}m ${duration % 60}s`;
+};
+
+const formatHistoryOperatorLabel = (value?: string | null) =>
+    value ? value.substring(0, 8) : 'Nao informado';
+
+const getSafeText = (value: unknown, fallback = '') =>
+    value === null || value === undefined ? fallback : String(value).trim() || fallback;
+
+const normalizeProspectForView = (client: Client): Client => ({
+    ...client,
+    id: getSafeText(client.id),
+    name: getSafeText(client.name, 'Sem Nome'),
+    phone: getSafeText(client.phone),
+    address: getSafeText(client.address),
+    email: getSafeText(client.email, undefined as any),
+    website: getSafeText(client.website, undefined as any),
+    responsible_phone: getSafeText(client.responsible_phone, undefined as any),
+    buyer_name: getSafeText(client.buyer_name, undefined as any),
+    interest_product: getSafeText(client.interest_product, undefined as any),
+    external_id: getSafeText(client.external_id, undefined as any),
+    phone_secondary: getSafeText(client.phone_secondary, undefined as any),
+    street: getSafeText(client.street, undefined as any),
+    neighborhood: getSafeText(client.neighborhood, undefined as any),
+    city: getSafeText(client.city, undefined as any),
+    state: getSafeText(client.state, undefined as any),
+    zip_code: getSafeText(client.zip_code, undefined as any),
+    origin: client.origin === 'GOOGLE_SEARCH' || client.origin === 'CSV_IMPORT' ? client.origin : 'MANUAL',
+    status: client.status === 'LEAD' || client.status === 'INATIVO' ? client.status : 'CLIENT',
+    funnel_status: FUNNEL_STAGES.some(stage => stage.id === client.funnel_status) ? client.funnel_status : 'NEW'
+});
+
+const normalizeOperatorForView = (operator: User): User => ({
+    ...operator,
+    id: getSafeText(operator.id),
+    name: getSafeText(operator.name, 'Sem Nome'),
+    username: getSafeText(operator.username)
+});
 
 // INTEREST_PRODUCTS is now dynamically loaded from DB
 
@@ -99,11 +164,18 @@ const Prospects: React.FC = () => {
                 dataService.getUsers(),
                 CampaignPlannerService.getDistinctInterestProducts()
             ]);
-            setProspects(data);
-            setOperators(ops.filter(o => o.role !== 'ADMIN'));
-            setInterestProducts(products);
-            if (ops.filter(o => o.role !== 'ADMIN').length > 0) {
-                setBulkOperator(ops.filter(o => o.role !== 'ADMIN')[0].id);
+            const safeProspects = (data || []).filter(Boolean).map(normalizeProspectForView).filter(client => Boolean(client.id));
+            const safeOperators = (ops || [])
+                .filter(Boolean)
+                .map(normalizeOperatorForView)
+                .filter(operator => Boolean(operator.id) && operator.role !== 'ADMIN');
+            const safeProducts = (products || []).map(product => getSafeText(product)).filter(Boolean);
+
+            setProspects(safeProspects);
+            setOperators(safeOperators);
+            setInterestProducts(safeProducts);
+            if (safeOperators.length > 0) {
+                setBulkOperator(safeOperators[0].id);
             }
         } catch (error) {
             console.error(error);
@@ -184,7 +256,7 @@ const Prospects: React.FC = () => {
             await dataService.createVisit({
                 clientId: selectedClient.id,
                 clientName: selectedClient.name,
-                address: selectedClient.address,
+                address: buildProspectAddressLabel(selectedClient),
                 phone: selectedClient.phone,
                 scheduledDate: newVisit.date,
                 salespersonId: salesperson?.id || '',
@@ -210,7 +282,7 @@ const Prospects: React.FC = () => {
         if (!matchesProspectLocation(p.city, cityFilter, 'city')) return false;
         if (searchTerm) {
             const lower = searchTerm.toLowerCase();
-            return p.name.toLowerCase().includes(lower) ||
+            return (p.name || '').toLowerCase().includes(lower) ||
                 p.phone.includes(lower) ||
                 (p.phone_secondary || '').includes(lower);
         }
@@ -225,7 +297,7 @@ const Prospects: React.FC = () => {
                 bucket.set(normalized, neighborhood);
             }
             return bucket;
-        }, new Map<string, string>()).values()
+        }, new globalThis.Map<string, string>()).values()
     ).sort((a, b) => a.localeCompare(b, 'pt-BR')) as string[];
 
     const cities = Array.from(
@@ -236,7 +308,7 @@ const Prospects: React.FC = () => {
                 bucket.set(normalized, city);
             }
             return bucket;
-        }, new Map<string, string>()).values()
+        }, new globalThis.Map<string, string>()).values()
     ).sort((a, b) => a.localeCompare(b, 'pt-BR')) as string[];
 
     const totalLeads = prospects.length;
@@ -500,7 +572,7 @@ const Prospects: React.FC = () => {
 
                                             <div className="pt-4 mt-2 border-t border-emerald-200/50 flex flex-col sm:flex-row items-center justify-between gap-4">
                                                 <div className="flex items-center gap-3 text-emerald-800">
-                                                    <Map size={24} className="opacity-50" />
+                                                    <MapIcon size={24} className="opacity-50" />
                                                     <div className="flex flex-col">
                                                         <span className="text-xs font-black uppercase tracking-widest">Ação Externa</span>
                                                         <span className="text-[10px] uppercase font-bold opacity-60">Enviar Vendedor na Rua</span>
@@ -528,12 +600,12 @@ const Prospects: React.FC = () => {
                                                 <div key={call.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
                                                     <div className="flex justify-between items-start">
                                                         <span className="text-[8px] font-black uppercase px-2 py-0.5 bg-slate-200 text-slate-600 rounded">{call.type}</span>
-                                                        <span className="text-[8px] font-black text-slate-400 uppercase">{new Date(call.startTime).toLocaleDateString("pt-BR", { hour: '2-digit', minute: '2-digit' })}</span>
+                                                        <span className="text-[8px] font-black text-slate-400 uppercase">{formatHistoryTimestamp(call.startTime)}</span>
                                                     </div>
                                                     <p className="text-xs font-bold text-slate-700 italic">"{call.responses?.written_report || call.responses?.questionnaire_text_summary || call.responses?.justificativa || 'Sem notas extras registradas.'}"</p>
                                                     <div className="flex justify-between items-center pt-2 border-t border-slate-200/50">
-                                                        <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1"><Clock size={10} /> {Math.floor(call.duration / 60)}m {call.duration % 60}s</span>
-                                                        <span className="text-[8px] font-black text-blue-500 uppercase tracking-widest">ID Operador: {call.operatorId.substring(0, 8)}</span>
+                                                        <span className="text-[8px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1"><Clock size={10} /> {formatHistoryDuration(call.duration)}</span>
+                                                        <span className="text-[8px] font-black text-blue-500 uppercase tracking-widest">ID Operador: {formatHistoryOperatorLabel(call.operatorId)}</span>
                                                     </div>
                                                 </div>
                                             ))}

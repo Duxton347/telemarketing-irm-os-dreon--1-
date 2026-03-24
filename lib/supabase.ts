@@ -8,8 +8,7 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.error('Please check your .env file or deployment settings.');
   console.error('Required: VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY');
 } else {
-  console.log('✅ Supabase URL loaded:', supabaseUrl);
-  console.log('✅ Supabase Key loaded (first 10 chars):', supabaseAnonKey.substring(0, 10) + '...');
+  console.log('Supabase environment loaded successfully.');
 }
 
 export const supabase = createClient(
@@ -36,10 +35,10 @@ export const slugify = (text: string) => {
     .toLowerCase()
     .trim()
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '') // Remove acentos
-    .replace(/[^a-z0-9]/g, '-')     // Substitui qualquer não alfanumérico por hífem
-    .replace(/-+/g, '-')            // Remove hifens duplos
-    .replace(/^-+|-+$/g, '');       // Remove hifens no início ou fim
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
 };
 
 export const normalizePhone = (phone: string) => {

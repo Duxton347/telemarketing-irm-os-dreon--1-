@@ -37,6 +37,50 @@ const getTrimmedText = (value?: unknown) => {
   return text.length > 0 ? text : undefined;
 };
 
+const getSafeText = (value?: unknown, fallback = '') => {
+  const text = getTrimmedText(value);
+  return text ?? fallback;
+};
+
+const getSafeClientOrigin = (value?: unknown): Client['origin'] => {
+  switch (getSafeText(value).toUpperCase()) {
+    case 'GOOGLE_SEARCH':
+      return 'GOOGLE_SEARCH';
+    case 'CSV_IMPORT':
+      return 'CSV_IMPORT';
+    default:
+      return 'MANUAL';
+  }
+};
+
+const getSafeClientStatus = (value?: unknown): Client['status'] => {
+  switch (getSafeText(value).toUpperCase()) {
+    case 'LEAD':
+      return 'LEAD';
+    case 'INATIVO':
+      return 'INATIVO';
+    default:
+      return 'CLIENT';
+  }
+};
+
+const getSafeFunnelStatus = (value?: unknown): Client['funnel_status'] => {
+  switch (getSafeText(value).toUpperCase()) {
+    case 'CONTACT_ATTEMPT':
+      return 'CONTACT_ATTEMPT';
+    case 'CONTACT_MADE':
+      return 'CONTACT_MADE';
+    case 'QUALIFIED':
+      return 'QUALIFIED';
+    case 'PROPOSAL_SENT':
+      return 'PROPOSAL_SENT';
+    case 'PHYSICAL_VISIT':
+      return 'PHYSICAL_VISIT';
+    default:
+      return 'NEW';
+  }
+};
+
 const shouldRepairStructuredNeighborhood = (value?: string) =>
   !value || value.includes(',') || value.includes(' - ') || isLikelyInvalidStructuredNeighborhood(value);
 
@@ -910,38 +954,38 @@ const mapClientRecord = (record: any): Client => {
   const structuredAddress = resolveStructuredAddressFields(record);
 
   return {
-    id: record.id,
-    name: record.name || 'Sem Nome',
-    phone: record.phone || '',
-    address: structuredAddress.address || record.address || '',
+    id: getSafeText(record.id),
+    name: getSafeText(record.name, 'Sem Nome'),
+    phone: getSafeText(record.phone),
+    address: getSafeText(structuredAddress.address || record.address),
     items: equipmentModels,
     offers: normalizeInterestProductList(record.offers || []),
     invalid: record.invalid,
     acceptance: (record.acceptance as any) || 'medium',
     satisfaction: (record.satisfaction as any) || 'medium',
-    origin: record.origin,
-    email: record.email,
-    website: record.website,
-    status: record.status || 'CLIENT',
-    responsible_phone: record.responsible_phone,
-    buyer_name: record.buyer_name,
+    origin: getSafeClientOrigin(record.origin),
+    email: getTrimmedText(record.email),
+    website: getTrimmedText(record.website),
+    status: getSafeClientStatus(record.status),
+    responsible_phone: getTrimmedText(record.responsible_phone),
+    buyer_name: getTrimmedText(record.buyer_name),
     interest_product: normalizeInterestProduct(record.interest_product),
     preferred_channel: record.preferred_channel,
-    funnel_status: record.funnel_status,
-    external_id: record.external_id,
-    phone_secondary: record.phone_secondary,
-    street: structuredAddress.street,
-    neighborhood: structuredAddress.neighborhood,
-    city: structuredAddress.city,
-    state: structuredAddress.state,
-    zip_code: structuredAddress.zip_code,
-    last_purchase_date: record.last_purchase_date,
+    funnel_status: getSafeFunnelStatus(record.funnel_status),
+    external_id: getTrimmedText(record.external_id),
+    phone_secondary: getTrimmedText(record.phone_secondary),
+    street: getTrimmedText(structuredAddress.street),
+    neighborhood: getTrimmedText(structuredAddress.neighborhood),
+    city: getTrimmedText(structuredAddress.city),
+    state: getTrimmedText(structuredAddress.state),
+    zip_code: getTrimmedText(structuredAddress.zip_code),
+    last_purchase_date: getTrimmedText(record.last_purchase_date),
     customer_profiles: mergeUniquePortfolioValues(record?.customer_profiles, portfolioMetadata.customer_profiles),
     product_categories: mergeUniquePortfolioValues(record?.product_categories, portfolioMetadata.product_categories),
     equipment_models: equipmentModels,
     portfolio_entries: portfolioEntries,
     tags: record.tags || [],
-    campanha_atual_id: record.campanha_atual_id
+    campanha_atual_id: getTrimmedText(record.campanha_atual_id)
   };
 };
 
@@ -1317,12 +1361,12 @@ export const dataService = {
       const { data, error } = await supabase.from('profiles').select('*').order('username_display');
       if (error) throw error;
       return (data || []).map(p => ({
-        id: p.id,
-        name: p.username_display || 'Sem Nome',
-        username: p.username_slug || '',
+        id: getSafeText(p.id),
+        name: getSafeText(p.username_display, 'Sem Nome'),
+        username: getSafeText(p.username_slug),
         role: (p.role as UserRole) || UserRole.OPERATOR,
         active: p.active ?? true
-      }));
+      })).filter(user => Boolean(user.id));
     } catch (e) { return []; }
   },
 
