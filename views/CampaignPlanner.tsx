@@ -77,7 +77,7 @@ export const CampaignPlanner: React.FC = () => {
     resultados: [],
     operadores: [],
     niveisSatisfacao: [],
-    statusCliente: ['CLIENT', 'INATIVO'],
+    statusCliente: ['CLIENT', 'INATIVO', 'LEAD'],
     tags: [],
     interesses: [],
     perfisCliente: [],

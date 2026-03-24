@@ -70,6 +70,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   const [isCopied, setIsCopied] = React.useState(false);
   const [isCopiedSecondary, setIsCopiedSecondary] = React.useState(false);
   const [hasRecentCall, setHasRecentCall] = React.useState(false);
+  const [recentCallWindowDays, setRecentCallWindowDays] = React.useState(3);
   const [expandedPortfolioCategory, setExpandedPortfolioCategory] = React.useState<string | null>(null);
 
   const [clientHistory, setClientHistory] = React.useState<ClientHistoryData>(EMPTY_CLIENT_HISTORY);
@@ -169,11 +170,13 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   const fetchQueue = React.useCallback(async () => {
     setIsLoading(true);
     try {
-      const [allTasks, allQuestionsRaw, allClients] = await Promise.all([
+      const [allTasks, allQuestionsRaw, allClients, blockDays] = await Promise.all([
         dataService.getTasks(effectiveOperatorId),
         dataService.getQuestions(), // We'll filter later or fetch specific
-        dataService.getClients(true) // Pass TRUE to include LEADS (Prospects)
+        dataService.getClients(true), // Pass TRUE to include LEADS (Prospects)
+        dataService.getCommunicationBlockDays()
       ]);
+      setRecentCallWindowDays(blockDays);
       resetState();
 
       const now = new Date();
@@ -773,7 +776,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
             {hasRecentCall && (
               <div className="absolute top-0 left-0 w-full bg-red-600 text-white py-2 px-4 text-center animate-pulse flex items-center justify-center gap-2">
                 <AlertTriangle size={14} />
-                <span className="text-[9px] font-black uppercase tracking-widest">Atenção: Ligado nos últimos 3 dias</span>
+                <span className="text-[9px] font-black uppercase tracking-widest">Atenção: comunicação registrada nos últimos {recentCallWindowDays} dia(s)</span>
               </div>
             )}
 

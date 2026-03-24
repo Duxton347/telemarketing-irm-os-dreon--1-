@@ -54,14 +54,34 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
     const filterId = user?.role === UserRole.OPERATOR ? user.id : selectedFilter;
     const taskFilter = filterId === 'all' ? undefined : filterId;
 
-    const [calls, protocols, tasks, allUsers, allQuestions, waTasks] = await Promise.all([
+    const [callsResult, protocolsResult, tasksResult, usersResult, questionsResult, waTasksResult] = await Promise.allSettled([
       dataService.getCalls(),
       dataService.getProtocols(),
       dataService.getTasks(taskFilter),
       dataService.getUsers(),
       dataService.getQuestions(),
-      dataService.getWhatsAppTasks(taskFilter) // Fetch all pending WA tasks
+      dataService.getWhatsAppTasks(taskFilter)
     ]);
+
+    const logDashboardLoadError = (label: string, result: PromiseSettledResult<any>) => {
+      if (result.status === 'rejected') {
+        console.error(`Dashboard: falha ao carregar ${label}`, result.reason);
+      }
+    };
+
+    logDashboardLoadError('ligações', callsResult);
+    logDashboardLoadError('protocolos', protocolsResult);
+    logDashboardLoadError('tarefas', tasksResult);
+    logDashboardLoadError('usuários', usersResult);
+    logDashboardLoadError('questionário', questionsResult);
+    logDashboardLoadError('tarefas de WhatsApp', waTasksResult);
+
+    const calls = callsResult.status === 'fulfilled' ? callsResult.value : [];
+    const protocols = protocolsResult.status === 'fulfilled' ? protocolsResult.value : [];
+    const tasks = tasksResult.status === 'fulfilled' ? tasksResult.value : [];
+    const allUsers = usersResult.status === 'fulfilled' ? usersResult.value : [];
+    const allQuestions = questionsResult.status === 'fulfilled' ? questionsResult.value : [];
+    const waTasks = waTasksResult.status === 'fulfilled' ? waTasksResult.value : [];
 
     setOperators(allUsers.filter(u => u && u.active !== false));
     setQuestions(allQuestions);
@@ -137,7 +157,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
   }, [user, selectedFilter]);
 
   React.useEffect(() => {
-    fetchBaseData();
+    void fetchBaseData();
     const interval = setInterval(fetchBaseData, 30000);
     return () => clearInterval(interval);
   }, [fetchBaseData]);

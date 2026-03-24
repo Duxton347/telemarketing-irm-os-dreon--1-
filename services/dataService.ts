@@ -31,6 +31,10 @@ import { decodeLatin1 } from '../utils/textEncoding';
 const normalize = (str: string) =>
   str ? str.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, "") : "";
 
+const COMMUNICATION_BLOCK_DAYS_SETTING_KEY = 'COMMUNICATION_BLOCK_DAYS';
+const DEFAULT_COMMUNICATION_BLOCK_DAYS = 3;
+const ACTIVE_SCHEDULE_BLOCK_STATUSES: ScheduleStatus[] = ['PENDENTE_APROVACAO', 'APROVADO', 'REPROGRAMADO'];
+
 const getTrimmedText = (value?: unknown) => {
   if (value === null || value === undefined) return undefined;
   const text = String(value).trim();
@@ -40,6 +44,267 @@ const getTrimmedText = (value?: unknown) => {
 const getSafeText = (value?: unknown, fallback = '') => {
   const text = getTrimmedText(value);
   return text ?? fallback;
+};
+
+const normalizeCommunicationBlockDays = (value?: unknown): number => {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_COMMUNICATION_BLOCK_DAYS;
+  }
+  return parsed;
+};
+
+const getLocalDayBounds = (dateLike: string) => {
+  const parsedDate = new Date(dateLike);
+  const start = new Date(
+    parsedDate.getFullYear(),
+    parsedDate.getMonth(),
+    parsedDate.getDate(),
+    0,
+    0,
+    0,
+    0
+  );
+  const end = new Date(
+    parsedDate.getFullYear(),
+    parsedDate.getMonth(),
+    parsedDate.getDate(),
+    23,
+    59,
+    59,
+    999
+  );
+
+  return {
+    dayKey: `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}-${String(start.getDate()).padStart(2, '0')}`,
+    startIso: start.toISOString(),
+    endIso: end.toISOString()
+  };
+};
+
+const mapScheduleRequestTypeToDb = (rawType?: string) => {
+  const CALL_TYPE_DB_MAP: Record<string, string> = {
+    'VENDA': 'VENDA',
+    'PÃ“S-VENDA': 'POS_VENDA',
+    'PÃ“S_VENDA': 'POS_VENDA',
+    'POS_VENDA': 'POS_VENDA',
+    'PROSPECÃ‡ÃƒO': 'PROSPECCAO',
+    'PROSPECCAO': 'PROSPECCAO',
+    'CONFIRMAÃ‡ÃƒO PROTOCOLO': 'CONFIRMACAO_PROTOCOLO',
+    'CONFIRMACAO_PROTOCOLO': 'CONFIRMACAO_PROTOCOLO',
+    'REATIVAÃ‡ÃƒO': 'POS_VENDA',
+    'REATIVACAO': 'POS_VENDA',
+    'WHATSAPP': 'WHATSAPP'
+  };
+
+  const type = rawType || 'VENDA';
+  return CALL_TYPE_DB_MAP[type]
+    || CALL_TYPE_DB_MAP[type.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/-/g, '_')]
+    || 'VENDA';
+};
+
+const getConfiguredCommunicationBlockDays = async (): Promise<number> => {
+  const { data, error } = await supabase
+    .from('system_settings')
+    .select('value')
+    .eq('key', COMMUNICATION_BLOCK_DAYS_SETTING_KEY)
+    .maybeSingle();
+
+  if (error) {
+    return DEFAULT_COMMUNICATION_BLOCK_DAYS;
+  }
+
+  return normalizeCommunicationBlockDays(data?.value);
+};
+
+const getRecentCommunicationDetails = async (clientId: string) => {
+  const blockDays = await getConfiguredCommunicationBlockDays();
+
+  if (blockDays <= 0) {
+    return {
+      blocked: false,
+      blockDays,
+      lastCommunicationAt: undefined as string | undefined
+    };
+  }
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - blockDays);
+
+  const { data, error } = await supabase
+    .from('call_logs')
+    .select('id, start_time')
+    .eq('client_id', clientId)
+    .gte('start_time', cutoff.toISOString())
+    .order('start_time', { ascending: false })
+    .limit(1);
+
+  if (error || !data || data.length === 0) {
+    return {
+      blocked: false,
+      blockDays,
+      lastCommunicationAt: undefined as string | undefined
+    };
+  }
+
+  return {
+    blocked: true,
+    blockDays,
+    lastCommunicationAt: data[0]?.start_time
+  };
+};
+
+const cleanupDuplicateSchedulesForEntries = async (
+  entries: Array<{ customerId?: string; scheduledFor?: string }>
+): Promise<number> => {
+  const normalizedEntries = entries.filter(
+    (entry): entry is { customerId: string; scheduledFor: string } =>
+      Boolean(entry.customerId && entry.scheduledFor)
+  );
+
+  if (normalizedEntries.length === 0) {
+    return 0;
+  }
+
+  const uniqueCustomerIds = Array.from(new Set(normalizedEntries.map(entry => entry.customerId)));
+  const dayBoundsList = normalizedEntries.map(entry => getLocalDayBounds(entry.scheduledFor));
+  const startIso = dayBoundsList.reduce((current, bounds) => bounds.startIso < current ? bounds.startIso : current, dayBoundsList[0].startIso);
+  const endIso = dayBoundsList.reduce((current, bounds) => bounds.endIso > current ? bounds.endIso : current, dayBoundsList[0].endIso);
+
+  const { data, error } = await supabase
+    .from('call_schedules')
+    .select('id, customer_id, scheduled_for, status, created_at')
+    .in('customer_id', uniqueCustomerIds)
+    .in('status', ACTIVE_SCHEDULE_BLOCK_STATUSES)
+    .gte('scheduled_for', startIso)
+    .lte('scheduled_for', endIso)
+    .order('created_at', { ascending: true });
+
+  if (error || !data || data.length === 0) {
+    return 0;
+  }
+
+  const targetKeys = new Set(
+    normalizedEntries.map(entry => {
+      const bounds = getLocalDayBounds(entry.scheduledFor);
+      return `${entry.customerId}::${bounds.dayKey}`;
+    })
+  );
+
+  const groupedSchedules = new Map<string, any[]>();
+  for (const schedule of data) {
+    const dayKey = getLocalDayBounds(schedule.scheduled_for).dayKey;
+    const groupKey = `${schedule.customer_id}::${dayKey}`;
+    if (!targetKeys.has(groupKey)) continue;
+    const group = groupedSchedules.get(groupKey) || [];
+    group.push(schedule);
+    groupedSchedules.set(groupKey, group);
+  }
+
+  const duplicateIds: string[] = [];
+  for (const group of groupedSchedules.values()) {
+    if (group.length <= 1) continue;
+    duplicateIds.push(...group.slice(1).map(schedule => schedule.id));
+  }
+
+  if (duplicateIds.length === 0) {
+    return 0;
+  }
+
+  const chunkSize = 50;
+  for (let index = 0; index < duplicateIds.length; index += chunkSize) {
+    const chunk = duplicateIds.slice(index, index + chunkSize);
+    const { error: deleteError } = await supabase
+      .from('call_schedules')
+      .delete()
+      .in('id', chunk);
+
+    if (deleteError) throw deleteError;
+  }
+
+  return duplicateIds.length;
+};
+
+const validateScheduleRequests = async (
+  schedules: Partial<CallSchedule>[],
+  options?: { skipCleanup?: boolean }
+) => {
+  const normalizedSchedules = schedules.filter(
+    (schedule): schedule is Partial<CallSchedule> & { customerId: string; scheduledFor: string } =>
+      Boolean(schedule.customerId && schedule.scheduledFor)
+  );
+
+  if (normalizedSchedules.length === 0) {
+    return;
+  }
+
+  if (!options?.skipCleanup) {
+    await cleanupDuplicateSchedulesForEntries(normalizedSchedules);
+  }
+
+  const seenRequestKeys = new Set<string>();
+  for (const schedule of normalizedSchedules) {
+    const bounds = getLocalDayBounds(schedule.scheduledFor);
+    const requestKey = `${schedule.customerId}::${bounds.dayKey}`;
+    if (seenRequestKeys.has(requestKey)) {
+      throw new Error('Bloqueado: a solicitação contém mais de um agendamento para o mesmo cliente no mesmo dia.');
+    }
+    seenRequestKeys.add(requestKey);
+  }
+
+  const uniqueCustomerIds = Array.from(new Set(normalizedSchedules.map(schedule => schedule.customerId)));
+  const dayBoundsList = normalizedSchedules.map(schedule => getLocalDayBounds(schedule.scheduledFor));
+  const startIso = dayBoundsList.reduce((current, bounds) => bounds.startIso < current ? bounds.startIso : current, dayBoundsList[0].startIso);
+  const endIso = dayBoundsList.reduce((current, bounds) => bounds.endIso > current ? bounds.endIso : current, dayBoundsList[0].endIso);
+
+  const [existingSchedulesResult, clientsResult] = await Promise.all([
+    supabase
+      .from('call_schedules')
+      .select('id, customer_id, scheduled_for, status')
+      .in('customer_id', uniqueCustomerIds)
+      .in('status', ACTIVE_SCHEDULE_BLOCK_STATUSES)
+      .gte('scheduled_for', startIso)
+      .lte('scheduled_for', endIso),
+    supabase
+      .from('clients')
+      .select('id, name')
+      .in('id', uniqueCustomerIds)
+  ]);
+
+  if (existingSchedulesResult.error) throw existingSchedulesResult.error;
+  if (clientsResult.error) throw clientsResult.error;
+
+  const clientNames = new Map<string, string>(
+    (clientsResult.data || []).map(client => [client.id, getSafeText(client.name, 'Cliente sem nome')])
+  );
+
+  const existingScheduleKeys = new Set(
+    (existingSchedulesResult.data || []).map(schedule => `${schedule.customer_id}::${getLocalDayBounds(schedule.scheduled_for).dayKey}`)
+  );
+
+  for (const schedule of normalizedSchedules) {
+    const dayKey = getLocalDayBounds(schedule.scheduledFor).dayKey;
+    const conflictKey = `${schedule.customerId}::${dayKey}`;
+    if (existingScheduleKeys.has(conflictKey)) {
+      const clientName = clientNames.get(schedule.customerId) || 'este cliente';
+      throw new Error(`Bloqueado: ${clientName} já possui um agendamento para esse dia.`);
+    }
+  }
+
+  const communicationChecks = await Promise.all(
+    uniqueCustomerIds.map(async customerId => ({
+      customerId,
+      details: await getRecentCommunicationDetails(customerId)
+    }))
+  );
+
+  for (const check of communicationChecks) {
+    if (!check.details.blocked) continue;
+    const clientName = clientNames.get(check.customerId) || 'este cliente';
+    throw new Error(
+      `Bloqueado por anti-spam: ${clientName} já recebeu atendimento nos últimos ${check.details.blockDays} dia(s).`
+    );
+  }
 };
 
 const getSafeClientOrigin = (value?: unknown): Client['origin'] => {
@@ -1074,6 +1339,7 @@ export const dataService = {
 
   // --- CALL SCHEDULES (Agendamentos) ---
   createScheduleRequest: async (schedule: Partial<CallSchedule>): Promise<void> => {
+    await validateScheduleRequests([schedule]);
     // Build schedule_reason including any skip/whatsapp metadata
     let reason = schedule.scheduleReason || '';
     if (schedule.skipReason) reason += ` | Motivo: ${schedule.skipReason}`;
@@ -1114,6 +1380,7 @@ export const dataService = {
   },
 
   bulkCreateScheduleRequest: async (schedules: Partial<CallSchedule>[]): Promise<void> => {
+    await validateScheduleRequests(schedules);
     const CALL_TYPE_DB_MAP: Record<string, string> = {
       'VENDA': 'VENDA', 'PÓS-VENDA': 'POS_VENDA', 'PÓS_VENDA': 'POS_VENDA', 'POS_VENDA': 'POS_VENDA',
       'PROSPECÇÃO': 'PROSPECCAO', 'PROSPECCAO': 'PROSPECCAO',
@@ -1354,6 +1621,10 @@ export const dataService = {
       updated_at: new Date().toISOString()
     });
     if (error) throw error;
+  },
+
+  getCommunicationBlockDays: async (): Promise<number> => {
+    return await getConfiguredCommunicationBlockDays();
   },
 
   getUsers: async (): Promise<User[]> => {
@@ -1946,18 +2217,49 @@ export const dataService = {
   },
 
   checkRecentCall: async (clientId: string): Promise<boolean> => {
-    const threeDaysAgo = new Date();
-    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
+    const details = await getRecentCommunicationDetails(clientId);
+    return details.blocked;
+  },
 
+  deleteDuplicateSchedules: async (): Promise<number> => {
     const { data, error } = await supabase
-      .from('call_logs')
-      .select('id')
-      .eq('client_id', clientId)
-      .gte('start_time', threeDaysAgo.toISOString())
-      .limit(1);
+      .from('call_schedules')
+      .select('id, customer_id, scheduled_for, status, created_at')
+      .in('status', ACTIVE_SCHEDULE_BLOCK_STATUSES)
+      .order('created_at', { ascending: true });
 
-    if (error) return false;
-    return data && data.length > 0;
+    if (error) throw error;
+    if (!data || data.length === 0) return 0;
+
+    const groupedSchedules = new Map<string, any[]>();
+    for (const schedule of data) {
+      const dayKey = getLocalDayBounds(schedule.scheduled_for).dayKey;
+      const groupKey = `${schedule.customer_id}::${dayKey}`;
+      const group = groupedSchedules.get(groupKey) || [];
+      group.push(schedule);
+      groupedSchedules.set(groupKey, group);
+    }
+
+    const duplicateIds: string[] = [];
+    for (const group of groupedSchedules.values()) {
+      if (group.length <= 1) continue;
+      duplicateIds.push(...group.slice(1).map(schedule => schedule.id));
+    }
+
+    if (duplicateIds.length === 0) return 0;
+
+    const chunkSize = 50;
+    for (let index = 0; index < duplicateIds.length; index += chunkSize) {
+      const chunk = duplicateIds.slice(index, index + chunkSize);
+      const { error: deleteError } = await supabase
+        .from('call_schedules')
+        .delete()
+        .in('id', chunk);
+
+      if (deleteError) throw deleteError;
+    }
+
+    return duplicateIds.length;
   },
 
   saveCall: async (call: CallRecord): Promise<{ id: string, suggestedTags: ClientTag[] }> => {

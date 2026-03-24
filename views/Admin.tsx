@@ -29,6 +29,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
     ['import', 'users', 'questions', 'skips', 'tasks', 'settings', 'tags'].includes(initialTab) ? initialTab : 'questions'
   );
   const [googleMapsKey, setGoogleMapsKey] = React.useState('');
+  const [communicationBlockDays, setCommunicationBlockDays] = React.useState('3');
   const [users, setUsers] = React.useState<User[]>([]);
   const [questions, setQuestions] = React.useState<Question[]>([]);
   const [skippedTasks, setSkippedTasks] = React.useState<Task[]>([]);
@@ -75,13 +76,14 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   const refreshData = async () => {
     setIsProcessing(true);
     try {
-      const [userList, questionList, taskList, allClients, whatsappList, mapsKey, tagsList, campaignsList, coverage] = await Promise.all([
+      const [userList, questionList, taskList, allClients, whatsappList, mapsKey, blockDays, tagsList, campaignsList, coverage] = await Promise.all([
         dataService.getUsers(),
         dataService.getQuestions(),
         dataService.getTasks(),
         dataService.getClients(true), // Include LEADs (Prospects)
         dataService.getWhatsAppTasks(),
         dataService.getSystemSetting('GOOGLE_MAPS_KEY'),
+        dataService.getCommunicationBlockDays(),
         dataService.getClientTags(''), // Empty string for "all" if possible, or we need an Admin method
         CampaignPlannerService.getCampaigns(),
         EmailService.getCoverageStats()
@@ -89,6 +91,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
       setUsers(userList);
       setQuestions(questionList);
       setGoogleMapsKey(mapsKey);
+      setCommunicationBlockDays(String(blockDays));
 
       const skipped = taskList.filter(t => t.status === 'skipped').map(t => ({
         ...t,
@@ -535,12 +538,32 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
+    const normalizedBlockDays = Math.max(0, Number.parseInt(communicationBlockDays || '0', 10) || 0);
     setIsProcessing(true);
     try {
       await dataService.updateSystemSetting('GOOGLE_MAPS_KEY', googleMapsKey, 'Chave da API do Google Maps para o Scraper');
+      await dataService.updateSystemSetting('COMMUNICATION_BLOCK_DAYS', String(normalizedBlockDays), 'Janela em dias para bloquear novas comunicaÃ§Ãµes com o mesmo cliente');
+      setCommunicationBlockDays(String(normalizedBlockDays));
       alert("Configurações salvas com sucesso!");
     } catch (e: any) {
       alert("Erro ao salvar configurações: " + e.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleCleanupDuplicateSchedules = async () => {
+    setIsProcessing(true);
+    try {
+      const removed = await dataService.deleteDuplicateSchedules();
+      alert(
+        removed > 0
+          ? `${removed} agendamento(s) duplicado(s) foram removidos com sucesso!`
+          : 'Nenhum agendamento duplicado foi encontrado.'
+      );
+      await refreshData();
+    } catch (e: any) {
+      alert(`Erro ao limpar agendamentos duplicados: ${e.message}`);
     } finally {
       setIsProcessing(false);
     }
@@ -1161,7 +1184,47 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                     Esta chave é armazenada de forma segura e usada apenas pelo Backend (Edge Function).
                   </p>
                 </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">Janela Anti-Spam de ComunicaÃ§Ã£o</label>
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={communicationBlockDays}
+                      onChange={e => setCommunicationBlockDays(e.target.value)}
+                      className="w-32 p-4 bg-white border border-slate-200 rounded-2xl font-bold text-slate-700 outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
+                    />
+                    <span className="text-xs font-bold text-slate-500">dia(s) para bloquear novas ligaÃ§Ãµes e repiques do mesmo cliente</span>
+                  </div>
+                  <p className="text-[9px] text-slate-400 pl-2">
+                    Valor `0` desativa a trava anti-spam. O padrÃ£o recomendado Ã© `3`.
+                  </p>
+                </div>
               </form>
+            </div>
+
+            <div className="p-8 bg-slate-50 border border-slate-200 rounded-[32px] space-y-6">
+              <div className="flex items-start gap-4">
+                <div className="p-3 bg-amber-100 text-amber-600 rounded-xl">
+                  <Calendar size={24} />
+                </div>
+                <div className="flex-1">
+                  <h4 className="text-lg font-black text-slate-800">Limpeza de Agendamentos Duplicados</h4>
+                  <p className="text-xs text-slate-500 font-medium mt-1">
+                    Remove agendamentos ativos duplicados do mesmo cliente no mesmo dia e preserva apenas o primeiro registro vÃ¡lido.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleCleanupDuplicateSchedules}
+                    disabled={isProcessing}
+                    className="mt-6 px-8 py-3 bg-amber-600 text-white rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-lg hover:bg-amber-500 transition-all disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <Calendar size={16} />}
+                    Remover Agendamentos Duplicados
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div className="p-8 bg-slate-50 border border-slate-200 rounded-[32px] space-y-6 mt-8">
@@ -1457,7 +1520,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
             alert('Repique solicitado com sucesso! Aguardando aprovação.');
           } catch (error) {
             console.error(error);
-            alert('Erro ao processar repique.');
+            alert(`Erro ao processar repique: ${(error as any)?.message || 'Falha desconhecida.'}`);
           } finally {
             setIsProcessingRepique(false);
           }

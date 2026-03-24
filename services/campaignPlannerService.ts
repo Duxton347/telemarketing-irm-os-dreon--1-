@@ -74,6 +74,50 @@ export interface PortfolioFilterOptions {
   equipmentByCategory: Record<string, string[]>;
 }
 
+const PORTFOLIO_PROFILE_FAMILIES: Array<{ canonical: string; label: string; keywords: string[] }> = [
+  {
+    canonical: 'construtor',
+    label: 'Construtor',
+    keywords: ['construtor', 'construtora', 'construcao', 'construcao civil']
+  }
+];
+
+const getComparablePortfolioProfileValues = (value?: string) => {
+  const normalized = normalizeComparableText(value);
+  if (!normalized) return [];
+
+  const matchesFamily = PORTFOLIO_PROFILE_FAMILIES.find(family =>
+    family.keywords.some(keyword => {
+      const normalizedKeyword = normalizeComparableText(keyword);
+      return normalized.includes(normalizedKeyword) || normalizedKeyword.includes(normalized);
+    })
+  );
+
+  if (!matchesFamily) {
+    return [normalized];
+  }
+
+  return Array.from(new Set([
+    normalized,
+    matchesFamily.canonical,
+    ...matchesFamily.keywords.map(keyword => normalizeComparableText(keyword)).filter(Boolean)
+  ]));
+};
+
+const getPortfolioProfileDisplayValue = (value?: string) => {
+  const normalized = normalizeComparableText(value);
+  if (!normalized) return undefined;
+
+  const matchesFamily = PORTFOLIO_PROFILE_FAMILIES.find(family =>
+    family.keywords.some(keyword => {
+      const normalizedKeyword = normalizeComparableText(keyword);
+      return normalized.includes(normalizedKeyword) || normalizedKeyword.includes(normalized);
+    })
+  );
+
+  return matchesFamily?.label || value?.trim();
+};
+
 const normalizeLocationLabel = (value?: string | null) => {
   const text = String(value || '').trim().replace(/\s+/g, ' ');
   return text || undefined;
@@ -126,21 +170,33 @@ const matchesNormalizedLocationFilter = (
   });
 };
 
-const matchesPortfolioFilter = (values: string[] | undefined, filters: string[] | undefined) => {
+const matchesPortfolioFilter = (
+  values: string[] | undefined,
+  filters: string[] | undefined,
+  mode: 'generic' | 'profile' = 'generic'
+) => {
   if (!filters?.length) return true;
 
   const normalizedValues = (values || [])
-    .map(value => normalizeComparableText(value))
+    .flatMap(value => mode === 'profile'
+      ? getComparablePortfolioProfileValues(value)
+      : [normalizeComparableText(value)]
+    )
     .filter(Boolean);
 
   return filters.some(filter => {
-    const normalizedFilter = normalizeComparableText(filter);
-    if (!normalizedFilter) return false;
+    const normalizedFilters = mode === 'profile'
+      ? getComparablePortfolioProfileValues(filter)
+      : [normalizeComparableText(filter)];
 
-    return normalizedValues.some(value =>
-      value === normalizedFilter ||
-      value.includes(normalizedFilter) ||
-      normalizedFilter.includes(value)
+    if (!normalizedFilters.length) return false;
+
+    return normalizedFilters.some(normalizedFilter =>
+      normalizedValues.some(value =>
+        value === normalizedFilter ||
+        value.includes(normalizedFilter) ||
+        normalizedFilter.includes(value)
+      )
     );
   });
 };
@@ -150,6 +206,17 @@ const addUniqueComparableValue = (bucket: Map<string, string>, value?: string) =
   if (!normalizedValue) return;
   if (!bucket.has(normalizedValue)) {
     bucket.set(normalizedValue, value!.trim());
+  }
+};
+
+const addUniqueProfileValue = (bucket: Map<string, string>, value?: string) => {
+  const displayValue = getPortfolioProfileDisplayValue(value);
+  const comparableValues = getComparablePortfolioProfileValues(value);
+  const comparable = comparableValues[0];
+
+  if (!displayValue || !comparable) return;
+  if (!bucket.has(comparable)) {
+    bucket.set(comparable, displayValue);
   }
 };
 
@@ -190,12 +257,12 @@ const buildPortfolioFilterOptions = (
   clients.forEach(client => {
     const snapshot = normalizeClientPortfolioSnapshot(client as any, catalog);
 
-    snapshot.customer_profiles.forEach(profile => addUniqueComparableValue(profiles, profile));
+    snapshot.customer_profiles.forEach(profile => addUniqueProfileValue(profiles, profile));
     snapshot.product_categories.forEach(category => addUniqueComparableValue(categories, category));
     snapshot.equipment_models.forEach(equipment => addUniqueComparableValue(equipments, equipment));
 
     snapshot.portfolio_entries.forEach(entry => {
-      addUniqueComparableValue(profiles, entry.profile);
+      addUniqueProfileValue(profiles, entry.profile);
       addUniqueComparableValue(categories, entry.product_category);
       addUniqueComparableValue(equipments, entry.equipment);
       linkCategoryEquipment(entry.product_category, entry.equipment);
@@ -260,8 +327,9 @@ const analyzeDispatchTargets = async (
     };
   }
 
+  const communicationBlockDays = await dataService.getCommunicationBlockDays();
   const recentThreshold = new Date();
-  recentThreshold.setDate(recentThreshold.getDate() - 3);
+  recentThreshold.setDate(recentThreshold.getDate() - communicationBlockDays);
 
   const [recentCallClients, pendingVoiceClients, scheduledVoiceClients, pendingWhatsAppClients] = await Promise.all([
     collectIdSet(uniqueClientIds, async chunk => {
@@ -706,7 +774,7 @@ export const CampaignPlannerService = {
             filters.ofertaAlvo ||
             filters.escopoLinha;
 
-          const matchesProfiles = matchesPortfolioFilter(client.customer_profiles, filters.perfisCliente);
+          const matchesProfiles = matchesPortfolioFilter(client.customer_profiles, filters.perfisCliente, 'profile');
           const matchesCategories = matchesPortfolioFilter(client.product_categories, filters.categoriasProduto);
           const matchesEquipment = matchesPortfolioFilter(client.equipment_models, filters.equipamentos);
           const matchesCities = matchesNormalizedLocationFilter(client.city, filters.cidades, 'city');
