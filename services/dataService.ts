@@ -1137,6 +1137,7 @@ const REPORT_METADATA_KEYS = new Set([
   'target_product',
   'offer_product',
   'portfolio_scope',
+  'campaign_mode',
   'offer_interest_level',
   'offer_blocker_reason',
   'campaign_name',
@@ -1743,20 +1744,25 @@ const syncDerivedTagsForClient = async (clientId: string): Promise<boolean> => {
 
 const extractCampaignContextFromFilters = (filters?: any) => {
   const safeFilters = filters || {};
+  const normalizeContextValue = (value?: string | null) => {
+    const normalized = String(value || '').trim();
+    return normalized || undefined;
+  };
   const targetProduct =
-    safeFilters.produtoAlvo ||
-    safeFilters.targetProduct ||
+    normalizeContextValue(safeFilters.produtoAlvo) ||
+    normalizeContextValue(safeFilters.targetProduct) ||
     (Array.isArray(safeFilters.equipamentos) && safeFilters.equipamentos.length === 1 ? safeFilters.equipamentos[0] : undefined);
 
   const offerProduct =
-    safeFilters.ofertaAlvo ||
-    safeFilters.offerProduct ||
+    normalizeContextValue(safeFilters.ofertaAlvo) ||
+    normalizeContextValue(safeFilters.offerProduct) ||
     (Array.isArray(safeFilters.interesses) && safeFilters.interesses.length === 1 ? safeFilters.interesses[0] : undefined);
 
   return {
     targetProduct,
     offerProduct,
-    portfolioScope: safeFilters.escopoLinha || safeFilters.portfolioScope || undefined
+    portfolioScope: normalizeContextValue(safeFilters.escopoLinha) || normalizeContextValue(safeFilters.portfolioScope) || undefined,
+    campaignMode: normalizeContextValue(safeFilters.campaignMode) || undefined
   };
 };
 
@@ -2312,7 +2318,7 @@ export const dataService = {
   getQuestions: async (
     callType?: CallType | 'ALL' | string,
     proposito?: string,
-    context?: { clientContext?: any; responses?: Record<string, any> }
+    context?: { clientContext?: any; campaignContext?: any; responses?: Record<string, any> }
   ): Promise<Question[]> => {
     try {
       const allQuestions = await loadActiveQuestions();
@@ -2370,6 +2376,7 @@ export const dataService = {
         const campaignContextTargetProduct = decodeLatin1(campaignContext.targetProduct);
         const campaignContextOfferProduct = decodeLatin1(campaignContext.offerProduct);
         const campaignContextPortfolioScope = decodeLatin1(campaignContext.portfolioScope);
+        const campaignContextMode = decodeLatin1(campaignContext.campaignMode);
         const resolvedProposito = decodeLatin1(t.proposito) || campaignContextProposito;
         // Ensure that tasks dispatched with a specific call type (e.g., from Campaign Planner) retain it,
         // unless it's explicitly a reativation logic condition.
@@ -2396,6 +2403,7 @@ export const dataService = {
           targetProduct: campaignContextTargetProduct,
           offerProduct: campaignContextOfferProduct,
           portfolioScope: campaignContextPortfolioScope,
+          campaignMode: campaignContextMode,
           createdAt: t.created_at,
           updatedAt: t.updated_at
         };
@@ -2850,6 +2858,7 @@ export const dataService = {
       const callTargetProduct = decodeLatin1(context.targetProduct);
       const callOfferProduct = decodeLatin1(context.offerProduct);
       const callPortfolioScope = decodeLatin1(context.portfolioScope);
+      const callCampaignMode = decodeLatin1(context.campaignMode);
 
       return {
         id: c.id,
@@ -2871,6 +2880,7 @@ export const dataService = {
         targetProduct: c.responses?.target_product || callTargetProduct,
         offerProduct: c.responses?.offer_product || callOfferProduct,
         portfolioScope: c.responses?.portfolio_scope || campaignInsights.portfolioScope || callPortfolioScope,
+        campaignMode: c.responses?.campaign_mode || callCampaignMode,
       offerInterestLevel: c.responses?.offer_interest_level || campaignInsights.offerInterestLevel,
       offerBlockerReason: c.responses?.offer_blocker_reason || campaignInsights.offerBlockerReason
     };
@@ -2937,7 +2947,16 @@ export const dataService = {
 
   saveCall: async (call: CallRecord): Promise<{ id: string, suggestedTags: ClientTag[] }> => {
     const clientSnapshot = await dataService.getClientById(call.clientId).catch(() => null);
-    const questionnaireContext = { clientContext: buildQuestionnaireClientContext(clientSnapshot) };
+    const questionnaireContext = {
+      clientContext: buildQuestionnaireClientContext(clientSnapshot),
+      campaignContext: {
+        campaignName: call.campaignName,
+        targetProduct: call.targetProduct,
+        offerProduct: call.offerProduct,
+        portfolioScope: call.portfolioScope,
+        campaignMode: call.campaignMode
+      }
+    };
     const questions = await dataService.getQuestions(call.type as CallType, call.proposito, questionnaireContext);
     const { enrichedResponses, email, interestProduct, buyerName, responsiblePhone } = extractClientInsightsFromResponses(
       call.responses || {},
@@ -2973,6 +2992,7 @@ export const dataService = {
       target_product: normalizedTargetProduct || campaignInsights.enrichedResponses.target_product,
       offer_product: normalizedOfferProduct || campaignInsights.enrichedResponses.offer_product,
       portfolio_scope: call.portfolioScope || campaignInsights.portfolioScope || campaignInsights.enrichedResponses.portfolio_scope,
+      campaign_mode: call.campaignMode,
       offer_interest_level: call.offerInterestLevel || campaignInsights.offerInterestLevel || campaignInsights.enrichedResponses.offer_interest_level,
       offer_blocker_reason: call.offerBlockerReason || campaignInsights.offerBlockerReason || campaignInsights.enrichedResponses.offer_blocker_reason,
       campaign_name: call.campaignName || campaignInsights.enrichedResponses.campaign_name,
@@ -3296,6 +3316,7 @@ export const dataService = {
         const callTargetProduct = decodeLatin1(context.targetProduct);
         const callOfferProduct = decodeLatin1(context.offerProduct);
         const callPortfolioScope = decodeLatin1(context.portfolioScope);
+        const callCampaignMode = decodeLatin1(context.campaignMode);
 
         return {
           id: c.id,
@@ -3315,6 +3336,7 @@ export const dataService = {
           targetProduct: c.responses?.target_product || callTargetProduct,
           offerProduct: c.responses?.offer_product || callOfferProduct,
           portfolioScope: c.responses?.portfolio_scope || campaignInsights.portfolioScope || callPortfolioScope,
+          campaignMode: c.responses?.campaign_mode || callCampaignMode,
           offerInterestLevel: c.responses?.offer_interest_level || campaignInsights.offerInterestLevel,
           offerBlockerReason: c.responses?.offer_blocker_reason || campaignInsights.offerBlockerReason
         };

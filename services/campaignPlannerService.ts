@@ -38,6 +38,7 @@ export interface CampaignPlannerFilters {
   produtoAlvo?: string;
   ofertaAlvo?: string;
   escopoLinha?: string;
+  campaignMode?: 'RELATIONSHIP' | 'TARGETED' | string;
 }
 
 export interface CampaignDispatch {
@@ -148,6 +149,39 @@ const resolveCampaignClientLocation = (client: Pick<Client, 'city' | 'neighborho
     neighborhood: canonicalNeighborhood
   };
 };
+
+const normalizeCampaignContextValue = (value?: string | null) => {
+  const normalized = String(value || '').trim();
+  return normalized || undefined;
+};
+
+const normalizeCampaignCallType = (value?: string | null) =>
+  String(value || '')
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+const resolveCampaignMode = (filters: CampaignPlannerFilters, callType?: string | null) => {
+  const hasSpecificCommercialContext =
+    Boolean(normalizeCampaignContextValue(filters.produtoAlvo)) ||
+    Boolean(normalizeCampaignContextValue(filters.ofertaAlvo));
+
+  if (normalizeCampaignCallType(callType) === 'VENDA' && !hasSpecificCommercialContext) {
+    return 'RELATIONSHIP';
+  }
+
+  return 'TARGETED';
+};
+
+const sanitizeDispatchFilters = (filters: CampaignPlannerFilters, callType?: string | null): CampaignPlannerFilters => ({
+  ...filters,
+  produtoAlvo: normalizeCampaignContextValue(filters.produtoAlvo),
+  ofertaAlvo: normalizeCampaignContextValue(filters.ofertaAlvo),
+  escopoLinha: normalizeCampaignContextValue(filters.escopoLinha),
+  campaignMode: resolveCampaignMode(filters, callType)
+});
 
 const matchesNormalizedLocationFilter = (
   value: string | undefined,
@@ -855,6 +889,7 @@ export const CampaignPlannerService = {
     };
 
     try {
+      const dispatchFilters = sanitizeDispatchFilters(dispatch.filters, dispatch.callType);
       const analysis = await analyzeDispatchTargets(dispatch);
       result.clients_selected = analysis.preview.clients_selected;
       result.bloqueados_contato_recente = analysis.preview.blocked_recent_call;
@@ -872,7 +907,7 @@ export const CampaignPlannerService = {
           publico_alvo: 'todos',
           ativa: true,
           criado_pelo_planner: true,
-          filters_usados: dispatch.filters,
+          filters_usados: dispatchFilters,
           total_clientes: analysis.uniqueClientIds.length,
           operator_destino_id: dispatch.operatorId,
         })

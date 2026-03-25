@@ -35,6 +35,7 @@ const QUESTIONNAIRE_INTERNAL_RESPONSE_KEYS = new Set([
   'target_product',
   'offer_product',
   'portfolio_scope',
+  'campaign_mode',
   'offer_interest_level',
   'offer_blocker_reason',
   'campanha_id',

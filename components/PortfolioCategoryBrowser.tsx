@@ -96,12 +96,12 @@ export const PortfolioCategoryBrowser: React.FC<PortfolioCategoryBrowserProps> =
       </div>
 
       <div className="flex flex-wrap gap-3">
-        {groups.length > 0 ? groups.map(group => {
+        {groups.length > 0 ? groups.map((group, groupIndex) => {
           const isExpanded = expandedCategory === group.category;
 
           return (
             <button
-              key={group.category}
+              key={`portfolio-category-${group.category}-${group.total_quantity}-${groupIndex}`}
               type="button"
               onClick={() => onToggleCategory(group.category)}
               className={`px-4 py-2.5 rounded-2xl border text-xs font-black uppercase tracking-wide transition-all ${
@@ -127,9 +127,9 @@ export const PortfolioCategoryBrowser: React.FC<PortfolioCategoryBrowserProps> =
 
               {selectedGroup.profiles.length > 0 && (
                 <div className="flex flex-wrap gap-2">
-                  {selectedGroup.profiles.map(profile => (
+                  {selectedGroup.profiles.map((profile, profileIndex) => (
                     <span
-                      key={profile}
+                      key={`portfolio-profile-${selectedGroup.category}-${profile}-${profileIndex}`}
                       className={`px-3 py-1 rounded-xl border text-[10px] font-black uppercase ${styles.profileBadge}`}
                     >
                       {profile}
@@ -145,8 +145,11 @@ export const PortfolioCategoryBrowser: React.FC<PortfolioCategoryBrowserProps> =
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            {selectedGroup.equipments.map(equipment => (
-              <div key={equipment.name} className={`rounded-2xl border p-4 ${styles.productCard}`}>
+            {selectedGroup.equipments.map((equipment, equipmentIndex) => (
+              <div
+                key={`portfolio-equipment-${selectedGroup.category}-${equipment.name}-${equipment.quantity}-${equipmentIndex}`}
+                className={`rounded-2xl border p-4 ${styles.productCard}`}
+              >
                 <p className={`text-sm font-black leading-tight ${styles.productName}`}>{equipment.name}</p>
                 <p className={`text-[10px] font-black uppercase tracking-widest mt-3 ${styles.quantityLabel}`}>Quantidade</p>
                 <p className={`text-2xl font-black mt-1 ${styles.quantityValue}`}>{equipment.quantity}</p>

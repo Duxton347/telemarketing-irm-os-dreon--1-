@@ -210,6 +210,25 @@ export const CampaignPlanner: React.FC = () => {
     return merged.sort((a, b) => a.localeCompare(b, 'pt-BR'));
   }, [catalogConfig, filters.categoriasProduto, itemsList, portfolioFilterOptions.equipmentByCategory]);
 
+  const campaignTargetOptions = React.useMemo(() =>
+    Array.from(new Set([...productCategoriesList, ...itemsList, ...interestProductsList]
+      .map(item => item?.trim())
+      .filter(Boolean) as string[]))
+      .sort((a, b) => a.localeCompare(b, 'pt-BR'))
+  , [interestProductsList, itemsList, productCategoriesList]);
+
+  const campaignOfferOptions = React.useMemo(() =>
+    Array.from(new Set([...productCategoriesList, ...interestProductsList]
+      .map(item => item?.trim())
+      .filter(Boolean) as string[]))
+      .sort((a, b) => a.localeCompare(b, 'pt-BR'))
+  , [interestProductsList, productCategoriesList]);
+
+  const isRelationshipSalesCampaign =
+    campCallType === CallType.VENDA &&
+    !String(filters.produtoAlvo || '').trim() &&
+    !String(filters.ofertaAlvo || '').trim();
+
   const getSatisfactionMeta = (client: ClientWithLastCall) => {
     const scoreLabel =
       typeof client.ultima_satisfacao_score === 'number'
@@ -325,7 +344,7 @@ export const CampaignPlanner: React.FC = () => {
   }, [campCanal, selectedIds]);
 
   const handleDispatch = async () => {
-    if (!campNome || !campOperador) {
+    if (!campNome.trim() || !campOperador) {
       alert("Preencha o nome da campanha e o operador destino.");
       return;
     }
@@ -341,8 +360,8 @@ export const CampaignPlanner: React.FC = () => {
     setDispatching(true);
     try {
       const result = await CampaignPlannerService.dispatchCampaign({
-        nomeCampanha: campNome,
-        proposito: campProposito,
+        nomeCampanha: campNome.trim(),
+        proposito: campProposito.trim(),
         callType: campCallType,
         canal: campCanal,
         operatorId: campOperador || null, // Ensure empty string becomes null for database integrity
@@ -546,13 +565,15 @@ export const CampaignPlanner: React.FC = () => {
                       }}
                     />
                     <datalist id="profiles-list">
-                      {profilesList.map(profile => <option key={profile} value={profile} />)}
+                      {profilesList.map((profile, profileIndex) => (
+                        <option key={`planner-profile-option-${profile}-${profileIndex}`} value={profile} />
+                      ))}
                     </datalist>
                   </div>
                   {filters.perfisCliente && filters.perfisCliente.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-2">
-                      {filters.perfisCliente.map(profile => (
-                        <span key={profile} className="inline-flex items-center gap-1 bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-sm px-2.5 py-1 rounded-lg text-xs font-bold animate-in zoom-in duration-200">
+                      {filters.perfisCliente.map((profile, profileIndex) => (
+                        <span key={`planner-profile-tag-${profile}-${profileIndex}`} className="inline-flex items-center gap-1 bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-sm px-2.5 py-1 rounded-lg text-xs font-bold animate-in zoom-in duration-200">
                           {profile} <X size={12} className="cursor-pointer hover:text-amber-200 transition-colors" onClick={() => toggleFilterArray('perfisCliente', profile)} />
                         </span>
                       ))}
@@ -592,13 +613,15 @@ export const CampaignPlanner: React.FC = () => {
                       }}
                     />
                     <datalist id="product-categories-list">
-                      {productCategoriesList.map(category => <option key={category} value={category} />)}
+                      {productCategoriesList.map((category, categoryIndex) => (
+                        <option key={`planner-category-option-${category}-${categoryIndex}`} value={category} />
+                      ))}
                     </datalist>
                   </div>
                   {filters.categoriasProduto && filters.categoriasProduto.length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-2">
-                      {filters.categoriasProduto.map(category => (
-                        <span key={category} className="inline-flex items-center gap-1 bg-gradient-to-r from-cyan-500 to-sky-500 text-white shadow-sm px-2.5 py-1 rounded-lg text-xs font-bold animate-in zoom-in duration-200">
+                      {filters.categoriasProduto.map((category, categoryIndex) => (
+                        <span key={`planner-category-tag-${category}-${categoryIndex}`} className="inline-flex items-center gap-1 bg-gradient-to-r from-cyan-500 to-sky-500 text-white shadow-sm px-2.5 py-1 rounded-lg text-xs font-bold animate-in zoom-in duration-200">
                           {category} <X size={12} className="cursor-pointer hover:text-cyan-200 transition-colors" onClick={() => toggleFilterArray('categoriasProduto', category)} />
                         </span>
                       ))}
@@ -739,9 +762,9 @@ export const CampaignPlanner: React.FC = () => {
                   </label>
                   <div className="flex flex-wrap gap-2">
                     {callTypesList.length === 0 ? <span className="text-xs text-slate-400">Nenhum histórico</span> : null}
-                    {callTypesList.map(ct => (
+                    {callTypesList.map((ct, callTypeIndex) => (
                       <button
-                        key={ct}
+                        key={`planner-call-type-${ct}-${callTypeIndex}`}
                         onClick={() => toggleFilterArray('callTypes', ct)}
                         className={`px-3 py-1.5 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-all duration-300 border shadow-sm ${
                           filters.callTypes?.includes(ct) 
@@ -903,9 +926,9 @@ export const CampaignPlanner: React.FC = () => {
                           Tags Selecionadas ({filters.tags.length})
                         </p>
                         <div className="flex flex-wrap gap-2">
-                          {filters.tags.map(tag => (
+                          {filters.tags.map((tag, tagIndex) => (
                             <span
-                              key={tag}
+                              key={`planner-tag-${tag}-${tagIndex}`}
                               className="inline-flex items-center gap-1 bg-gradient-to-r from-rose-500 to-pink-500 text-white shadow-sm px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase"
                             >
                               {tag}
@@ -1100,7 +1123,7 @@ export const CampaignPlanner: React.FC = () => {
                   />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Linha / Produto Alvo</label>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Linha / Produto Alvo (Opcional)</label>
                   <input
                     list="campaign-target-products"
                     value={filters.produtoAlvo || ''}
@@ -1109,11 +1132,14 @@ export const CampaignPlanner: React.FC = () => {
                     className="w-full bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-cyan-500 focus:bg-slate-800 transition-all placeholder:text-slate-600 shadow-inner"
                   />
                   <datalist id="campaign-target-products">
-                    {[...productCategoriesList, ...itemsList, ...interestProductsList].filter(Boolean).sort().map(item => <option key={item} value={item} />)}
+                    {campaignTargetOptions.map((item, itemIndex) => <option key={`campaign-target-option-${item}-${itemIndex}`} value={item} />)}
                   </datalist>
+                  <p className="text-[11px] font-bold text-slate-500">
+                    Deixe vazio quando a campanha for de relacionamento/acompanhamento e não de uma linha específica.
+                  </p>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Oferta / Produto Oferecido</label>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Oferta / Produto Oferecido (Opcional)</label>
                   <input
                     list="campaign-offer-products"
                     value={filters.ofertaAlvo || ''}
@@ -1122,7 +1148,7 @@ export const CampaignPlanner: React.FC = () => {
                     className="w-full bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-emerald-500 focus:bg-slate-800 transition-all placeholder:text-slate-600 shadow-inner"
                   />
                   <datalist id="campaign-offer-products">
-                    {[...productCategoriesList, ...interestProductsList].filter(Boolean).sort().map(item => <option key={item} value={item} />)}
+                    {campaignOfferOptions.map((item, itemIndex) => <option key={`campaign-offer-option-${item}-${itemIndex}`} value={item} />)}
                   </datalist>
                 </div>
                 <div className="space-y-2">
@@ -1151,8 +1177,13 @@ export const CampaignPlanner: React.FC = () => {
                     onChange={e => setCampCallType(e.target.value as CallType)} 
                     className="w-full bg-slate-800/50 border border-slate-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-blue-500 focus:bg-slate-800 transition-colors cursor-pointer"
                   >
-                    {Object.values(CallType).map(ct => <option key={ct} value={ct}>{ct}</option>)}
+                    {Object.values(CallType).map((ct, callTypeIndex) => <option key={`campaign-call-type-option-${ct}-${callTypeIndex}`} value={ct}>{ct}</option>)}
                   </select>
+                  {isRelationshipSalesCampaign && (
+                    <p className="text-[11px] font-bold text-cyan-300">
+                      Esta campanha será tratada como acompanhamento comercial geral, sem oferta específica.
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-2">

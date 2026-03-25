@@ -275,6 +275,7 @@ export interface Task {
   targetProduct?: string;
   offerProduct?: string;
   portfolioScope?: string;
+  campaignMode?: 'RELATIONSHIP' | 'TARGETED' | string;
 }
 
 export interface Visit {
@@ -325,6 +326,7 @@ export interface CallRecord {
   targetProduct?: string;
   offerProduct?: string;
   portfolioScope?: string;
+  campaignMode?: 'RELATIONSHIP' | 'TARGETED' | string;
   offerInterestLevel?: string;
   offerBlockerReason?: string;
 }

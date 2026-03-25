@@ -479,14 +479,14 @@ export const CustomerPortfolioImport: React.FC = () => {
                         <p className="text-xs font-bold text-slate-500">{group.client.phone}</p>
                       </div>
                       <div className="flex flex-wrap gap-2">
-                        {metadata.customer_profiles.map(profile => (
-                          <span key={profile} className="px-2 py-1 rounded-lg bg-amber-50 text-amber-700 text-[10px] font-black uppercase border border-amber-100">{profile}</span>
+                        {metadata.customer_profiles.map((profile, profileIndex) => (
+                          <span key={`import-profile-${group.client.id}-${profile}-${profileIndex}`} className="px-2 py-1 rounded-lg bg-amber-50 text-amber-700 text-[10px] font-black uppercase border border-amber-100">{profile}</span>
                         ))}
-                        {metadata.product_categories.map(category => (
-                          <span key={category} className="px-2 py-1 rounded-lg bg-cyan-50 text-cyan-700 text-[10px] font-black uppercase border border-cyan-100">{category}</span>
+                        {metadata.product_categories.map((category, categoryIndex) => (
+                          <span key={`import-category-${group.client.id}-${category}-${categoryIndex}`} className="px-2 py-1 rounded-lg bg-cyan-50 text-cyan-700 text-[10px] font-black uppercase border border-cyan-100">{category}</span>
                         ))}
-                        {metadata.equipment_models.map(model => (
-                          <span key={model} className="px-2 py-1 rounded-lg bg-slate-100 text-slate-700 text-[10px] font-black uppercase border border-slate-200">{model}</span>
+                        {metadata.equipment_models.map((model, modelIndex) => (
+                          <span key={`import-model-${group.client.id}-${model}-${modelIndex}`} className="px-2 py-1 rounded-lg bg-slate-100 text-slate-700 text-[10px] font-black uppercase border border-slate-200">{model}</span>
                         ))}
                       </div>
                       <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">

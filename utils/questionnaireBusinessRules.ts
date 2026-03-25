@@ -38,8 +38,17 @@ export interface QuestionnaireBusinessClientContext {
   tags?: string[] | null;
 }
 
+export interface QuestionnaireCampaignContext {
+  campaignName?: string | null;
+  targetProduct?: string | null;
+  offerProduct?: string | null;
+  portfolioScope?: string | null;
+  campaignMode?: string | null;
+}
+
 export interface QuestionnaireQuestionDisplayContext {
   clientContext?: QuestionnaireBusinessClientContext | null;
+  campaignContext?: QuestionnaireCampaignContext | null;
   responses?: Record<string, any>;
 }
 
@@ -172,6 +181,36 @@ export const normalizeQuestionnaireCallType = (value?: string | null) =>
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[^A-Z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
+
+const normalizeFieldToken = (value?: string | null) =>
+  String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+const OFFER_CONTEXT_QUESTION_IDS = new Set([
+  '2ad8652b-71c2-4d5a-a8b6-3a94ae6cbe1a',
+  'd5cd79dd-bc41-4014-bd77-d0167825c060'
+]);
+
+const OFFER_CONTEXT_FIELDS = new Set([
+  'offer_interest_level',
+  'nivel_interesse_oferta',
+  'interesse_inicial_prospect',
+  'receptividade_oferta',
+  'offer_blocker_reason',
+  'objecao_principal',
+  'principal_impedimento',
+  'motivo_nao_compra'
+].map(normalizeFieldToken));
+
+const TARGET_CONTEXT_FIELDS = new Set([
+  'portfolio_scope',
+  'escopo_linha',
+  'abrangencia_linhas'
+].map(normalizeFieldToken));
 
 const normalizeText = (value: unknown) =>
   String(value || '')
@@ -647,6 +686,40 @@ const shouldDisplayByCondition = (
   }
 };
 
+const questionRequiresOfferContext = (question: Question) => {
+  if (OFFER_CONTEXT_QUESTION_IDS.has(question.id)) {
+    return true;
+  }
+
+  const fieldTokens = [question.campo_resposta, question.id]
+    .map(value => normalizeFieldToken(String(value || '')))
+    .filter(Boolean);
+
+  return fieldTokens.some(token => OFFER_CONTEXT_FIELDS.has(token));
+};
+
+const questionRequiresTargetContext = (question: Question) => {
+  const fieldTokens = [question.campo_resposta, question.id]
+    .map(value => normalizeFieldToken(String(value || '')))
+    .filter(Boolean);
+
+  return fieldTokens.some(token => TARGET_CONTEXT_FIELDS.has(token));
+};
+
+const hasOfferContext = (context?: QuestionnaireQuestionDisplayContext) =>
+  Boolean(
+    sanitizeText(context?.campaignContext?.offerProduct) ||
+    sanitizeText(context?.campaignContext?.targetProduct) ||
+    sanitizeText(context?.responses?.offer_product) ||
+    sanitizeText(context?.responses?.target_product)
+  );
+
+const hasTargetContext = (context?: QuestionnaireQuestionDisplayContext) =>
+  Boolean(
+    sanitizeText(context?.campaignContext?.targetProduct) ||
+    sanitizeText(context?.responses?.target_product)
+  );
+
 export const shouldDisplayQuestionForContext = (
   question: Question,
   callType?: string | null,
@@ -669,6 +742,8 @@ export const shouldDisplayQuestionForContext = (
     eligibleCallTypes.includes(normalizedCallType);
 
   if (!matchesCallType) return false;
+  if (questionRequiresOfferContext(question) && !hasOfferContext(context)) return false;
+  if (questionRequiresTargetContext(question) && !hasTargetContext(context)) return false;
 
   return shouldDisplayByCondition(rule?.displayCondition, context);
 };

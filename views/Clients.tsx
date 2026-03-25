@@ -516,7 +516,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
             className="px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 outline-none"
           >
             <option value="">Todos os Perfis</option>
-            {portfolioFilterOptions.customer_profiles.map(profile => <option key={profile} value={profile}>{profile}</option>)}
+            {portfolioFilterOptions.customer_profiles.map((profile, profileIndex) => <option key={`clients-profile-filter-${profile}-${profileIndex}`} value={profile}>{profile}</option>)}
           </select>
           <select
             value={productCategoryFilter}
@@ -524,7 +524,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
             className="px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 outline-none"
           >
             <option value="">Todas as Categorias</option>
-            {portfolioFilterOptions.product_categories.map(category => <option key={category} value={category}>{category}</option>)}
+            {portfolioFilterOptions.product_categories.map((category, categoryIndex) => <option key={`clients-category-filter-${category}-${categoryIndex}`} value={category}>{category}</option>)}
           </select>
         </div>
       </div>
@@ -766,9 +766,9 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                             </button>
                           </div>
                           <div className="flex flex-wrap gap-2">
-                            {editingPortfolioMetadata.customer_profiles.length > 0 ? editingPortfolioMetadata.customer_profiles.map(profile => (
+                            {editingPortfolioMetadata.customer_profiles.length > 0 ? editingPortfolioMetadata.customer_profiles.map((profile, profileIndex) => (
                               <button
-                                key={profile}
+                                key={`clients-edit-profile-${profile}-${profileIndex}`}
                                 type="button"
                                 onClick={() => removeClientProfile(profile)}
                                 className="inline-flex items-center gap-2 px-3 py-1 rounded-xl border border-amber-200 bg-amber-50 text-[10px] font-black uppercase text-amber-700 hover:bg-amber-100 transition-all"
@@ -785,8 +785,8 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                         <div className="rounded-[24px] border border-cyan-100 bg-white p-4 space-y-3">
                           <p className="text-[10px] font-black uppercase tracking-widest text-cyan-700">Categorias em Edicao</p>
                           <div className="flex flex-wrap gap-2">
-                            {editingPortfolioMetadata.product_categories.length > 0 ? editingPortfolioMetadata.product_categories.map(category => (
-                              <span key={category} className="px-3 py-1 rounded-xl border border-cyan-200 bg-cyan-50 text-[10px] font-black uppercase text-cyan-700">
+                            {editingPortfolioMetadata.product_categories.length > 0 ? editingPortfolioMetadata.product_categories.map((category, categoryIndex) => (
+                              <span key={`clients-edit-category-${category}-${categoryIndex}`} className="px-3 py-1 rounded-xl border border-cyan-200 bg-cyan-50 text-[10px] font-black uppercase text-cyan-700">
                                 {category}
                               </span>
                             )) : (
@@ -798,8 +798,8 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                         <div className="rounded-[24px] border border-blue-100 bg-white p-4 space-y-3">
                           <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Equipamentos em Edicao</p>
                           <div className="flex flex-wrap gap-2">
-                            {editingPortfolioMetadata.equipment_models.length > 0 ? editingPortfolioMetadata.equipment_models.map(equipment => (
-                              <span key={equipment} className="px-3 py-1 rounded-xl border border-blue-200 bg-blue-50 text-[10px] font-black uppercase text-blue-700">
+                            {editingPortfolioMetadata.equipment_models.length > 0 ? editingPortfolioMetadata.equipment_models.map((equipment, equipmentIndex) => (
+                              <span key={`clients-edit-equipment-${equipment}-${equipmentIndex}`} className="px-3 py-1 rounded-xl border border-blue-200 bg-blue-50 text-[10px] font-black uppercase text-blue-700">
                                 {equipment}
                               </span>
                             )) : (
@@ -859,18 +859,18 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                   )}
 
                   <datalist id="client-profile-options">
-                    {portfolioFormOptions.profiles.map(profile => (
-                      <option key={profile} value={profile} />
+                    {portfolioFormOptions.profiles.map((profile, profileIndex) => (
+                      <option key={`clients-form-profile-${profile}-${profileIndex}`} value={profile} />
                     ))}
                   </datalist>
                   <datalist id="client-category-options">
-                    {portfolioFormOptions.categories.map(category => (
-                      <option key={category} value={category} />
+                    {portfolioFormOptions.categories.map((category, categoryIndex) => (
+                      <option key={`clients-form-category-${category}-${categoryIndex}`} value={category} />
                     ))}
                   </datalist>
                   <datalist id="client-equipment-options">
-                    {portfolioFormOptions.equipments.map(equipment => (
-                      <option key={equipment} value={equipment} />
+                    {portfolioFormOptions.equipments.map((equipment, equipmentIndex) => (
+                      <option key={`clients-form-equipment-${equipment}-${equipmentIndex}`} value={equipment} />
                     ))}
                   </datalist>
 
@@ -879,11 +879,11 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                       <TagIcon size={14} className="text-indigo-500" /> Equipamentos e Itens Específicos
                     </h5>
                     <div className="space-y-3">
-                      {selectedCategoryGroups.length > 0 ? selectedCategoryGroups.map(group => {
+                      {selectedCategoryGroups.length > 0 ? selectedCategoryGroups.map((group, groupIndex) => {
                         const isExpanded = expandedCategory === group.category;
 
                         return (
-                          <div key={group.category} className="rounded-[24px] border border-slate-200 bg-white overflow-hidden">
+                          <div key={`clients-category-group-${group.category}-${group.total_quantity}-${groupIndex}`} className="rounded-[24px] border border-slate-200 bg-white overflow-hidden">
                             <button
                               type="button"
                               onClick={() => setExpandedCategory(isExpanded ? null : group.category)}
@@ -892,8 +892,8 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                               <div className="space-y-2">
                                 <div className="flex items-center gap-2 flex-wrap">
                                   <span className="px-3 py-1 rounded-lg bg-cyan-50 text-cyan-700 text-[10px] font-black uppercase border border-cyan-100">{group.category}</span>
-                                  {group.profiles.map(profile => (
-                                    <span key={profile} className="px-3 py-1 rounded-lg bg-amber-50 text-amber-700 text-[10px] font-black uppercase border border-amber-100">{profile}</span>
+                                  {group.profiles.map((profile, profileIndex) => (
+                                    <span key={`clients-category-profile-${group.category}-${profile}-${profileIndex}`} className="px-3 py-1 rounded-lg bg-amber-50 text-amber-700 text-[10px] font-black uppercase border border-amber-100">{profile}</span>
                                   ))}
                                 </div>
                                 <p className="text-xs font-bold text-slate-500">{group.equipments.length} produto(s) especifico(s) vinculado(s)</p>
@@ -910,8 +910,8 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                             {isExpanded && (
                               <div className="border-t border-slate-100 bg-slate-50 px-5 py-4">
                                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                                  {group.equipments.map(equipment => (
-                                    <div key={equipment.name} className="rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 via-white to-cyan-50 p-4">
+                                  {group.equipments.map((equipment, equipmentIndex) => (
+                                    <div key={`clients-category-equipment-${group.category}-${equipment.name}-${equipment.quantity}-${equipmentIndex}`} className="rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 via-white to-cyan-50 p-4">
                                       <p className="text-[9px] font-black uppercase tracking-[0.2em] text-blue-500">Produto Especifico</p>
                                       <h6 className="text-sm font-black text-slate-800 mt-2">{equipment.name}</h6>
                                       <div className="mt-3 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-3 py-2 text-white">
@@ -1158,9 +1158,9 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                       </button>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      {editingPortfolioMetadata.customer_profiles.length > 0 ? editingPortfolioMetadata.customer_profiles.map(profile => (
+                      {editingPortfolioMetadata.customer_profiles.length > 0 ? editingPortfolioMetadata.customer_profiles.map((profile, profileIndex) => (
                         <button
-                          key={profile}
+                          key={`clients-modal-profile-${profile}-${profileIndex}`}
                           type="button"
                           onClick={() => removeClientProfile(profile)}
                           className="inline-flex items-center gap-2 px-3 py-1 rounded-xl border border-amber-200 bg-white text-[10px] font-black uppercase text-amber-700 hover:bg-amber-100 transition-all"
@@ -1177,8 +1177,8 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                   <div className="rounded-[24px] border border-cyan-100 bg-cyan-50/70 p-4 space-y-3">
                     <p className="text-[10px] font-black uppercase tracking-widest text-cyan-700">Categorias Vinculadas</p>
                     <div className="flex flex-wrap gap-2">
-                      {editingPortfolioMetadata.product_categories.length > 0 ? editingPortfolioMetadata.product_categories.map(category => (
-                        <span key={category} className="px-3 py-1 rounded-xl border border-cyan-200 bg-white text-[10px] font-black uppercase text-cyan-700">
+                      {editingPortfolioMetadata.product_categories.length > 0 ? editingPortfolioMetadata.product_categories.map((category, categoryIndex) => (
+                        <span key={`clients-modal-category-${category}-${categoryIndex}`} className="px-3 py-1 rounded-xl border border-cyan-200 bg-white text-[10px] font-black uppercase text-cyan-700">
                           {category}
                         </span>
                       )) : (
@@ -1190,8 +1190,8 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
                   <div className="rounded-[24px] border border-blue-100 bg-blue-50/70 p-4 space-y-3">
                     <p className="text-[10px] font-black uppercase tracking-widest text-blue-700">Equipamentos Comprados</p>
                     <div className="flex flex-wrap gap-2">
-                      {editingPortfolioMetadata.equipment_models.length > 0 ? editingPortfolioMetadata.equipment_models.map(equipment => (
-                        <span key={equipment} className="px-3 py-1 rounded-xl border border-blue-200 bg-white text-[10px] font-black uppercase text-blue-700">
+                      {editingPortfolioMetadata.equipment_models.length > 0 ? editingPortfolioMetadata.equipment_models.map((equipment, equipmentIndex) => (
+                        <span key={`clients-modal-equipment-${equipment}-${equipmentIndex}`} className="px-3 py-1 rounded-xl border border-blue-200 bg-white text-[10px] font-black uppercase text-blue-700">
                           {equipment}
                         </span>
                       )) : (
