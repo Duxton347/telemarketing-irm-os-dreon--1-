@@ -131,7 +131,7 @@ export const CampaignPlanner: React.FC = () => {
       CampaignPlannerService.getDistinctInterestProducts()
     ]);
 
-    const activeOperators = users.filter(u => u.active);
+    const activeOperators = users.filter(u => u.active && u.id && String(u.id).trim().toLowerCase() !== 'undefined');
     setOperadoresList(activeOperators.map(u => ({ id: u.id, username_display: u.name })));
     setCitiesList(cities);
     setCatalogConfig(catalog);
@@ -344,7 +344,8 @@ export const CampaignPlanner: React.FC = () => {
   }, [campCanal, selectedIds]);
 
   const handleDispatch = async () => {
-    if (!campNome.trim() || !campOperador) {
+    const normalizedOperatorId = campOperador.trim();
+    if (!campNome.trim() || !normalizedOperatorId || normalizedOperatorId.toLowerCase() === 'undefined') {
       alert("Preencha o nome da campanha e o operador destino.");
       return;
     }
@@ -364,7 +365,7 @@ export const CampaignPlanner: React.FC = () => {
         proposito: campProposito.trim(),
         callType: campCallType,
         canal: campCanal,
-        operatorId: campOperador || null, // Ensure empty string becomes null for database integrity
+        operatorId: normalizedOperatorId || null, // Ensure empty string becomes null for database integrity
         clientIds: Array.from(selectedIds),
         filters
       });

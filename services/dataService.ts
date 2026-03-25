@@ -106,6 +106,18 @@ const getTrimmedText = (value?: unknown) => {
   return text.length > 0 ? text : undefined;
 };
 
+const normalizeUuidReference = (value?: unknown) => {
+  const text = getTrimmedText(value);
+  if (!text) return undefined;
+
+  const lowered = text.toLowerCase();
+  if (lowered === 'undefined' || lowered === 'null') {
+    return undefined;
+  }
+
+  return text;
+};
+
 const getSafeText = (value?: unknown, fallback = '') => {
   const text = getTrimmedText(value);
   return text ?? fallback;
@@ -2473,6 +2485,8 @@ export const dataService = {
 
     const dbType = mapTaskTypeToDb(task.type);
     const status = task.status || 'pending';
+    const normalizedAssignedTo = normalizeUuidReference(task.assignedTo);
+    const normalizedCampaignId = normalizeUuidReference(task.campanha_id);
 
     if (status === 'pending') {
       await cleanupStaleVoiceQueueEntries({
@@ -2487,15 +2501,15 @@ export const dataService = {
 
       const existingTask = await findOpenVoiceTask(task.clientId, dbType);
       if (existingTask) {
-        if ((!existingTask.assigned_to && task.assignedTo) || (!existingTask.campanha_id && task.campanha_id) || (!existingTask.proposito && task.proposito)) {
+        if ((!existingTask.assigned_to && normalizedAssignedTo) || (!existingTask.campanha_id && normalizedCampaignId) || (!existingTask.proposito && task.proposito)) {
           const payload: Record<string, any> = {};
 
-          if (!existingTask.assigned_to && task.assignedTo) {
-            payload.assigned_to = task.assignedTo;
+          if (!existingTask.assigned_to && normalizedAssignedTo) {
+            payload.assigned_to = normalizedAssignedTo;
           }
 
-          if (!existingTask.campanha_id && task.campanha_id) {
-            payload.campanha_id = task.campanha_id;
+          if (!existingTask.campanha_id && normalizedCampaignId) {
+            payload.campanha_id = normalizedCampaignId;
           }
 
           if (!existingTask.proposito && task.proposito) {
@@ -2519,12 +2533,12 @@ export const dataService = {
     const { error } = await insertTaskRecord({
       client_id: task.clientId,
       type: dbType,
-      assigned_to: task.assignedTo,
+      assigned_to: normalizedAssignedTo,
       status,
       scheduled_for: task.scheduledFor,
       schedule_reason: task.scheduleReason,
       proposito: task.proposito,
-      campanha_id: task.campanha_id
+      campanha_id: normalizedCampaignId
     });
 
     if (error) {
@@ -4660,6 +4674,9 @@ export const dataService = {
   ): Promise<{ created: boolean; existingTaskId?: string }> => {
     if (!task.clientId) throw new Error('Cliente obrigatório para criar tarefa de WhatsApp.');
 
+    const normalizedAssignedTo = normalizeUuidReference(task.assignedTo);
+    const normalizedSourceId = normalizeUuidReference(task.sourceId);
+
     await cleanupDuplicateWhatsAppQueueEntries({
       clientId: task.clientId,
       taskType: task.type
@@ -4674,12 +4691,12 @@ export const dataService = {
 
     const existingQueueEntry = await findOpenWhatsAppTask(task.clientId, task.type);
     if (existingQueueEntry) {
-      if (!existingQueueEntry.assigned_to && task.assignedTo) {
+      if (!existingQueueEntry.assigned_to && normalizedAssignedTo) {
         const { error: updateError } = await supabase
           .from('whatsapp_tasks')
           .update({
-            assigned_to: task.assignedTo,
-            source_id: existingQueueEntry.source_id || task.sourceId || null
+            assigned_to: normalizedAssignedTo,
+            source_id: existingQueueEntry.source_id || normalizedSourceId || null
           })
           .eq('id', existingQueueEntry.id);
 
@@ -4691,11 +4708,11 @@ export const dataService = {
 
     const { error } = await insertWhatsAppTaskRecord({
       client_id: task.clientId,
-      assigned_to: task.assignedTo,
+      assigned_to: normalizedAssignedTo,
       type: task.type,
       status: task.status || 'pending',
       source: task.source || 'manual',
-      source_id: task.sourceId,
+      source_id: normalizedSourceId,
       proposito: task.proposito
     });
     if (error && isUniqueViolationError(error)) {

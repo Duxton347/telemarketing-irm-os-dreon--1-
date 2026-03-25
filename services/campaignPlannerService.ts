@@ -183,6 +183,18 @@ const sanitizeDispatchFilters = (filters: CampaignPlannerFilters, callType?: str
   campaignMode: resolveCampaignMode(filters, callType)
 });
 
+const normalizeUuidReference = (value?: string | null) => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return null;
+
+  const lowered = normalized.toLowerCase();
+  if (lowered === 'undefined' || lowered === 'null') {
+    return null;
+  }
+
+  return normalized;
+};
+
 const matchesNormalizedLocationFilter = (
   value: string | undefined,
   filters: string[] | undefined,
@@ -890,6 +902,7 @@ export const CampaignPlannerService = {
 
     try {
       const dispatchFilters = sanitizeDispatchFilters(dispatch.filters, dispatch.callType);
+      const operatorId = normalizeUuidReference(dispatch.operatorId);
       const analysis = await analyzeDispatchTargets(dispatch);
       result.clients_selected = analysis.preview.clients_selected;
       result.bloqueados_contato_recente = analysis.preview.blocked_recent_call;
@@ -909,7 +922,7 @@ export const CampaignPlannerService = {
           criado_pelo_planner: true,
           filters_usados: dispatchFilters,
           total_clientes: analysis.uniqueClientIds.length,
-          operator_destino_id: dispatch.operatorId,
+          operator_destino_id: operatorId,
         })
         .select('id')
         .single();
@@ -933,7 +946,7 @@ export const CampaignPlannerService = {
             if ((dispatch.canal === 'voz' || dispatch.canal === 'ambos') && canCreateVoice) {
               const taskResult = await dataService.createTask({
                 clientId,
-                assignedTo: dispatch.operatorId,
+                assignedTo: operatorId || undefined,
                 type: dispatch.callType as any,
                 proposito: dispatch.proposito,
                 status: 'pending',
@@ -948,7 +961,7 @@ export const CampaignPlannerService = {
             if ((dispatch.canal === 'whatsapp' || dispatch.canal === 'ambos') && canCreateWhatsApp) {
               const waResult = await dataService.createWhatsAppTask({
                 clientId,
-                assignedTo: dispatch.operatorId || undefined,
+                assignedTo: operatorId || undefined,
                 type: dispatch.callType as any,
                 status: 'pending',
                 source: 'manual',
@@ -966,7 +979,7 @@ export const CampaignPlannerService = {
               client_id: clientId,
               tipo_interacao: 'ENTRADA',
               notas: `Adicionado via Planejador de Campanhas — "${dispatch.nomeCampanha}"`,
-              operador_id: dispatch.operatorId,
+              operador_id: operatorId,
               data_hora: new Date().toISOString()
             });
             if (interactionError) throw interactionError;
