@@ -517,14 +517,13 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
 
       const isCall = selectedInteraction._type === 'call';
       const isWhatsApp = selectedInteraction.type === CallType.WHATSAPP || selectedInteraction._type === 'whatsapp';
-      const resolvedCallResponses = isCall
-         ? collectInteractionResponses(
-            selectedInteraction.responses || {},
-            questions,
-            selectedInteraction.type,
-            selectedInteraction.proposito
-         )
-         : [];
+      const resolvedResponses = collectInteractionResponses(
+         selectedInteraction.responses || {},
+         questions,
+         selectedInteraction.type,
+         selectedInteraction.proposito
+      );
+      const writtenReport = selectedInteraction.responses?.written_report || selectedInteraction.responses?.questionnaire_text_summary;
       const client = clients.find(c => c.id === selectedInteraction.clientId) || prospects.find(p => p.id === selectedInteraction.clientId);
       const op = operators.find(o => o.id === (isCall ? selectedInteraction.operatorId : selectedInteraction.assignedTo));
       const date = new Date(selectedInteraction.date);
@@ -619,21 +618,28 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                         {isCall ? 'Questionário & Respostas' : 'Histórico da Mensagem'}
                      </h4>
 
-                     {isCall ? (
+                     <div className="space-y-4">
+                        {writtenReport && (
+                           <div className="p-5 rounded-2xl bg-slate-50 border border-slate-100">
+                              <p className="text-xs font-bold text-slate-500 uppercase mb-2 leading-relaxed">Resumo do Atendimento</p>
+                              <p className="text-base font-medium text-slate-800 whitespace-pre-wrap">{writtenReport}</p>
+                           </div>
+                        )}
+
                         <div className="grid grid-cols-1 gap-4">
-                           {resolvedCallResponses.map(({ key, label, value }) => (
+                           {resolvedResponses.map(({ key, label, value }) => (
                               <div key={key} className="p-5 rounded-2xl bg-white border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
                                  <p className="text-xs font-bold text-slate-500 uppercase mb-2 leading-relaxed">{label}</p>
                                  <p className="text-base font-medium text-slate-800 bg-slate-50 p-3 rounded-xl border border-slate-100">{value}</p>
                               </div>
                            ))}
-                           {resolvedCallResponses.length === 0 && (
+                           {resolvedResponses.length === 0 && !writtenReport && (
                               <div className="text-center p-8 bg-slate-50 rounded-3xl border border-slate-100 border-dashed">
-                                 <p className="text-sm text-slate-400 font-bold italic">Nenhuma resposta registrada para esta chamada.</p>
+                                 <p className="text-sm text-slate-400 font-bold italic">Nenhuma resposta estruturada registrada para esta interacao.</p>
                               </div>
                            )}
                         </div>
-                     ) : (
+                        {!isCall && (
                         <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 space-y-4">
                            <div className="flex justify-between items-center border-b border-slate-200 pb-4">
                               <span className="text-sm font-bold text-slate-500">Status da Mensagem</span>
@@ -647,18 +653,19 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                                  <span className="text-sm font-black uppercase">{selectedInteraction.skipReason}</span>
                               </div>
                            )}
-                           {selectedInteraction.whatsappNote && (
+                           {(selectedInteraction.skipNote || selectedInteraction.whatsappNote) && (
                               <div className="pt-2">
                                  <span className="text-xs font-black uppercase text-slate-400 tracking-widest">Observação</span>
-                                 <p className="mt-2 text-sm text-slate-700 bg-white p-3 rounded-xl border border-slate-200">{selectedInteraction.whatsappNote}</p>
+                                 <p className="mt-2 text-sm text-slate-700 bg-white p-3 rounded-xl border border-slate-200">{selectedInteraction.skipNote || selectedInteraction.whatsappNote}</p>
                               </div>
                            )}
                         </div>
-                     )}
+                        )}
                   </div>
                </div>
             </div>
          </div>
+      </div>
       );
    };
 

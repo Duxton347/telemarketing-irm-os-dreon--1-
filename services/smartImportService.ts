@@ -3,6 +3,8 @@ import * as xlsx from 'xlsx';
 import {
   collectPortfolioMetadata,
   mergePortfolioEntries,
+  mergeUniquePortfolioValues,
+  normalizeComparableText,
   normalizePortfolioQuantity,
   normalizePortfolioValue
 } from '../utils/clientPortfolio';
@@ -18,22 +20,98 @@ const columnSynonyms: Record<string, string[]> = {
   city: ['cidade', 'municipio', 'city'],
   state: ['estado', 'uf', 'state'],
   zip_code: ['cep', 'codigo postal', 'zip'],
-  customer_profile: ['perfil', 'segmento', 'tipo cliente', 'tipo de cliente', 'setor', 'ramo', 'nicho'],
+  customer_profile: ['perfil', 'perfil parceiro', 'perfil de parceiro', 'perfil dos parceiros', 'perfil de parceiros', 'segmento', 'tipo cliente', 'tipo de cliente', 'setor', 'ramo', 'nicho', 'parceiros'],
   product_category: ['categoria', 'categoria produto', 'linha', 'linha produto', 'familia', 'grupo produto'],
   equipment_model: ['equipamento', 'modelo', 'item', 'produto especifico', 'produto especÃ­fico', 'equipamento/modelo'],
   portfolio_quantity: ['quantidade', 'qtd', 'qtde', 'qte']
 };
 
+const normalizePhoneDigits = (value: any): string => String(value || '').replace(/\D/g, '');
+
+const splitPortfolioValues = (value: any): string[] => {
+  const normalized = normalizePortfolioValue(value);
+  if (!normalized) return [];
+
+  return Array.from(new Set(
+    normalized
+      .split(/[\n;,|]+/g)
+      .map(item => normalizePortfolioValue(item))
+      .filter(Boolean)
+  ));
+};
+
+const extractPhones = (phoneRaw: any): { primary: string; secondary: string } => {
+  const text = String(phoneRaw || '').trim();
+  if (!text) {
+    return { primary: '', secondary: '' };
+  }
+
+  const explicitMatches = text.match(/\+?\d[\d\s()./-]{7,}\d/g) || [];
+  const normalizedExplicit = explicitMatches
+    .map(match => normalizePhoneDigits(match))
+    .filter(Boolean);
+
+  if (normalizedExplicit.length >= 2) {
+    return {
+      primary: normalizedExplicit[0],
+      secondary: normalizedExplicit[1]
+    };
+  }
+
+  const cleaned = normalizePhoneDigits(text);
+  if (!cleaned) {
+    return { primary: '', secondary: '' };
+  }
+
+  const local = cleaned.startsWith('55') && cleaned.length >= 12 ? cleaned.slice(2) : cleaned;
+
+  if (local.length === 20 || local.length === 21 || local.length === 22) {
+    const primary = local.slice(0, 10) || local.slice(0, 11);
+    const remainder = local.slice(primary.length);
+    const secondary = remainder.length >= 10 ? remainder : '';
+    return {
+      primary: cleaned.startsWith('55') ? `55${primary}` : primary,
+      secondary: secondary ? (cleaned.startsWith('55') ? `55${secondary}` : secondary) : ''
+    };
+  }
+
+  if (local.length > 11) {
+    return {
+      primary: local.slice(0, 11),
+      secondary: local.slice(11, 22)
+    };
+  }
+
+  return { primary: cleaned, secondary: '' };
+};
+
 export const SmartImportService = {
+  validateRequiredColumns: (mapping: Record<string, string>) => {
+    const requiredFields = ['name', 'phone', 'customer_profile'] as const;
+    const missingFields = requiredFields.filter(field => !mapping[field]);
+
+    if (missingFields.length === 0) return;
+
+    const labels: Record<(typeof requiredFields)[number], string> = {
+      name: 'Nome',
+      phone: 'Telefone',
+      customer_profile: 'Perfil'
+    };
+
+    throw new Error(`Colunas obrigatórias ausentes: ${missingFields.map(field => labels[field]).join(', ')}`);
+  },
+
   detectColumnMapping: (headers: string[]): Record<string, string> => {
     const mapping: Record<string, string> = {};
-    const lowerHeaders = headers.map(h => (h || '').toString().toLowerCase().trim());
+    const normalizedHeaders = headers.map(h => normalizeComparableText((h || '').toString()));
     const matchedIndices = new Set<number>();
+    const normalizedStreetKeywords = columnSynonyms['street'].map(keyword => normalizeComparableText(keyword));
 
     // 1. Exact matches first (highest priority)
     for (const [standardKey, synonyms] of Object.entries(columnSynonyms)) {
-      const matchIndex = lowerHeaders.findIndex((header, idx) => 
-        !matchedIndices.has(idx) && synonyms.some(synonym => header === synonym)
+      const normalizedSynonyms = synonyms.map(synonym => normalizeComparableText(synonym));
+      const matchIndex = normalizedHeaders.findIndex((header, idx) => 
+        !matchedIndices.has(idx) && normalizedSynonyms.some(synonym => header === synonym)
       );
       if (matchIndex !== -1) {
         mapping[standardKey] = headers[matchIndex];
@@ -42,18 +120,18 @@ export const SmartImportService = {
     }
 
     // 2. Partial matches (with exclusions)
-    const streetKeywords = columnSynonyms['street'];
     for (const [standardKey, synonyms] of Object.entries(columnSynonyms)) {
       if (mapping[standardKey]) continue; // Already matched exactly
+      const normalizedSynonyms = synonyms.map(synonym => normalizeComparableText(synonym));
 
-      const matchIndex = lowerHeaders.findIndex((header, idx) => {
+      const matchIndex = normalizedHeaders.findIndex((header, idx) => {
         if (matchedIndices.has(idx)) return false;
         
-        const hasSynonym = synonyms.some(synonym => header.includes(synonym));
+        const hasSynonym = normalizedSynonyms.some(synonym => header.includes(synonym));
         
         // CRITICAL BUG FIX: If we are looking for 'name', but the header contains street keywords, IGNORE IT.
         if (standardKey === 'name') {
-          const isStreet = streetKeywords.some(sk => header.includes(sk));
+          const isStreet = normalizedStreetKeywords.some(sk => header.includes(sk));
           if (isStreet) return false;
         }
 
@@ -70,19 +148,20 @@ export const SmartImportService = {
   },
 
   normalizePhone: (phoneRaw: any): string => {
-    if (!phoneRaw) return '';
-    const cleaned = String(phoneRaw).replace(/\D/g, '');
-    // Safety lock: if a phone is longer than 11 digits (e.g. 5511999999999), it might be fused.
-    // If it's vastly longer (e.g. 20+ chars), it's definitely two numbers merged.
-    // We truncate to the first 11 characters if it exceeds 11, assuming standard BR format without country code.
-    // E.g. 11999998888 (11 chars).
-    if (cleaned.length > 11 && !cleaned.startsWith('55')) {
-      return cleaned.substring(0, 11);
-    }
-    if (cleaned.length > 13 && cleaned.startsWith('55')) {
-      return cleaned.substring(0, 13);
-    }
-    return cleaned; 
+    return extractPhones(phoneRaw).primary;
+  },
+
+  splitPhones: (primaryRaw: any, secondaryRaw?: any): { phone: string; phone_secondary: string } => {
+    const fromPrimary = extractPhones(primaryRaw);
+    const fromSecondary = extractPhones(secondaryRaw);
+
+    return {
+      phone: fromPrimary.primary || fromSecondary.primary,
+      phone_secondary:
+        fromSecondary.primary ||
+        fromSecondary.secondary ||
+        fromPrimary.secondary
+    };
   },
 
   normalizeName: (nameRaw: any): string => {
@@ -131,7 +210,8 @@ export const SmartImportService = {
 
     for (const row of rawData) {
       try {
-        const profile = normalizePortfolioValue(row[mapping['customer_profile']]);
+        const profileValues = splitPortfolioValues(row[mapping['customer_profile']]);
+        const profile = profileValues[0] || normalizePortfolioValue(row[mapping['customer_profile']]);
         const productCategory = normalizePortfolioValue(row[mapping['product_category']]);
         const equipmentModel = normalizePortfolioValue(row[mapping['equipment_model']]);
         const portfolioQuantity = normalizePortfolioQuantity(row[mapping['portfolio_quantity']]);
@@ -147,32 +227,54 @@ export const SmartImportService = {
         );
         const importedPortfolioMetadata = collectPortfolioMetadata(importedPortfolioEntries);
 
+        const splitPhones = SmartImportService.splitPhones(
+          row[mapping['phone']],
+          row[mapping['phone_secondary']]
+        );
+
         const mappedData: Partial<Client> = {
           name: SmartImportService.normalizeName(row[mapping['name']]),
-          phone: SmartImportService.normalizePhone(row[mapping['phone']]),
+          phone: splitPhones.phone,
           email: row[mapping['email']] || '',
           street: row[mapping['street']] || '',
           neighborhood: row[mapping['neighborhood']] || '',
           city: row[mapping['city']] || '',
           state: row[mapping['state']] || '',
           zip_code: row[mapping['zip_code']] || '',
-          phone_secondary: SmartImportService.normalizePhone(row[mapping['phone_secondary']]),
+          phone_secondary: splitPhones.phone_secondary,
           status: 'CLIENT',
           origin: 'CSV_IMPORT',
-          customer_profiles: importedPortfolioMetadata.customer_profiles,
+          customer_profiles: mergeUniquePortfolioValues(profileValues, importedPortfolioMetadata.customer_profiles),
           product_categories: importedPortfolioMetadata.product_categories,
           equipment_models: importedPortfolioMetadata.equipment_models,
           items: importedPortfolioMetadata.equipment_models,
           portfolio_entries: importedPortfolioEntries
         };
 
-        if (!mappedData.phone) continue; // Require phone
+        if (!mappedData.phone || !profile) {
+          stats.errors++;
+          continue;
+        }
 
-        const existingClient = existingClients.find(c => 
-          c.phone === mappedData.phone || 
-          (c.phone_secondary && c.phone_secondary === mappedData.phone) ||
-          (mappedData.phone_secondary && c.phone === mappedData.phone_secondary)
-        );
+        const normalizedImportedName = SmartImportService.normalizeName(mappedData.name);
+        const existingClient = existingClients.find(c => {
+          const samePhone =
+            c.phone === mappedData.phone ||
+            (c.phone_secondary && c.phone_secondary === mappedData.phone) ||
+            (mappedData.phone_secondary && c.phone === mappedData.phone_secondary) ||
+            (mappedData.phone_secondary && c.phone_secondary === mappedData.phone_secondary);
+
+          if (samePhone) return true;
+
+          const sameName = SmartImportService.normalizeName(c.name) === normalizedImportedName;
+          const phoneCrossMatch = Boolean(
+            sameName &&
+            mappedData.phone_secondary &&
+            (c.phone === mappedData.phone_secondary || c.phone_secondary === mappedData.phone_secondary)
+          );
+
+          return phoneCrossMatch;
+        });
 
         if (existingClient) {
           // Merge logic: preserve existing data, fill in gaps, and merge technical profile metadata.
@@ -194,7 +296,11 @@ export const SmartImportService = {
             mappedData.portfolio_entries || []
           );
           const mergedPortfolioMetadata = collectPortfolioMetadata(mergedPortfolioEntries);
-          const nextProfiles = mergedPortfolioMetadata.customer_profiles;
+          const nextProfiles = mergeUniquePortfolioValues(
+            existingClient.customer_profiles || [],
+            mappedData.customer_profiles || [],
+            mergedPortfolioMetadata.customer_profiles
+          );
           const nextCategories = mergedPortfolioMetadata.product_categories;
           const nextEquipment = mergedPortfolioMetadata.equipment_models;
 

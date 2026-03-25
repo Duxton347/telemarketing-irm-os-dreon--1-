@@ -74,6 +74,7 @@ export const CampaignPlanner: React.FC = () => {
     periodos: [],
     diasAvulsos: [],
     callTypes: [],
+    withoutSelectedCallTypes: false,
     resultados: [],
     operadores: [],
     niveisSatisfacao: [],
@@ -751,6 +752,28 @@ export const CampaignPlanner: React.FC = () => {
                         {ct}
                       </button>
                     ))}
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-white/80 p-3">
+                    <button
+                      type="button"
+                      disabled={!filters.callTypes?.length}
+                      onClick={() => setFilters(prev => ({
+                        ...prev,
+                        withoutSelectedCallTypes: !prev.withoutSelectedCallTypes
+                      }))}
+                      className={`w-full px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                        !filters.callTypes?.length
+                          ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                          : filters.withoutSelectedCallTypes
+                            ? 'bg-rose-600 text-white shadow-lg shadow-rose-200'
+                            : 'bg-slate-900 text-white'
+                      }`}
+                    >
+                      {filters.withoutSelectedCallTypes ? 'Trazer sem esses contatos' : 'Trazer com esses contatos'}
+                    </button>
+                    <p className="text-[11px] font-bold text-slate-500 mt-2">
+                      Ative para localizar clientes que ainda nao receberam os tipos selecionados no periodo filtrado.
+                    </p>
                   </div>
                 </div>
 

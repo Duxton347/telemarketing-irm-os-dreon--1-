@@ -198,11 +198,6 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       });
 
       const myTask = dueTasks[0];
-      let filteredQuestions = allQuestionsRaw;
-      if (myTask) {
-        filteredQuestions = await dataService.getQuestions(myTask.type as CallType, (myTask as any).proposito);
-      }
-      setQuestions(filteredQuestions);
 
       if (myTask) {
         // Try normal client lookup first, then use embedded task data as fallback
@@ -236,6 +231,13 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
           } as Client;
         }
 
+        const filteredQuestions = await dataService.getQuestions(
+          myTask.type as CallType,
+          (myTask as any).proposito,
+          { clientContext: foundClient || undefined }
+        );
+        setQuestions(filteredQuestions);
+
         setCurrentTask(myTask);
         setClient(foundClient);
 
@@ -254,6 +256,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
           setHistoryLoading(false);
         }
       } else {
+        setQuestions(allQuestionsRaw);
         setCurrentTask(null);
         setClient(null);
       }
@@ -654,13 +657,15 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
         },
         questions,
         currentTask.type,
-        currentTask.proposito
+        currentTask.proposito,
+        { clientContext: client || undefined, responses }
       );
       const questionnaireTextSummary = buildQuestionnaireTextSummary(
         baseResponses,
         questions,
         currentTask.type,
-        currentTask.proposito
+        currentTask.proposito,
+        { clientContext: client || undefined, responses: baseResponses }
       );
       const finalWrittenReport = callSummary.trim() || questionnaireTextSummary || '';
       const normalizedResponses = {
@@ -1069,6 +1074,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   onResponseChange={(qId, val) => setResponses(prev => ({ ...prev, [qId]: val }))}
                   type={currentTask.type}
                   proposito={(currentTask as any).proposito}
+                  clientContext={client || undefined}
                 />
 
                 {(currentTask.proposito || currentTask.targetProduct || currentTask.offerProduct) && (

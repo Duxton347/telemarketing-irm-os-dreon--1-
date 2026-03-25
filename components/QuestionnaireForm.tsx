@@ -1,6 +1,7 @@
 import React from 'react';
 import { CheckCircle2 } from 'lucide-react';
-import { Question, CallType } from '../types';
+import { Question, CallType, Client } from '../types';
+import { questionMatchesContext } from '../utils/questionnaireInsights';
 
 interface QuestionnaireFormProps {
     questions: Question[];
@@ -8,6 +9,7 @@ interface QuestionnaireFormProps {
     onResponseChange: (questionId: string, value: any) => void;
     type: CallType;
     proposito?: string | null;
+    clientContext?: Partial<Client>;
     readOnly?: boolean;
 }
 
@@ -17,33 +19,23 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
     onResponseChange,
     type,
     proposito,
+    clientContext,
     readOnly = false
 }) => {
-    const filteredQuestions = questions.filter(q => {
-        const matchesType = q.type === type || q.type === 'ALL';
-        if (!matchesType) return false;
-        
-        // Se a pergunta tem um propósito específico, só exibe se a task atual também tiver esse mesmo propósito
-        if (q.proposito) {
-            return q.proposito === proposito;
-        }
-        
-        // Se a pergunta não tem propósito, exibe genéricamente para aquele tipo de chamada
-        return true;
-    });
+    const filteredQuestions = questions
+        .filter(q => questionMatchesContext(q, type, proposito, { clientContext, responses }))
+        .sort((a, b) => (a.order || 0) - (b.order || 0));
 
     const renderQuestionInput = (q: Question) => {
         const key = q.campo_resposta || q.id;
         const options = Array.isArray(q.options) ? q.options : [];
-        
-        // Check for special option types
+
         const hasTextInput = q.tipo_input === 'text' || options.some(o => o === '__TEXT__');
         const hasTextArea = options.some(o => o === '__TEXTAREA__');
         const dropdownOption = options.find(o => o.startsWith('__DROPDOWN__:'));
         const regularOptions = options.filter(o => !o.startsWith('__'));
         const hasNoOptions = regularOptions.length === 0 && !dropdownOption && !hasTextInput && !hasTextArea;
 
-        // Dropdown with predefined options
         if (dropdownOption) {
             const choices = dropdownOption.replace('__DROPDOWN__:', '').split(',').map(s => s.trim());
             return (
@@ -55,9 +47,12 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
                         className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold text-sm text-slate-700 outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
                     >
                         <option value="">Selecione...</option>
-                        {choices.map(c => <option key={c} value={c}>{c}</option>)}
+                        {choices.map((choice, index) => (
+                            <option key={`${key}-choice-${index}-${choice}`} value={choice}>
+                                {choice}
+                            </option>
+                        ))}
                     </select>
-                    {/* Allow custom input if "Outros" is selected */}
                     {responses[key] === 'Outros' && (
                         <input
                             type="text"
@@ -71,15 +66,14 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
             );
         }
 
-        // Free text input
         if (hasTextInput) {
             return (
                 <div className="space-y-3">
                     {regularOptions.length > 0 && (
                         <div className="flex flex-wrap gap-2">
-                            {regularOptions.map(opt => (
+                            {regularOptions.map((opt, index) => (
                                 <button
-                                    key={opt}
+                                    key={`${key}-regular-${index}-${opt}`}
                                     type="button"
                                     onClick={() => !readOnly && onResponseChange(key, opt)}
                                     className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${responses[key] === opt ? 'bg-slate-900 text-white shadow-xl' : 'bg-white text-slate-400 border border-slate-200 hover:border-slate-300'} ${readOnly ? 'cursor-default' : ''}`}
@@ -109,13 +103,12 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
             );
         }
 
-        // Textarea
         if (hasTextArea || hasNoOptions) {
             return (
                 <textarea
                     value={responses[key] || ''}
                     onChange={e => !readOnly && onResponseChange(key, e.target.value)}
-                    placeholder={hasNoOptions ? "Escreva a resposta..." : "Digite aqui..."}
+                    placeholder={hasNoOptions ? 'Escreva a resposta...' : 'Digite aqui...'}
                     disabled={readOnly}
                     rows={3}
                     className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-sm text-slate-700 outline-none resize-none focus:ring-4 focus:ring-blue-500/10 transition-all"
@@ -123,12 +116,11 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
             );
         }
 
-        // Default: button options (existing behavior)
         return (
             <div className="flex flex-wrap gap-2">
-                {options.map(opt => (
+                {options.map((opt, index) => (
                     <button
-                        key={opt}
+                        key={`${key}-option-${index}-${opt}`}
                         type="button"
                         onClick={() => !readOnly && onResponseChange(key, opt)}
                         className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase transition-all ${responses[key] === opt ? 'bg-slate-900 text-white shadow-xl' : 'bg-white text-slate-400 border border-slate-200 hover:border-slate-300'} ${readOnly ? 'cursor-default' : ''}`}
@@ -143,12 +135,12 @@ export const QuestionnaireForm: React.FC<QuestionnaireFormProps> = ({
     return (
         <section className="space-y-6">
             <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
-                <CheckCircle2 size={18} className="text-blue-600" /> Questionário Obrigatório
+                <CheckCircle2 size={18} className="text-blue-600" /> Questionario Obrigatorio
             </h5>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {filteredQuestions.map(q => (
                     <div key={q.id} className="p-6 bg-slate-50 rounded-[32px] border border-slate-100 space-y-4">
-                        <p className="font-black text-slate-800 text-sm leading-tight">{q.order || q.text.split('.')[0] + '.'} {q.text}</p>
+                        <p className="font-black text-slate-800 text-sm leading-tight">{q.order || `${q.text.split('.')[0]}.`} {q.text}</p>
                         {renderQuestionInput(q)}
                     </div>
                 ))}

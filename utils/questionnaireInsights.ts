@@ -1,4 +1,9 @@
 import { CallType, Question } from '../types';
+import {
+  buildQuestionnaireBusinessContext,
+  QuestionnaireQuestionDisplayContext,
+  shouldDisplayQuestionForContext
+} from './questionnaireBusinessRules';
 
 const normalizeText = (value: string = '') =>
   value
@@ -14,6 +19,28 @@ const GENERIC_VALUES = new Set([
   'outro',
   'outros',
   'yes'
+]);
+
+const QUESTIONNAIRE_INTERNAL_RESPONSE_KEYS = new Set([
+  'written_report',
+  'questionnaire_text_summary',
+  'questionnaire_business_tags',
+  'questionnaire_business_indices',
+  'questionnaire_business_profile',
+  'questionnaire_business_questions',
+  'questionnaire_business_feeds',
+  'call_type',
+  'call_purpose',
+  'campaign_name',
+  'target_product',
+  'offer_product',
+  'portfolio_scope',
+  'offer_interest_level',
+  'offer_blocker_reason',
+  'campanha_id',
+  'campanha_indicada_id',
+  'note',
+  'resultado'
 ]);
 
 const normalizeCallTypeValue = (value?: string | null) =>
@@ -128,6 +155,9 @@ const isMeaningful = (value: unknown) => {
   if (Array.isArray(value)) return value.length > 0;
   return true;
 };
+
+const isQuestionnaireInternalResponseKey = (key: string) =>
+  QUESTIONNAIRE_INTERNAL_RESPONSE_KEYS.has(key);
 
 const resolveResponseValueByKey = (
   responses: Record<string, any>,
@@ -269,31 +299,20 @@ export const resolveQuestionLabel = (
 export const questionMatchesContext = (
   question: Question,
   callType?: CallType | 'ALL' | string,
-  proposito?: string | null
+  proposito?: string | null,
+  context?: QuestionnaireQuestionDisplayContext
 ) => {
-  const normalizedQuestionType = normalizeCallTypeValue(String(question.type || 'ALL'));
-  const normalizedCallType = normalizeCallTypeValue(String(callType || 'ALL'));
-  const matchesType =
-    !callType ||
-    normalizedQuestionType === 'ALL' ||
-    normalizedCallType === 'ALL' ||
-    normalizedQuestionType === normalizedCallType;
-  if (!matchesType) return false;
-
-  if (question.proposito) {
-    return question.proposito === proposito;
-  }
-
-  return true;
+  return shouldDisplayQuestionForContext(question, callType, proposito, context);
 };
 
 const getApplicableQuestions = (
   questions: Question[] = [],
   callType?: CallType | 'ALL' | string,
-  proposito?: string | null
+  proposito?: string | null,
+  context?: QuestionnaireQuestionDisplayContext
 ) =>
   questions
-    .filter(question => questionMatchesContext(question, callType, proposito))
+    .filter(question => questionMatchesContext(question, callType, proposito, context))
     .sort((a, b) => (a.order || 0) - (b.order || 0));
 
 const questionSupportsFreeText = (question: Question) => {
@@ -379,9 +398,10 @@ export const resolveQuestionnaireEntries = (
   responses: Record<string, any>,
   questions: Question[] = [],
   callType?: CallType | 'ALL' | string,
-  proposito?: string | null
+  proposito?: string | null,
+  context?: QuestionnaireQuestionDisplayContext
 ): ResolvedQuestionnaireEntry[] => {
-  const entries = getApplicableQuestions(questions, callType, proposito)
+  const entries = getApplicableQuestions(questions, callType, proposito, context)
     .map(question => {
       const value = resolveStoredResponseForQuestion(responses, question);
       if (!isMeaningful(value)) return null;
@@ -401,21 +421,27 @@ export const resolveQuestionnaireEntries = (
   }
 
   return Object.entries(responses || {})
-    .filter(([key, value]) => !key.endsWith('_note') && isMeaningful(value))
+    .filter(([key, value]) =>
+      !key.endsWith('_note') &&
+      !isQuestionnaireInternalResponseKey(key) &&
+      isMeaningful(value)
+    )
     .map(([key, value]) => ({
       key,
       label: resolveQuestionLabel(key, questions),
       value
-    }));
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'pt-BR'));
 };
 
 export const buildQuestionnaireTextSummary = (
   responses: Record<string, any>,
   questions: Question[] = [],
   callType?: CallType | 'ALL' | string,
-  proposito?: string | null
+  proposito?: string | null,
+  context?: QuestionnaireQuestionDisplayContext
 ) => {
-  const lines = getApplicableQuestions(questions, callType, proposito)
+  const lines = getApplicableQuestions(questions, callType, proposito, context)
     .filter(questionSupportsFreeText)
     .map(question => {
       const value = resolveStoredResponseForQuestion(responses, question);
@@ -431,7 +457,8 @@ export const enrichQuestionnaireResponses = (
   responses: Record<string, any>,
   questions: Question[] = [],
   callType?: CallType | 'ALL' | string,
-  proposito?: string | null
+  proposito?: string | null,
+  context?: QuestionnaireQuestionDisplayContext
 ) => {
   const enriched = applyLegacyQuestionAliases({ ...responses }, callType);
 
@@ -442,7 +469,7 @@ export const enrichQuestionnaireResponses = (
     }
   }
 
-  for (const question of getApplicableQuestions(questions, callType, proposito)) {
+  for (const question of getApplicableQuestions(questions, callType, proposito, context)) {
     const rawValue = resolveStoredResponseForQuestion(enriched, question);
     if (!isMeaningful(rawValue)) continue;
 
@@ -568,13 +595,31 @@ export const extractClientInsightsFromResponses = (
   responses: Record<string, any>,
   questions: Question[] = [],
   callType?: CallType | 'ALL' | string,
-  proposito?: string | null
+  proposito?: string | null,
+  context?: QuestionnaireQuestionDisplayContext
 ) => {
-  const enriched = enrichQuestionnaireResponses(responses, questions, callType, proposito);
-  const email = sanitizeEmail(pickResponseValue(enriched, EMAIL_KEYS));
-  const interestProduct = sanitizeInterest(pickResponseValue(enriched, INTEREST_KEYS));
-  const buyerName = pickResponseValue(enriched, BUYER_KEYS)?.toString().trim() || undefined;
-  const responsiblePhone = sanitizePhone(pickResponseValue(enriched, PHONE_KEYS)?.toString());
+  const enriched = enrichQuestionnaireResponses(responses, questions, callType, proposito, context);
+  const businessContext = buildQuestionnaireBusinessContext({
+    responses: enriched,
+    questions,
+    callType,
+    proposito,
+    clientContext: context?.clientContext
+  });
+  const email = sanitizeEmail(
+    businessContext.capturedData.email || pickResponseValue(enriched, EMAIL_KEYS)
+  );
+  const interestProduct = sanitizeInterest(
+    businessContext.capturedData.interestProduct || pickResponseValue(enriched, INTEREST_KEYS)
+  );
+  const buyerName =
+    businessContext.capturedData.buyerName ||
+    pickResponseValue(enriched, BUYER_KEYS)?.toString().trim() ||
+    undefined;
+  const responsiblePhone = sanitizePhone(
+    businessContext.capturedData.responsiblePhone ||
+    pickResponseValue(enriched, PHONE_KEYS)?.toString()
+  );
 
   return {
     enrichedResponses: enriched,

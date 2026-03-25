@@ -21,6 +21,7 @@ export interface CampaignPlannerFilters {
   periodos?: Array<{ de: string; ate: string }>;
   diasAvulsos?: string[];
   callTypes?: string[];
+  withoutSelectedCallTypes?: boolean;
   resultados?: string[];
   operadores?: string[];
   niveisSatisfacao?: string[];
@@ -330,14 +331,29 @@ const analyzeDispatchTargets = async (
   const communicationBlockDays = await dataService.getCommunicationBlockDays();
   const recentThreshold = new Date();
   recentThreshold.setDate(recentThreshold.getDate() - communicationBlockDays);
+  const recentThresholdIso = recentThreshold.toISOString();
 
-  const [recentCallClients, pendingVoiceClients, scheduledVoiceClients, pendingWhatsAppClients] = await Promise.all([
+  if (wantsWhatsApp) {
+    await dataService.cleanupDuplicateWhatsAppQueueEntries();
+  }
+
+  const [recentCallClients, recentWhatsAppClients, pendingVoiceClients, scheduledVoiceClients, pendingWhatsAppClients] = await Promise.all([
     collectIdSet(uniqueClientIds, async chunk => {
       const { data, error } = await supabase
         .from('call_logs')
         .select('client_id')
         .in('client_id', chunk)
-        .gte('start_time', recentThreshold.toISOString());
+        .gte('start_time', recentThresholdIso);
+      if (error) throw error;
+      return (data || []).map((row: any) => row.client_id).filter(Boolean);
+    }),
+    collectIdSet(uniqueClientIds, async chunk => {
+      const { data, error } = await supabase
+        .from('whatsapp_tasks')
+        .select('client_id')
+        .in('client_id', chunk)
+        .in('status', ['completed', 'skipped', 'started'])
+        .or(`created_at.gte.${recentThresholdIso},started_at.gte.${recentThresholdIso},completed_at.gte.${recentThresholdIso},updated_at.gte.${recentThresholdIso}`);
       if (error) throw error;
       return (data || []).map((row: any) => row.client_id).filter(Boolean);
     }),
@@ -385,7 +401,7 @@ const analyzeDispatchTargets = async (
 
   uniqueClientIds.forEach(clientId => {
     let canCreateAnything = false;
-    const hasRecentCall = recentCallClients.has(clientId);
+    const hasRecentCall = recentCallClients.has(clientId) || recentWhatsAppClients.has(clientId);
     const hasPendingVoiceQueue = pendingVoiceClients.has(clientId) || scheduledVoiceClients.has(clientId);
     const hasPendingWhatsAppQueue = pendingWhatsAppClients.has(clientId);
 
@@ -773,6 +789,10 @@ export const CampaignPlannerService = {
             filters.produtoAlvo ||
             filters.ofertaAlvo ||
             filters.escopoLinha;
+          const requiresMissingHistory = Boolean(filters.withoutSelectedCallTypes && filters.callTypes?.length);
+          const matchesHistory = requiresMissingHistory
+            ? client.call_logs_filtradas.length === 0
+            : (!temFiltroLigacao || client.call_logs_filtradas.length > 0);
 
           const matchesProfiles = matchesPortfolioFilter(client.customer_profiles, filters.perfisCliente, 'profile');
           const matchesCategories = matchesPortfolioFilter(client.product_categories, filters.categoriasProduto);
@@ -787,7 +807,7 @@ export const CampaignPlannerService = {
             filters.niveisSatisfacao.includes(client.ultima_satisfacao_nivel || 'SEM_LEITURA');
 
           return !isLeadAlreadyClient &&
-            (!temFiltroLigacao || client.call_logs_filtradas.length > 0) &&
+            matchesHistory &&
             matchesProfiles &&
             matchesCategories &&
             matchesEquipment &&
@@ -876,33 +896,34 @@ export const CampaignPlannerService = {
             }
 
             if ((dispatch.canal === 'voz' || dispatch.canal === 'ambos') && canCreateVoice) {
-              const { error: taskInsertError } = await supabase.from('tasks').insert({
-                client_id: clientId,
-                assigned_to: dispatch.operatorId,
-                type: dispatch.callType,
+              const taskResult = await dataService.createTask({
+                clientId,
+                assignedTo: dispatch.operatorId,
+                type: dispatch.callType as any,
                 proposito: dispatch.proposito,
                 status: 'pending',
-                created_at: new Date().toISOString(),
                 campanha_id: campanha.id
               });
-              if (taskInsertError) throw taskInsertError;
-              result.tasks_criadas++;
-              result.ligacoes_criadas++;
+              if (taskResult.created) {
+                result.tasks_criadas++;
+                result.ligacoes_criadas++;
+              }
             }
 
             if ((dispatch.canal === 'whatsapp' || dispatch.canal === 'ambos') && canCreateWhatsApp) {
-              const { error: waInsertError } = await supabase.from('whatsapp_tasks').insert({
-                client_id: clientId,
-                assigned_to: dispatch.operatorId,
-                type: dispatch.callType,
+              const waResult = await dataService.createWhatsAppTask({
+                clientId,
+                assignedTo: dispatch.operatorId || undefined,
+                type: dispatch.callType as any,
                 status: 'pending',
                 source: 'manual',
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
+                sourceId: campanha.id,
+                proposito: dispatch.proposito
               });
-              if (waInsertError) throw waInsertError;
-              result.tasks_criadas++;
-              result.whatsapp_criados++;
+              if (waResult.created) {
+                result.tasks_criadas++;
+                result.whatsapp_criados++;
+              }
             }
 
             const { error: interactionError } = await supabase.from('campanha_interacoes').insert({

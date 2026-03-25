@@ -36,6 +36,7 @@ export const SmartImportModal: React.FC<SmartImportModalProps> = ({ isOpen, onCl
       const headers = Object.keys(rawData[0]);
       console.log('Headers Importados:', headers);
       const mapping = SmartImportService.detectColumnMapping(headers);
+      SmartImportService.validateRequiredColumns(mapping);
       
       const existingClients = await dataService.getClients();
       
@@ -82,7 +83,7 @@ export const SmartImportModal: React.FC<SmartImportModalProps> = ({ isOpen, onCl
         {!stats ? (
              <div className="space-y-4">
                <p className="text-sm text-gray-600">
-                   Envie uma planilha (Excel ou CSV) com os dados dos seus clientes. O sistema mapeará as colunas de "Nome", "Telefone", "E-mail" e Endereço automaticamente.
+                   Envie uma planilha (Excel ou CSV). Para importar, basta ter as colunas de "Nome", "Telefone" e "Perfil". Campos como e-mail, endereço, categoria e equipamento continuam opcionais.
                </p>
                
                <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center bg-gray-50 flex flex-col items-center justify-center cursor-pointer hover:bg-gray-100 transition-colors"
@@ -128,7 +129,7 @@ export const SmartImportModal: React.FC<SmartImportModalProps> = ({ isOpen, onCl
                 </div>
                 {stats.errors > 0 && (
                     <p className="text-xs text-red-500 mt-2 flex items-center justify-center gap-1">
-                        <AlertTriangle size={12} /> Algumas linhas não tinham telefone válido.
+                        <AlertTriangle size={12} /> Algumas linhas foram ignoradas por não terem telefone ou perfil válido.
                     </p>
                 )}
             </div>

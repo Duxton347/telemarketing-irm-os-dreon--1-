@@ -27,9 +27,74 @@ import {
 import { normalizeInterestProduct, normalizeInterestProductList } from '../utils/interestCatalog';
 import { PortfolioCatalogService } from './portfolioCatalogService';
 import { decodeLatin1 } from '../utils/textEncoding';
+import {
+  buildQuestionnaireBusinessContext,
+  buildQuestionnaireClientContext
+} from '../utils/questionnaireBusinessRules';
 
 const normalize = (str: string) =>
   str ? str.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, "") : "";
+
+const normalizeClientNameKey = (value?: unknown) => normalize(String(value || ''));
+
+const mergePhoneFields = (
+  primaryCandidate?: string | null,
+  secondaryCandidate?: string | null
+): { phone?: string; phone_secondary?: string | null } => {
+  const uniquePhones = Array.from(
+    new Set(
+      [primaryCandidate, secondaryCandidate]
+        .map(value => normalizePhone(String(value || '')))
+        .filter(Boolean)
+    )
+  );
+
+  return {
+    phone: uniquePhones[0],
+    phone_secondary: uniquePhones[1] || null
+  };
+};
+
+const isLikelyBrazilPhoneLength = (value?: string | null) => {
+  const digits = normalizePhone(String(value || ''));
+  return digits.length >= 10 && digits.length <= 13;
+};
+
+const isLikelyCombinedPhone = (value?: string | null) => {
+  const digits = normalizePhone(String(value || ''));
+  return digits.length >= 14;
+};
+
+const extractCandidatePhonesFromCombined = (value?: string | null): string[] => {
+  const digits = normalizePhone(String(value || ''));
+  if (!isLikelyCombinedPhone(digits)) return [];
+
+  const candidates = new Set<string>();
+  const sizes = [13, 12, 11, 10];
+
+  for (const size of sizes) {
+    if (digits.length > size) {
+      const prefix = digits.slice(0, size);
+      const suffix = digits.slice(-size);
+      if (isLikelyBrazilPhoneLength(prefix)) candidates.add(prefix);
+      if (isLikelyBrazilPhoneLength(suffix)) candidates.add(suffix);
+    }
+  }
+
+  return Array.from(candidates);
+};
+
+const scoreClientRecordForMerge = (client: any) => {
+  return [
+    client?.status === 'CLIENT' ? 10 : 0,
+    Array.isArray(client?.tags) ? client.tags.length : 0,
+    getTrimmedText(client?.email) ? 2 : 0,
+    getTrimmedText(client?.buyer_name) ? 2 : 0,
+    getTrimmedText(client?.responsible_phone) ? 2 : 0,
+    getTrimmedText(client?.phone_secondary) ? 1 : 0,
+    Array.isArray(client?.portfolio_entries) ? client.portfolio_entries.length : 0
+  ].reduce((sum, value) => sum + value, 0);
+};
 
 const COMMUNICATION_BLOCK_DAYS_SETTING_KEY = 'COMMUNICATION_BLOCK_DAYS';
 const DEFAULT_COMMUNICATION_BLOCK_DAYS = 3;
@@ -117,6 +182,142 @@ const getConfiguredCommunicationBlockDays = async (): Promise<number> => {
   return normalizeCommunicationBlockDays(data?.value);
 };
 
+const cleanupDuplicateWhatsAppQueueEntries = async (
+  options?: {
+    clientId?: string;
+    operatorId?: string;
+    taskType?: string;
+  }
+): Promise<number> => {
+  const blockDays = await getConfiguredCommunicationBlockDays();
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - blockDays);
+  const cutoffIso = cutoff.toISOString();
+
+  let openQuery = supabase
+    .from('whatsapp_tasks')
+    .select('id, client_id, assigned_to, type, status, created_at, started_at, completed_at, updated_at')
+    .in('status', ['pending', 'started'])
+    .order('created_at', { ascending: true });
+
+  let recentClosedQuery = supabase
+    .from('whatsapp_tasks')
+    .select('id, client_id, assigned_to, type, status, created_at, started_at, completed_at, updated_at')
+    .in('status', ['completed', 'skipped'])
+    .gte('completed_at', cutoffIso)
+    .order('completed_at', { ascending: false });
+
+  if (options?.clientId) {
+    openQuery = openQuery.eq('client_id', options.clientId);
+    recentClosedQuery = recentClosedQuery.eq('client_id', options.clientId);
+  }
+
+  if (options?.taskType) {
+    openQuery = openQuery.eq('type', options.taskType);
+    recentClosedQuery = recentClosedQuery.eq('type', options.taskType);
+  }
+
+  const [{ data: openTasks, error: openTasksError }, { data: recentClosedTasks, error: recentClosedTasksError }] = await Promise.all([
+    openQuery,
+    recentClosedQuery
+  ]);
+
+  if (openTasksError) throw openTasksError;
+  if (recentClosedTasksError) throw recentClosedTasksError;
+
+  const groupedOpenTasks = new Map<string, any[]>();
+  const groupedRecentClosedTasks = new Map<string, any[]>();
+
+  for (const task of openTasks || []) {
+    const key = `${task.client_id || ''}::${task.type || ''}`;
+    const group = groupedOpenTasks.get(key) || [];
+    group.push(task);
+    groupedOpenTasks.set(key, group);
+  }
+
+  for (const task of recentClosedTasks || []) {
+    const key = `${task.client_id || ''}::${task.type || ''}`;
+    const group = groupedRecentClosedTasks.get(key) || [];
+    group.push(task);
+    groupedRecentClosedTasks.set(key, group);
+  }
+
+  const toDelete = new Set<string>();
+  const recentCommunicationClientIds = await loadClientIdsWithRecentCommunication(
+    (openTasks || []).map(task => task.client_id).filter(Boolean)
+  );
+
+  for (const [key, group] of groupedOpenTasks.entries()) {
+    const orderedGroup = [...group].sort((left, right) =>
+      new Date(left.created_at || 0).getTime() - new Date(right.created_at || 0).getTime()
+    );
+
+    if (orderedGroup.length > 1) {
+      orderedGroup.slice(1).forEach(task => toDelete.add(task.id));
+    }
+
+    const recentClosedGroup = groupedRecentClosedTasks.get(key) || [];
+    if (recentClosedGroup.length > 0) {
+      orderedGroup.forEach(task => toDelete.add(task.id));
+    }
+
+    orderedGroup
+      .filter(task => task.status === 'pending' && recentCommunicationClientIds.has(task.client_id))
+      .forEach(task => toDelete.add(task.id));
+  }
+
+  if (toDelete.size === 0) {
+    return 0;
+  }
+
+  const ids = Array.from(toDelete);
+  const chunkSize = 50;
+  for (let index = 0; index < ids.length; index += chunkSize) {
+    const chunk = ids.slice(index, index + chunkSize);
+    const { error } = await supabase.from('whatsapp_tasks').delete().in('id', chunk);
+    if (error) throw error;
+  }
+
+  return ids.length;
+};
+
+const findOpenWhatsAppTask = async (clientId: string, taskType?: string) => {
+  let query = supabase
+    .from('whatsapp_tasks')
+    .select('id, client_id, assigned_to, type, status, source, source_id, created_at')
+    .eq('client_id', clientId)
+    .in('status', ['pending', 'started'])
+    .order('created_at', { ascending: true })
+    .limit(1);
+
+  if (taskType) {
+    query = query.eq('type', taskType);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data?.[0] || null;
+};
+
+const findOpenVoiceTask = async (clientId: string, taskType?: string) => {
+  let query = supabase
+    .from('tasks')
+    .select('id, client_id, assigned_to, type, status, campanha_id, proposito, created_at')
+    .eq('client_id', clientId)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: true })
+    .limit(1);
+
+  const normalizedType = mapTaskTypeToDb(taskType);
+  if (normalizedType) {
+    query = query.eq('type', normalizedType);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data?.[0] || null;
+};
+
 const getRecentCommunicationDetails = async (clientId: string) => {
   const blockDays = await getConfiguredCommunicationBlockDays();
 
@@ -131,15 +332,39 @@ const getRecentCommunicationDetails = async (clientId: string) => {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - blockDays);
 
-  const { data, error } = await supabase
-    .from('call_logs')
-    .select('id, start_time')
-    .eq('client_id', clientId)
-    .gte('start_time', cutoff.toISOString())
-    .order('start_time', { ascending: false })
-    .limit(1);
+  const cutoffIso = cutoff.toISOString();
 
-  if (error || !data || data.length === 0) {
+  const [{ data: recentCalls, error: callsError }, { data: recentWhatsApp, error: whatsAppError }] = await Promise.all([
+    supabase
+      .from('call_logs')
+      .select('id, start_time')
+      .eq('client_id', clientId)
+      .gte('start_time', cutoffIso)
+      .order('start_time', { ascending: false })
+      .limit(1),
+    supabase
+      .from('whatsapp_tasks')
+      .select('id, created_at, started_at, completed_at, updated_at, status')
+      .eq('client_id', clientId)
+      .in('status', ['pending', 'started', 'completed', 'skipped'])
+      .or(`created_at.gte.${cutoffIso},started_at.gte.${cutoffIso},completed_at.gte.${cutoffIso},updated_at.gte.${cutoffIso}`)
+      .order('completed_at', { ascending: false })
+      .limit(1)
+  ]);
+
+  if (callsError) throw callsError;
+  if (whatsAppError) throw whatsAppError;
+
+  const lastCallAt = recentCalls?.[0]?.start_time;
+  const lastWhatsAppAt = recentWhatsApp?.[0]?.completed_at
+    || recentWhatsApp?.[0]?.started_at
+    || recentWhatsApp?.[0]?.updated_at
+    || recentWhatsApp?.[0]?.created_at;
+  const lastCommunicationAt = [lastCallAt, lastWhatsAppAt]
+    .filter(Boolean)
+    .sort((left, right) => new Date(right as string).getTime() - new Date(left as string).getTime())[0];
+
+  if (!lastCommunicationAt) {
     return {
       blocked: false,
       blockDays,
@@ -150,8 +375,190 @@ const getRecentCommunicationDetails = async (clientId: string) => {
   return {
     blocked: true,
     blockDays,
-    lastCommunicationAt: data[0]?.start_time
+    lastCommunicationAt
   };
+};
+
+const loadClientIdsWithRecentCommunication = async (clientIds: string[]): Promise<Set<string>> => {
+  const uniqueClientIds = Array.from(new Set(clientIds.filter(Boolean)));
+  if (uniqueClientIds.length === 0) {
+    return new Set<string>();
+  }
+
+  const blockDays = await getConfiguredCommunicationBlockDays();
+  if (blockDays <= 0) {
+    return new Set<string>();
+  }
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - blockDays);
+  const cutoffIso = cutoff.toISOString();
+  const recentClientIds = new Set<string>();
+  const chunkSize = 200;
+
+  for (let index = 0; index < uniqueClientIds.length; index += chunkSize) {
+    const chunk = uniqueClientIds.slice(index, index + chunkSize);
+    const [{ data: recentCalls, error: callsError }, { data: recentWhatsApp, error: whatsAppError }] = await Promise.all([
+      supabase
+        .from('call_logs')
+        .select('client_id')
+        .in('client_id', chunk)
+        .gte('start_time', cutoffIso),
+      supabase
+        .from('whatsapp_tasks')
+        .select('client_id')
+        .in('client_id', chunk)
+        .in('status', ['started', 'completed', 'skipped'])
+        .or(`created_at.gte.${cutoffIso},started_at.gte.${cutoffIso},completed_at.gte.${cutoffIso},updated_at.gte.${cutoffIso}`)
+    ]);
+
+    if (callsError) throw callsError;
+    if (whatsAppError) throw whatsAppError;
+
+    (recentCalls || []).forEach((row: any) => {
+      if (row?.client_id) recentClientIds.add(row.client_id);
+    });
+    (recentWhatsApp || []).forEach((row: any) => {
+      if (row?.client_id) recentClientIds.add(row.client_id);
+    });
+  }
+
+  return recentClientIds;
+};
+
+const cleanupStaleVoiceQueueEntries = async (
+  options?: {
+    clientId?: string;
+    operatorId?: string;
+    taskType?: string;
+  }
+): Promise<number> => {
+  let query = supabase
+    .from('tasks')
+    .select('id, client_id')
+    .eq('status', 'pending');
+
+  if (options?.clientId) {
+    query = query.eq('client_id', options.clientId);
+  }
+
+  if (options?.operatorId) {
+    query = query.eq('assigned_to', options.operatorId);
+  }
+
+  if (options?.taskType) {
+    query = query.eq('type', options.taskType);
+  }
+
+  const { data: pendingTasks, error } = await query;
+  if (error) throw error;
+  if (!pendingTasks || pendingTasks.length === 0) return 0;
+
+  const recentClientIds = await loadClientIdsWithRecentCommunication(
+    pendingTasks.map(task => task.client_id).filter(Boolean)
+  );
+
+  const staleTaskIds = pendingTasks
+    .filter(task => recentClientIds.has(task.client_id))
+    .map(task => task.id);
+
+  if (staleTaskIds.length === 0) return 0;
+
+  const chunkSize = 50;
+  for (let index = 0; index < staleTaskIds.length; index += chunkSize) {
+    const chunk = staleTaskIds.slice(index, index + chunkSize);
+    const { error: updateError } = await supabase
+      .from('tasks')
+      .update({
+        status: 'skipped',
+        skip_reason: 'recent_communication_block'
+      })
+      .in('id', chunk);
+    if (updateError) throw updateError;
+  }
+
+  return staleTaskIds.length;
+};
+
+const cleanupInvalidVoiceQueueEntries = async (
+  options?: {
+    operatorId?: string;
+  }
+): Promise<number> => {
+  let query = supabase
+    .from('tasks')
+    .select('id, client_id, status, clients(id, invalid)')
+    .eq('status', 'pending');
+
+  if (options?.operatorId) {
+    query = query.eq('assigned_to', options.operatorId);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  const invalidTaskIds = (data || [])
+    .filter((row: any) => {
+      const client = Array.isArray(row.clients) ? row.clients[0] : row.clients;
+      return !client || client.invalid === true;
+    })
+    .map((row: any) => row.id);
+
+  if (invalidTaskIds.length === 0) return 0;
+
+  const chunkSize = 50;
+  for (let index = 0; index < invalidTaskIds.length; index += chunkSize) {
+    const chunk = invalidTaskIds.slice(index, index + chunkSize);
+    const { error: updateError } = await supabase
+      .from('tasks')
+      .update({
+        status: 'skipped',
+        skip_reason: 'invalid_client'
+      })
+      .in('id', chunk);
+    if (updateError) throw updateError;
+  }
+
+  return invalidTaskIds.length;
+};
+
+const cleanupInvalidWhatsAppQueueEntries = async (
+  options?: {
+    operatorId?: string;
+  }
+): Promise<number> => {
+  let query = supabase
+    .from('whatsapp_tasks')
+    .select('id, client_id, status, clients(id, invalid)')
+    .in('status', ['pending', 'started']);
+
+  if (options?.operatorId) {
+    query = query.eq('assigned_to', options.operatorId);
+  }
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  const invalidTaskIds = (data || [])
+    .filter((row: any) => {
+      const client = Array.isArray(row.clients) ? row.clients[0] : row.clients;
+      return !client || client.invalid === true;
+    })
+    .map((row: any) => row.id);
+
+  if (invalidTaskIds.length === 0) return 0;
+
+  const chunkSize = 50;
+  for (let index = 0; index < invalidTaskIds.length; index += chunkSize) {
+    const chunk = invalidTaskIds.slice(index, index + chunkSize);
+    const { error: deleteError } = await supabase
+      .from('whatsapp_tasks')
+      .delete()
+      .in('id', chunk);
+    if (deleteError) throw deleteError;
+  }
+
+  return invalidTaskIds.length;
 };
 
 const cleanupDuplicateSchedulesForEntries = async (
@@ -373,6 +780,142 @@ const removeUpdatedAt = <T extends Record<string, any>>(payload: T): Omit<T, 'up
   return rest;
 };
 
+const sortClientCandidates = (clients: any[]) => {
+  return [...clients].sort((left, right) => {
+    const leftCreatedAt = new Date(left.created_at || left.updated_at || 0).getTime();
+    const rightCreatedAt = new Date(right.created_at || right.updated_at || 0).getTime();
+    if (leftCreatedAt !== rightCreatedAt) {
+      return leftCreatedAt - rightCreatedAt;
+    }
+    return String(left.id || '').localeCompare(String(right.id || ''));
+  });
+};
+
+const mergeUniqueClientCandidates = (...groups: any[][]) => {
+  const seen = new Set<string>();
+  const merged: any[] = [];
+
+  for (const group of groups) {
+    for (const client of group || []) {
+      if (!client?.id || seen.has(client.id)) continue;
+      seen.add(client.id);
+      merged.push(client);
+    }
+  }
+
+  return sortClientCandidates(merged);
+};
+
+const findExistingClientForUpsert = async (client: Partial<Client>, normalizedPhone: string) => {
+  const normalizedSecondaryPhone = normalizePhone(client.phone_secondary || '');
+  const structuredAddress = resolveStructuredAddressFields(client);
+  const trimmedName = getTrimmedText(client.name);
+  const trimmedStreet = getTrimmedText(structuredAddress.street);
+  const normalizedNameKey = normalizeClientNameKey(trimmedName);
+
+  let idMatches: any[] = [];
+  let externalMatches: any[] = [];
+  let primaryPhoneMatches: any[] = [];
+  let secondaryPhoneMatches: any[] = [];
+  let crossPhoneMatches: any[] = [];
+  let secondaryCrossMatches: any[] = [];
+  let nameStreetMatches: any[] = [];
+  let normalizedNameMatches: any[] = [];
+
+  if (client.id) {
+    const { data, error } = await supabase.from('clients').select('*').eq('id', client.id).neq('invalid', true).limit(5);
+    if (error) throw error;
+    idMatches = data || [];
+  }
+
+  if (client.external_id) {
+    const { data, error } = await supabase.from('clients').select('*').eq('external_id', client.external_id).neq('invalid', true).limit(5);
+    if (error) throw error;
+    externalMatches = data || [];
+  }
+
+  if (normalizedPhone) {
+    const { data, error } = await supabase.from('clients').select('*').eq('phone', normalizedPhone).neq('invalid', true).limit(10);
+    if (error) throw error;
+    primaryPhoneMatches = data || [];
+
+    const { data: secondaryData, error: secondaryError } = await supabase
+      .from('clients')
+      .select('*')
+      .eq('phone_secondary', normalizedPhone)
+      .neq('invalid', true)
+      .limit(10);
+    if (secondaryError) throw secondaryError;
+    secondaryPhoneMatches = secondaryData || [];
+  }
+
+  if (normalizedSecondaryPhone) {
+    const { data, error } = await supabase.from('clients').select('*').eq('phone', normalizedSecondaryPhone).neq('invalid', true).limit(10);
+    if (error) throw error;
+    crossPhoneMatches = data || [];
+
+    const { data: secondaryData, error: secondaryError } = await supabase
+      .from('clients')
+      .select('*')
+      .eq('phone_secondary', normalizedSecondaryPhone)
+      .neq('invalid', true)
+      .limit(10);
+    if (secondaryError) throw secondaryError;
+    secondaryCrossMatches = secondaryData || [];
+  }
+
+  if (trimmedName && trimmedStreet) {
+    const { data, error } = await supabase
+      .from('clients')
+      .select('*')
+      .neq('invalid', true)
+      .ilike('name', trimmedName)
+      .ilike('street', trimmedStreet)
+      .limit(10);
+    if (error) throw error;
+    nameStreetMatches = data || [];
+  }
+
+  if (normalizedNameKey) {
+    const { data, error } = await supabase.from('clients').select('*').neq('invalid', true).limit(200);
+    if (error) throw error;
+    normalizedNameMatches = (data || []).filter(candidate => {
+      if (normalizeClientNameKey(candidate.name) !== normalizedNameKey) return false;
+
+      if (!normalizedPhone && !normalizedSecondaryPhone) {
+        return true;
+      }
+
+      const candidatePhones = [candidate.phone, candidate.phone_secondary]
+        .map(value => normalizePhone(String(value || '')))
+        .filter(Boolean);
+
+      return candidatePhones.some(
+        candidatePhone => candidatePhone === normalizedPhone || candidatePhone === normalizedSecondaryPhone
+      );
+    });
+  }
+
+  const matches = mergeUniqueClientCandidates(
+    idMatches,
+    externalMatches,
+    primaryPhoneMatches,
+    secondaryPhoneMatches,
+    crossPhoneMatches,
+    secondaryCrossMatches,
+    nameStreetMatches,
+    normalizedNameMatches
+  );
+
+  return matches[0] || null;
+};
+
+const isUniqueViolationError = (error: any) => {
+  return error?.code === '23505'
+    || String(error?.message || '').toLowerCase().includes('duplicate key')
+    || String(error?.message || '').toLowerCase().includes('unique constraint');
+};
+
 const runUpdateWithUpdatedAtFallback = async <TResult>(
   tableName: string,
   payload: Record<string, any>,
@@ -382,6 +925,28 @@ const runUpdateWithUpdatedAtFallback = async <TResult>(
 
   if (result?.error && payload.updated_at !== undefined && isMissingSchemaColumnError(result.error, tableName, 'updated_at')) {
     result = await updater(removeUpdatedAt(payload));
+  }
+
+  return result;
+};
+
+const insertWhatsAppTaskRecord = async (payload: Record<string, any>) => {
+  let result = await supabase.from('whatsapp_tasks').insert(payload);
+
+  if (result.error && payload.proposito !== undefined && isMissingSchemaColumnError(result.error, 'whatsapp_tasks', 'proposito')) {
+    const { proposito, ...safePayload } = payload;
+    result = await supabase.from('whatsapp_tasks').insert(safePayload);
+  }
+
+  return result;
+};
+
+const insertTaskRecord = async (payload: Record<string, any>) => {
+  let result = await supabase.from('tasks').insert(payload);
+
+  if (result.error && payload.proposito !== undefined && isMissingSchemaColumnError(result.error, 'tasks', 'proposito')) {
+    const { proposito, ...safePayload } = payload;
+    result = await supabase.from('tasks').insert(safePayload);
   }
 
   return result;
@@ -564,6 +1129,11 @@ const expandCallTypeQueryValues = (callType?: CallType | 'ALL' | string) => {
 };
 
 const REPORT_METADATA_KEYS = new Set([
+  'questionnaire_business_tags',
+  'questionnaire_business_indices',
+  'questionnaire_business_profile',
+  'questionnaire_business_questions',
+  'questionnaire_business_feeds',
   'target_product',
   'offer_product',
   'portfolio_scope',
@@ -1041,7 +1611,12 @@ const enrichClientInsightsFromCallLogs = (callLogs: any[] = [], questions: Quest
   };
 };
 
-const buildDerivedClientTags = (client: any, callLogs: any[] = [], derivedProfile: Partial<Client> = {}) => {
+const buildDerivedClientTags = (
+  client: any,
+  callLogs: any[] = [],
+  derivedProfile: Partial<Client> = {},
+  questions: Question[] = []
+) => {
   const nextTags = new Set<string>(Array.isArray(client?.tags) ? client.tags : []);
 
   if (client?.status === 'CLIENT') {
@@ -1064,11 +1639,37 @@ const buildDerivedClientTags = (client: any, callLogs: any[] = [], derivedProfil
     nextTags.add('CLIENTE_INSATISFEITO');
   }
 
+  if (client?.email || derivedProfile.email) nextTags.add('CADASTRO_COM_EMAIL');
+  if (client?.buyer_name || derivedProfile.buyer_name) nextTags.add('CADASTRO_COM_DECISOR');
+  if (client?.responsible_phone || derivedProfile.responsible_phone) nextTags.add('CADASTRO_COM_WHATSAPP');
+  if ((client?.email || derivedProfile.email) && (client?.buyer_name || derivedProfile.buyer_name) && (client?.responsible_phone || derivedProfile.responsible_phone)) {
+    nextTags.add('CADASTRO_RICO');
+  } else {
+    nextTags.add('CADASTRO_INCOMPLETO');
+  }
+
   const hasNegativeSignal = callLogs.some(log => hasNegativeCallSignal(log.responses));
   const hasPositiveSignal = callLogs.some(log => hasPositiveCallSignal(log.responses));
 
   if (hasNegativeSignal) nextTags.add('CLIENTE_INSATISFEITO');
   if (hasPositiveSignal) nextTags.add('CLIENTE_SATISFEITO');
+
+  callLogs.forEach(log => {
+    const business = buildQuestionnaireBusinessContext({
+      responses: log.responses || {},
+      questions,
+      callType: log.call_type,
+      proposito: log.proposito,
+      clientContext: buildQuestionnaireClientContext({
+        email: derivedProfile.email || client?.email,
+        buyer_name: derivedProfile.buyer_name || client?.buyer_name,
+        responsible_phone: derivedProfile.responsible_phone || client?.responsible_phone,
+        status: client?.status
+      } as any)
+    });
+
+    business.tags.forEach(tag => nextTags.add(tag));
+  });
 
   return Array.from(nextTags);
 };
@@ -1103,7 +1704,7 @@ const syncDerivedTagsForClient = async (clientId: string): Promise<boolean> => {
   }
 
   const { normalizedLogs, derivedProfile } = enrichClientInsightsFromCallLogs(callLogs || [], questions);
-  const nextTags = buildDerivedClientTags(client, normalizedLogs, derivedProfile);
+  const nextTags = buildDerivedClientTags(client, normalizedLogs, derivedProfile, questions);
   const currentTags = Array.isArray(client.tags) ? client.tags : [];
   const sortedCurrent = [...currentTags].sort();
   const sortedNext = [...nextTags].sort();
@@ -1708,25 +2309,16 @@ export const dataService = {
     if (error) throw error;
   },
 
-  getQuestions: async (callType?: CallType | 'ALL', proposito?: string): Promise<Question[]> => {
+  getQuestions: async (
+    callType?: CallType | 'ALL' | string,
+    proposito?: string,
+    context?: { clientContext?: any; responses?: Record<string, any> }
+  ): Promise<Question[]> => {
     try {
-      let query = supabase.from('questions')
-        .select('*')
-        .eq('ativo', true)
-        .order('order_index', { ascending: true });
-        
-      if (callType) {
-        query = query.in('type', expandCallTypeQueryValues(callType));
-      }
-      
-      if (proposito) {
-        // Get questions specifically for this purpose OR global/generic ones (where proposito is null)
-        query = query.or(`proposito.eq.${proposito},proposito.is.null`);
-      }
-
-      const { data, error } = await query;
-      if (error) throw error;
-      return (data || []).map(mapQuestionRecord);
+      const allQuestions = await loadActiveQuestions();
+      return allQuestions.filter(question =>
+        questionMatchesContext(question, callType, proposito, context)
+      );
     } catch (e) { return []; }
   },
 
@@ -1752,6 +2344,9 @@ export const dataService = {
   },
 
   getTasks: async (operatorId?: string): Promise<Task[]> => {
+    await cleanupStaleVoiceQueueEntries({ operatorId });
+    await cleanupInvalidVoiceQueueEntries({ operatorId });
+
     // 1. Fetch Legacy Tasks (standard queue)
     let tasksQuery = supabase.from('tasks').select('*, clients(*)').in('status', ['pending', 'skipped']);
     if (operatorId) {
@@ -1763,6 +2358,10 @@ export const dataService = {
 
     const legacyTasks: Task[] = (tasksData || [])
       .filter(t => t.client_id) // Only require a valid client_id, don't filter by join result
+      .filter((t: any) => {
+        const clientObj = Array.isArray(t.clients) ? t.clients[0] : t.clients;
+        return clientObj?.invalid !== true;
+      })
       .map(t => {
         const clientObj = Array.isArray(t.clients) ? t.clients[0] : t.clients;
         const campaignContext = campaignContextMap.get(t.campanha_id) || {};
@@ -1813,26 +2412,31 @@ export const dataService = {
     const { data: schedData, error: schedError } = await schedQuery.order('scheduled_for', { ascending: true });
     if (schedError) throw schedError;
 
-    const scheduledTasks: Task[] = (schedData || []).map(s => {
-      const clientObj = Array.isArray(s.clients) ? s.clients[0] : s.clients;
-      return {
-        id: s.id,
-        clientId: s.customer_id || '', // Task expects string
-        clientName: clientObj?.name || s.clients?.name || 'Cliente Agendado',
-        clientPhone: clientObj?.phone || s.clients?.phone,
-        clients: clientObj || null,
-        type: clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : mapStoredCallTypeToApp(s.call_type),
-        deadline: s.scheduled_for, // Use scheduled time as deadline/display time
-        assignedTo: s.assigned_operator_id,
-        status: 'pending', // Active in queue
-        scheduledFor: s.scheduled_for,
-        scheduleReason: s.schedule_reason,
-        originCallId: s.origin_call_id,
-        approvalStatus: 'APPROVED',
-        createdAt: s.created_at,
-        updatedAt: s.updated_at
-      };
-    });
+    const scheduledTasks: Task[] = (schedData || [])
+      .filter((s: any) => {
+        const clientObj = Array.isArray(s.clients) ? s.clients[0] : s.clients;
+        return clientObj?.invalid !== true;
+      })
+      .map(s => {
+        const clientObj = Array.isArray(s.clients) ? s.clients[0] : s.clients;
+        return {
+          id: s.id,
+          clientId: s.customer_id || '', // Task expects string
+          clientName: clientObj?.name || s.clients?.name || 'Cliente Agendado',
+          clientPhone: clientObj?.phone || s.clients?.phone,
+          clients: clientObj || null,
+          type: clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : mapStoredCallTypeToApp(s.call_type),
+          deadline: s.scheduled_for, // Use scheduled time as deadline/display time
+          assignedTo: s.assigned_operator_id,
+          status: 'pending', // Active in queue
+          scheduledFor: s.scheduled_for,
+          scheduleReason: s.schedule_reason,
+          originCallId: s.origin_call_id,
+          approvalStatus: 'APPROVED',
+          createdAt: s.created_at,
+          updatedAt: s.updated_at
+        };
+      });
 
     // 3. Merge and De-duplicate: Prioritize Schedules
     const combined = [...scheduledTasks, ...legacyTasks];
@@ -1845,7 +2449,7 @@ export const dataService = {
         continue;
       }
 
-      const dedupeKey = `${task.clientId}::${task.assignedTo || 'unassigned'}::${task.type || 'unknown'}`;
+      const dedupeKey = `${task.clientId}::${task.type || 'unknown'}`;
       if (!seenPendingKeys.has(dedupeKey)) {
         seenPendingKeys.add(dedupeKey);
         uniqueTasks.push(task);
@@ -1856,20 +2460,77 @@ export const dataService = {
   },
 
 
-  createTask: async (task: Partial<Task>): Promise<void> => {
-    // Save to DB using the mapped type to avoid check constraint errors if REATIVACAO is missing
-    const dbType = task.type === CallType.REATIVACAO ? 'POS_VENDA' : task.type;
-    const { error } = await supabase.from('tasks').insert({
+  createTask: async (task: Partial<Task>): Promise<{ created: boolean; existingTaskId?: string }> => {
+    if (!task.clientId) throw new Error('Cliente obrigatorio para criar atendimento.');
+
+    const dbType = mapTaskTypeToDb(task.type);
+    const status = task.status || 'pending';
+
+    if (status === 'pending') {
+      await cleanupStaleVoiceQueueEntries({
+        clientId: task.clientId,
+        taskType: dbType
+      });
+
+      const recentCommunication = await getRecentCommunicationDetails(task.clientId);
+      if (recentCommunication.blocked) {
+        return { created: false };
+      }
+
+      const existingTask = await findOpenVoiceTask(task.clientId, dbType);
+      if (existingTask) {
+        if ((!existingTask.assigned_to && task.assignedTo) || (!existingTask.campanha_id && task.campanha_id) || (!existingTask.proposito && task.proposito)) {
+          const payload: Record<string, any> = {};
+
+          if (!existingTask.assigned_to && task.assignedTo) {
+            payload.assigned_to = task.assignedTo;
+          }
+
+          if (!existingTask.campanha_id && task.campanha_id) {
+            payload.campanha_id = task.campanha_id;
+          }
+
+          if (!existingTask.proposito && task.proposito) {
+            payload.proposito = task.proposito;
+          }
+
+          if (Object.keys(payload).length > 0) {
+            const { error: updateError } = await runUpdateWithUpdatedAtFallback(
+              'tasks',
+              { ...payload, updated_at: new Date().toISOString() },
+              (safePayload) => supabase.from('tasks').update(safePayload).eq('id', existingTask.id)
+            );
+            if (updateError) throw updateError;
+          }
+        }
+
+        return { created: false, existingTaskId: existingTask.id };
+      }
+    }
+
+    const { error } = await insertTaskRecord({
       client_id: task.clientId,
       type: dbType,
       assigned_to: task.assignedTo,
-      status: task.status || 'pending',
+      status,
       scheduled_for: task.scheduledFor,
       schedule_reason: task.scheduleReason,
       proposito: task.proposito,
       campanha_id: task.campanha_id
     });
-    if (error) throw error;
+
+    if (error) {
+      if (status === 'pending' && isUniqueViolationError(error)) {
+        const existingAfterConflict = await findOpenVoiceTask(task.clientId, dbType);
+        if (existingAfterConflict) {
+          return { created: false, existingTaskId: existingAfterConflict.id };
+        }
+      }
+
+      throw error;
+    }
+
+    return { created: true };
   },
 
   updateTask: async (taskId: string, updates: Partial<Task>): Promise<void> => {
@@ -2221,6 +2882,18 @@ export const dataService = {
     return details.blocked;
   },
 
+  cleanupDuplicateWhatsAppQueueEntries: async (
+    clientId?: string,
+    operatorId?: string,
+    taskType?: string
+  ): Promise<number> => {
+    return cleanupDuplicateWhatsAppQueueEntries({
+      clientId,
+      operatorId,
+      taskType
+    });
+  },
+
   deleteDuplicateSchedules: async (): Promise<number> => {
     const { data, error } = await supabase
       .from('call_schedules')
@@ -2263,12 +2936,15 @@ export const dataService = {
   },
 
   saveCall: async (call: CallRecord): Promise<{ id: string, suggestedTags: ClientTag[] }> => {
-    const questions = await dataService.getQuestions(call.type as CallType, call.proposito);
+    const clientSnapshot = await dataService.getClientById(call.clientId).catch(() => null);
+    const questionnaireContext = { clientContext: buildQuestionnaireClientContext(clientSnapshot) };
+    const questions = await dataService.getQuestions(call.type as CallType, call.proposito, questionnaireContext);
     const { enrichedResponses, email, interestProduct, buyerName, responsiblePhone } = extractClientInsightsFromResponses(
       call.responses || {},
       questions,
       call.type,
-      call.proposito
+      call.proposito,
+      questionnaireContext
     );
     const campaignInsights = extractCampaignInsightsFromResponses(
       enrichedResponses,
@@ -2283,6 +2959,13 @@ export const dataService = {
     const normalizedOfferProduct = normalizeInterestProduct(
       call.offerProduct || campaignInsights.enrichedResponses.offer_product
     );
+    const businessContext = buildQuestionnaireBusinessContext({
+      responses: campaignInsights.enrichedResponses,
+      questions,
+      callType: call.type,
+      proposito: call.proposito,
+      clientContext: questionnaireContext.clientContext
+    });
     const enrichedCallResponses = {
       ...campaignInsights.enrichedResponses,
       interest_product: normalizedResponseInterestProduct || campaignInsights.enrichedResponses.interest_product,
@@ -2292,7 +2975,12 @@ export const dataService = {
       portfolio_scope: call.portfolioScope || campaignInsights.portfolioScope || campaignInsights.enrichedResponses.portfolio_scope,
       offer_interest_level: call.offerInterestLevel || campaignInsights.offerInterestLevel || campaignInsights.enrichedResponses.offer_interest_level,
       offer_blocker_reason: call.offerBlockerReason || campaignInsights.offerBlockerReason || campaignInsights.enrichedResponses.offer_blocker_reason,
-      campaign_name: call.campaignName || campaignInsights.enrichedResponses.campaign_name
+      campaign_name: call.campaignName || campaignInsights.enrichedResponses.campaign_name,
+      questionnaire_business_tags: businessContext.tags,
+      questionnaire_business_indices: businessContext.indices,
+      questionnaire_business_profile: businessContext.profile,
+      questionnaire_business_questions: businessContext.questionSignals,
+      questionnaire_business_feeds: businessContext.feeds
     };
 
     const { data: insertedCall, error } = await supabase.from('call_logs').insert({
@@ -2315,7 +3003,11 @@ export const dataService = {
 
     const clientUpdates: any = { last_interaction: new Date().toISOString() };
     if (email) clientUpdates.email = email;
-    if (interestProduct) clientUpdates.interest_product = normalizeInterestProduct(interestProduct);
+    if (interestProduct || businessContext.capturedData.interestProduct) {
+      clientUpdates.interest_product = normalizeInterestProduct(
+        interestProduct || businessContext.capturedData.interestProduct
+      );
+    }
     if (buyerName) clientUpdates.buyer_name = buyerName;
     if (responsiblePhone) clientUpdates.responsible_phone = responsiblePhone;
 
@@ -2538,7 +3230,12 @@ export const dataService = {
     const limit = 1000;
 
     while (hasMore) {
-      let query = supabase.from('clients').select('*').order('name').range(fromIndex, fromIndex + limit - 1);
+      let query = supabase
+        .from('clients')
+        .select('*')
+        .neq('invalid', true)
+        .order('name')
+        .range(fromIndex, fromIndex + limit - 1);
 
       // Default: Return ONLY 'CLIENT' status.
       // If includeLeads is true, return ALL (for unified search).
@@ -2561,6 +3258,12 @@ export const dataService = {
     }
 
     return allData.map(mapClientRecord);
+  },
+
+  getClientById: async (clientId: string): Promise<Client | null> => {
+    const { data, error } = await supabase.from('clients').select('*').eq('id', clientId).maybeSingle();
+    if (error) throw error;
+    return data ? mapClientRecord(data) : null;
   },
 
   getClientHistory: async (clientId: string): Promise<ClientHistoryData> => {
@@ -2662,7 +3365,14 @@ export const dataService = {
     const limit = 1000;
 
     while (hasMore) {
-      const { data, error } = await supabase.from('clients').select('*').eq('status', 'LEAD').not('tags', 'cs', '{"JA_CLIENTE"}').order('name').range(fromIndex, fromIndex + limit - 1);
+      const { data, error } = await supabase
+        .from('clients')
+        .select('*')
+        .eq('status', 'LEAD')
+        .neq('invalid', true)
+        .not('tags', 'cs', '{"JA_CLIENTE"}')
+        .order('name')
+        .range(fromIndex, fromIndex + limit - 1);
       if (error) throw error;
 
       if (data && data.length > 0) {
@@ -2680,7 +3390,11 @@ export const dataService = {
   },
 
   findDuplicateClients: async (): Promise<any[]> => {
-    const { data: clients, error } = await supabase.from('clients').select('id, name, phone, status, created_at').order('created_at', { ascending: false });
+    const { data: clients, error } = await supabase
+      .from('clients')
+      .select('id, name, phone, status, created_at')
+      .neq('invalid', true)
+      .order('created_at', { ascending: false });
     if (error || !clients) return [];
 
     const phoneMap = new Map<string, any[]>();
@@ -2710,12 +3424,12 @@ export const dataService = {
 
       // Try exact phone match first
       let found: any = null;
-      const { data: byPhone } = await supabase.from('clients').select('id, name').eq('phone', phone).maybeSingle();
+      const { data: byPhone } = await supabase.from('clients').select('id, name').eq('phone', phone).neq('invalid', true).maybeSingle();
       if (byPhone) found = byPhone;
 
       // Fallback: match by name (case-insensitive)
       if (!found && entry.name) {
-        const { data: byName } = await supabase.from('clients').select('id, name').ilike('name', entry.name.trim()).maybeSingle();
+        const { data: byName } = await supabase.from('clients').select('id, name').neq('invalid', true).ilike('name', entry.name.trim()).maybeSingle();
         if (byName) found = byName;
       }
 
@@ -2784,34 +3498,55 @@ export const dataService = {
     const phone = normalizePhone(client.phone || '');
     if (!phone) throw new Error("Telefone obrigatório");
 
+    const normalizedSecondaryPhone = normalizePhone(client.phone_secondary || '');
     let existing: any = null;
 
     if (client.id) {
-      const { data } = await supabase.from('clients').select('*').eq('id', client.id).maybeSingle();
-      if (data) existing = data;
+      const { data } = await supabase.from('clients').select('*').eq('id', client.id).neq('invalid', true).limit(1);
+      if (data?.[0]) existing = data[0];
     }
 
     // --- 3-step deduplication ---
     // Step 1: Match by external_id (if provided and already exists in the system)
     if (!existing && client.external_id) {
-      const { data } = await supabase.from('clients').select('*').eq('external_id', client.external_id).maybeSingle();
-      if (data) existing = data;
+      const { data } = await supabase.from('clients').select('*').eq('external_id', client.external_id).neq('invalid', true).limit(1);
+      if (data?.[0]) existing = data[0];
     }
 
     // Step 2: Match by phone (normalized)
     if (!existing) {
-      const { data } = await supabase.from('clients').select('*').eq('phone', phone).maybeSingle();
-      if (data) existing = data;
+      const { data } = await supabase.from('clients').select('*').eq('phone', phone).neq('invalid', true).limit(1);
+      if (data?.[0]) existing = data[0];
+    }
+
+    if (!existing) {
+      const { data } = await supabase.from('clients').select('*').eq('phone_secondary', phone).neq('invalid', true).limit(1);
+      if (data?.[0]) existing = data[0];
+    }
+
+    if (!existing && normalizedSecondaryPhone) {
+      const { data } = await supabase.from('clients').select('*').eq('phone', normalizedSecondaryPhone).neq('invalid', true).limit(1);
+      if (data?.[0]) existing = data[0];
+    }
+
+    if (!existing && normalizedSecondaryPhone) {
+      const { data } = await supabase.from('clients').select('*').eq('phone_secondary', normalizedSecondaryPhone).neq('invalid', true).limit(1);
+      if (data?.[0]) existing = data[0];
     }
 
     // Step 3: Match by name + street (fuzzy — ilike for name)
     if (!existing && client.name && resolveStructuredAddressFields(client).street) {
       const { data } = await supabase.from('clients')
         .select('*')
+        .neq('invalid', true)
         .ilike('name', client.name)
         .ilike('street', resolveStructuredAddressFields(client).street || '')
-        .maybeSingle();
-      if (data) existing = data;
+        .limit(1);
+      if (data?.[0]) existing = data[0];
+    }
+
+    if (!existing) {
+      existing = await findExistingClientForUpsert(client, phone);
     }
 
     const structuredAddress = resolveStructuredAddressFields(client, existing);
@@ -2859,11 +3594,15 @@ export const dataService = {
         );
     const normalizedOffers = normalizeInterestProductList([...(existing?.offers || []), ...(client.offers || [])]);
     const normalizedInterestProduct = normalizeInterestProduct(existing?.interest_product || client.interest_product);
+    const mergedPhones = mergePhoneFields(
+      existing?.phone || phone,
+      existing?.phone_secondary || normalizedSecondaryPhone || client.phone_secondary || null
+    );
 
     // Build payload: existing data takes priority, only fill empty fields
     const payload: any = {
       name: existing?.name || client.name || 'Sem Nome',
-      phone,
+      phone: mergedPhones.phone,
       address: existing?.address || structuredAddress.address || '',
       items: equipmentModels,
       offers: normalizedOffers,
@@ -2882,7 +3621,7 @@ export const dataService = {
       funnel_status: existing?.funnel_status || client.funnel_status || 'NEW',
       // Address & Phone fields — fill only if empty
       external_id: existing?.external_id || client.external_id,
-      phone_secondary: existing?.phone_secondary || client.phone_secondary,
+      phone_secondary: mergedPhones.phone_secondary,
       street: structuredAddress.street || null,
       neighborhood: structuredAddress.neighborhood || null,
       city: structuredAddress.city || null,
@@ -2904,6 +3643,20 @@ export const dataService = {
     } else {
       // INSERT new record
       const { data, error } = await supabase.from('clients').insert(payload).select().single();
+      if (error && isUniqueViolationError(error)) {
+        existing = await findExistingClientForUpsert(client, phone);
+        if (existing) {
+          const { data: recoveredData, error: recoveredError } = await supabase
+            .from('clients')
+            .update(payload)
+            .eq('id', existing.id)
+            .select()
+            .single();
+          if (recoveredError) throw recoveredError;
+          await syncDerivedTagsForClient(recoveredData.id);
+          return mapClientRecord(recoveredData);
+        }
+      }
       if (error) throw error;
       await syncDerivedTagsForClient(data.id);
       return mapClientRecord(data);
@@ -2921,6 +3674,7 @@ export const dataService = {
     if (!existing) throw new Error('Cliente não encontrado');
 
     const nextPhone = normalizePhone(updates.phone || existing.phone || '');
+    const nextSecondaryPhone = normalizePhone(updates.phone_secondary || existing.phone_secondary || '');
     if (!nextPhone) throw new Error('Telefone obrigatório');
 
     const structuredAddress = resolveStructuredAddressFields(updates, existing);
@@ -2970,10 +3724,11 @@ export const dataService = {
     const normalizedInterestProduct = normalizeInterestProduct(
       updates.interest_product ?? existing.interest_product ?? undefined
     );
+    const mergedPhones = mergePhoneFields(nextPhone, nextSecondaryPhone);
 
     const payload: any = {
       name: updates.name ?? existing.name ?? 'Sem Nome',
-      phone: nextPhone,
+      phone: mergedPhones.phone,
       address: structuredAddress.address,
       items: equipmentModels,
       offers: normalizedOffers,
@@ -2992,7 +3747,7 @@ export const dataService = {
       preferred_channel: updates.preferred_channel ?? existing.preferred_channel ?? null,
       funnel_status: updates.funnel_status ?? existing.funnel_status ?? 'NEW',
       external_id: updates.external_id ?? existing.external_id ?? null,
-      phone_secondary: updates.phone_secondary ?? existing.phone_secondary ?? null,
+      phone_secondary: mergedPhones.phone_secondary,
       street: structuredAddress.street || null,
       neighborhood: structuredAddress.neighborhood || null,
       city: structuredAddress.city || null,
@@ -3075,7 +3830,11 @@ export const dataService = {
 
   // --- CLIENT MERGE (Deduplication) ---
   findDuplicatesByName: async (name: string): Promise<any[]> => {
-    const { data, error } = await supabase.from('clients').select('*').ilike('name', `%${name}%`);
+    const { data, error } = await supabase
+      .from('clients')
+      .select('*')
+      .neq('invalid', true)
+      .ilike('name', `%${name}%`);
     if (error) throw error;
     return data || [];
   },
@@ -3098,8 +3857,27 @@ export const dataService = {
       mergedMetadata.equipment_models
     );
     const mergedOffers = normalizeInterestProductList([...(keeper.offers || []), ...(duplicate.offers || [])]);
+    const candidatePhones = Array.from(
+      new Set(
+        [
+          keeper.phone,
+          keeper.phone_secondary,
+          duplicate.phone,
+          duplicate.phone_secondary,
+          ...extractCandidatePhonesFromCombined(keeper.phone),
+          ...extractCandidatePhonesFromCombined(keeper.phone_secondary),
+          ...extractCandidatePhonesFromCombined(duplicate.phone),
+          ...extractCandidatePhonesFromCombined(duplicate.phone_secondary)
+        ]
+          .map(value => normalizePhone(String(value || '')))
+          .filter(isLikelyBrazilPhoneLength)
+      )
+    );
+    const mergedPhones = mergePhoneFields(candidatePhones[0], candidatePhones[1] || null);
 
     const updatePayload: any = {
+      name: keeper.name || duplicate.name,
+      phone: mergedPhones.phone,
       items: mergedItems,
       offers: mergedOffers,
       customer_profiles: mergeUniquePortfolioValues(keeper.customer_profiles, duplicate.customer_profiles, mergedMetadata.customer_profiles),
@@ -3108,54 +3886,271 @@ export const dataService = {
       portfolio_entries: mergedPortfolioEntries,
       // Merge address/phone fields only if keeper is missing them
       external_id: keeper.external_id || duplicate.external_id,
-      phone_secondary: keeper.phone_secondary || duplicate.phone_secondary,
+      phone_secondary: mergedPhones.phone_secondary,
+      email: keeper.email || duplicate.email,
+      website: keeper.website || duplicate.website,
+      responsible_phone: keeper.responsible_phone || duplicate.responsible_phone,
+      buyer_name: keeper.buyer_name || duplicate.buyer_name,
+      preferred_channel: keeper.preferred_channel || duplicate.preferred_channel,
+      interest_product: keeper.interest_product || duplicate.interest_product,
+      last_purchase_date: keeper.last_purchase_date || duplicate.last_purchase_date,
+      address: keeper.address || duplicate.address,
       street: keeper.street || duplicate.street,
       neighborhood: keeper.neighborhood || duplicate.neighborhood,
       city: keeper.city || duplicate.city,
       state: keeper.state || duplicate.state,
-      zip_code: keeper.zip_code || duplicate.zip_code
+      zip_code: keeper.zip_code || duplicate.zip_code,
+      tags: Array.from(new Set([...(keeper.tags || []), ...(duplicate.tags || [])]))
     };
 
-    await supabase.from('clients').update(updatePayload).eq('id', keeperId);
+    const { error: keeperUpdateError } = await supabase.from('clients').update(updatePayload).eq('id', keeperId);
+    if (keeperUpdateError) throw keeperUpdateError;
     await syncDerivedTagsForClient(keeperId);
 
-    // 2. Migrate calls
-    const { data: calls } = await supabase.from('calls').select('id').eq('client_id', duplicateId);
+    // 2. Migrate call_logs
+    const { data: calls, error: callsError } = await supabase.from('call_logs').select('id').eq('client_id', duplicateId);
+    if (callsError) throw callsError;
     if (calls && calls.length > 0) {
-      await supabase.from('calls').update({ client_id: keeperId }).eq('client_id', duplicateId);
+      const { error } = await supabase.from('call_logs').update({ client_id: keeperId }).eq('client_id', duplicateId);
+      if (error) throw error;
       stats.migratedCalls = calls.length;
     }
 
     // 3. Migrate tasks
-    const { data: tasks } = await supabase.from('tasks').select('id').eq('client_id', duplicateId);
+    const { data: tasks, error: tasksError } = await supabase.from('tasks').select('id').eq('client_id', duplicateId);
+    if (tasksError) throw tasksError;
     if (tasks && tasks.length > 0) {
-      await supabase.from('tasks').update({ client_id: keeperId }).eq('client_id', duplicateId);
+      const { error } = await supabase.from('tasks').update({ client_id: keeperId }).eq('client_id', duplicateId);
+      if (error) throw error;
       stats.migratedTasks = tasks.length;
     }
 
     // 4. Migrate call_schedules
-    const { data: schedules } = await supabase.from('call_schedules').select('id').eq('customer_id', duplicateId);
+    const { data: schedules, error: schedulesError } = await supabase.from('call_schedules').select('id').eq('customer_id', duplicateId);
+    if (schedulesError) throw schedulesError;
     if (schedules && schedules.length > 0) {
-      await supabase.from('call_schedules').update({ customer_id: keeperId }).eq('customer_id', duplicateId);
+      const { error } = await supabase.from('call_schedules').update({ customer_id: keeperId }).eq('customer_id', duplicateId);
+      if (error) throw error;
       stats.migratedSchedules = schedules.length;
     }
 
     // 5. Migrate protocols
-    const { data: protocols } = await supabase.from('protocols').select('id').eq('client_id', duplicateId);
+    const { data: protocols, error: protocolsError } = await supabase.from('protocols').select('id').eq('client_id', duplicateId);
+    if (protocolsError) throw protocolsError;
     if (protocols && protocols.length > 0) {
-      await supabase.from('protocols').update({ client_id: keeperId }).eq('client_id', duplicateId);
+      const { error } = await supabase.from('protocols').update({ client_id: keeperId }).eq('client_id', duplicateId);
+      if (error) throw error;
     }
 
     // 6. Migrate whatsapp_tasks
-    const { data: waTasks } = await supabase.from('whatsapp_tasks').select('id').eq('client_id', duplicateId);
+    const { data: waTasks, error: waTasksError } = await supabase.from('whatsapp_tasks').select('id').eq('client_id', duplicateId);
+    if (waTasksError) throw waTasksError;
     if (waTasks && waTasks.length > 0) {
-      await supabase.from('whatsapp_tasks').update({ client_id: keeperId }).eq('client_id', duplicateId);
+      const { error } = await supabase.from('whatsapp_tasks').update({ client_id: keeperId }).eq('client_id', duplicateId);
+      if (error) throw error;
     }
 
-    // 7. Delete the duplicate
-    await supabase.from('clients').delete().eq('id', duplicateId);
+    // 7. Migrate related records that also point to the duplicate client
+    const relatedUpdates = await Promise.all([
+      supabase.from('client_tags').update({ client_id: keeperId }).eq('client_id', duplicateId),
+      supabase.from('quotes').update({ client_id: keeperId }).eq('client_id', duplicateId),
+      supabase.from('visits').update({ client_id: keeperId }).eq('client_id', duplicateId),
+      supabase.from('sales').update({ client_id: keeperId }).eq('client_id', duplicateId),
+      supabase.from('sales').update({ customer_id: keeperId }).eq('customer_id', duplicateId)
+    ]);
+    for (const result of relatedUpdates) {
+      if (result.error) throw result.error;
+    }
+
+    // 8. Remove duplicates that may have converged in the queues after the reassignment
+    const { data: pendingTasks, error: pendingTasksError } = await supabase
+      .from('tasks')
+      .select('id, assigned_to, type, status, created_at')
+      .eq('client_id', keeperId)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: true });
+    if (pendingTasksError) throw pendingTasksError;
+    const duplicateTaskIds = new Set<string>();
+    const seenTaskKeys = new Set<string>();
+    for (const task of pendingTasks || []) {
+      const key = `${task.assigned_to || ''}::${task.type || ''}::${task.status || ''}`;
+      if (seenTaskKeys.has(key)) duplicateTaskIds.add(task.id);
+      else seenTaskKeys.add(key);
+    }
+    if (duplicateTaskIds.size > 0) {
+      const { error } = await supabase.from('tasks').delete().in('id', Array.from(duplicateTaskIds));
+      if (error) throw error;
+    }
+
+    const { data: pendingWhatsApp, error: pendingWhatsAppError } = await supabase
+      .from('whatsapp_tasks')
+      .select('id, assigned_to, type, source, source_id, status, created_at')
+      .eq('client_id', keeperId)
+      .in('status', ['pending', 'started'])
+      .order('created_at', { ascending: true });
+    if (pendingWhatsAppError) throw pendingWhatsAppError;
+    const duplicateWhatsAppIds = new Set<string>();
+    const seenWhatsAppKeys = new Set<string>();
+    for (const task of pendingWhatsApp || []) {
+      const key = `${task.assigned_to || ''}::${task.type || ''}::${task.source || ''}::${task.source_id || ''}::${task.status || ''}`;
+      if (seenWhatsAppKeys.has(key)) duplicateWhatsAppIds.add(task.id);
+      else seenWhatsAppKeys.add(key);
+    }
+    if (duplicateWhatsAppIds.size > 0) {
+      const { error } = await supabase.from('whatsapp_tasks').delete().in('id', Array.from(duplicateWhatsAppIds));
+      if (error) throw error;
+    }
+
+    // 9. Delete the duplicate. If the active RLS policy refuses the physical delete,
+    // mark it invalid so it stops feeding campaigns and queues.
+    const { count: deletedCount, error: deleteError } = await supabase
+      .from('clients')
+      .delete({ count: 'exact' })
+      .eq('id', duplicateId);
+    if (deleteError) throw deleteError;
+
+    if ((deletedCount || 0) === 0) {
+      const { error: invalidateError } = await supabase
+        .from('clients')
+        .update({
+          invalid: true,
+          campanha_atual_id: null
+        })
+        .eq('id', duplicateId);
+      if (invalidateError) throw invalidateError;
+    }
 
     return stats;
+  },
+
+  repairWhatsAppPhoneDuplicates: async (): Promise<{
+    scannedClients: number;
+    suspectClients: number;
+    repairedClients: number;
+    mergedClients: number;
+    remappedWhatsAppTasks: number;
+    repairs: Array<{
+      malformedClientId: string;
+      malformedName: string;
+      keeperClientId: string;
+      keeperName: string;
+      malformedPhone: string;
+      normalizedPhones: string[];
+      migratedTasks: number;
+    }>;
+  }> => {
+    const report = {
+      scannedClients: 0,
+      suspectClients: 0,
+      repairedClients: 0,
+      mergedClients: 0,
+      remappedWhatsAppTasks: 0,
+      repairs: [] as Array<{
+        malformedClientId: string;
+        malformedName: string;
+        keeperClientId: string;
+        keeperName: string;
+        malformedPhone: string;
+        normalizedPhones: string[];
+        migratedTasks: number;
+      }>
+    };
+
+    const [{ data: clients, error: clientsError }, { data: whatsappTasks, error: tasksError }] = await Promise.all([
+      supabase
+        .from('clients')
+        .select('id, name, phone, phone_secondary, status, created_at, updated_at, tags, email, buyer_name, responsible_phone, portfolio_entries'),
+      supabase
+        .from('whatsapp_tasks')
+        .select('id, client_id, status')
+        .in('status', ['pending', 'started', 'completed', 'skipped'])
+    ]);
+
+    if (clientsError) throw clientsError;
+    if (tasksError) throw tasksError;
+
+    const clientList = clients || [];
+    const waList = whatsappTasks || [];
+    report.scannedClients = clientList.length;
+
+    const clientsWithWhatsApp = new Set(waList.map(task => task.client_id).filter(Boolean));
+    const phoneIndex = new Map<string, any[]>();
+
+    for (const client of clientList) {
+      [client.phone, client.phone_secondary]
+        .map(value => normalizePhone(String(value || '')))
+        .filter(isLikelyBrazilPhoneLength)
+        .forEach(phone => {
+          const group = phoneIndex.get(phone) || [];
+          group.push(client);
+          phoneIndex.set(phone, group);
+        });
+    }
+
+    const suspectClients = sortClientCandidates(
+      clientList.filter(client =>
+        isLikelyCombinedPhone(client.phone) || isLikelyCombinedPhone(client.phone_secondary)
+      )
+    );
+    report.suspectClients = suspectClients.length;
+
+    const alreadyHandled = new Set<string>();
+
+    for (const suspect of suspectClients) {
+      if (alreadyHandled.has(suspect.id)) continue;
+
+      const candidatePhones = Array.from(
+        new Set([
+          ...extractCandidatePhonesFromCombined(suspect.phone),
+          ...extractCandidatePhonesFromCombined(suspect.phone_secondary)
+        ])
+      );
+
+      if (candidatePhones.length === 0) continue;
+
+      const matchingClients = mergeUniqueClientCandidates(
+        ...candidatePhones.map(phone =>
+          (phoneIndex.get(phone) || []).filter(candidate => candidate.id !== suspect.id)
+        )
+      ).filter(candidate => clientsWithWhatsApp.has(candidate.id) || scoreClientRecordForMerge(candidate) > 0);
+
+      if (matchingClients.length === 0) continue;
+
+      const keeper = [...matchingClients].sort((left, right) => {
+        const scoreDiff = scoreClientRecordForMerge(right) - scoreClientRecordForMerge(left);
+        if (scoreDiff !== 0) return scoreDiff;
+        return sortClientCandidates([left, right])[0]?.id === left.id ? -1 : 1;
+      })[0];
+
+      if (!keeper?.id || keeper.id === suspect.id) continue;
+
+      const { data: waTasksBefore, error: waTasksBeforeError } = await supabase
+        .from('whatsapp_tasks')
+        .select('id')
+        .eq('client_id', suspect.id);
+      if (waTasksBeforeError) throw waTasksBeforeError;
+
+      const migratedTaskCount = (waTasksBefore || []).length;
+      await dataService.mergeClients(keeper.id, suspect.id);
+
+      report.repairedClients += 1;
+      report.mergedClients += 1;
+      report.remappedWhatsAppTasks += migratedTaskCount;
+      report.repairs.push({
+        malformedClientId: suspect.id,
+        malformedName: getSafeText(suspect.name, 'Sem Nome'),
+        keeperClientId: keeper.id,
+        keeperName: getSafeText(keeper.name, 'Sem Nome'),
+        malformedPhone: getSafeText(suspect.phone || suspect.phone_secondary),
+        normalizedPhones: candidatePhones,
+        migratedTasks: migratedTaskCount
+      });
+
+      alreadyHandled.add(suspect.id);
+      alreadyHandled.add(keeper.id);
+    }
+
+    return report;
   },
 
   getProtocolConfig: () => ({
@@ -3637,19 +4632,67 @@ export const dataService = {
   },
 
   // --- WHATSAPP MODULE ---
-  createWhatsAppTask: async (task: Partial<WhatsAppTask>): Promise<void> => {
-    const { error } = await supabase.from('whatsapp_tasks').insert({
+  createWhatsAppTask: async (
+    task: Partial<WhatsAppTask>,
+    options?: { skipRecentCommunicationCheck?: boolean }
+  ): Promise<{ created: boolean; existingTaskId?: string }> => {
+    if (!task.clientId) throw new Error('Cliente obrigatório para criar tarefa de WhatsApp.');
+
+    await cleanupDuplicateWhatsAppQueueEntries({
+      clientId: task.clientId,
+      taskType: task.type
+    });
+
+    if (!options?.skipRecentCommunicationCheck) {
+      const recentCommunication = await getRecentCommunicationDetails(task.clientId);
+      if (recentCommunication.blocked) {
+        return { created: false };
+      }
+    }
+
+    const existingQueueEntry = await findOpenWhatsAppTask(task.clientId, task.type);
+    if (existingQueueEntry) {
+      if (!existingQueueEntry.assigned_to && task.assignedTo) {
+        const { error: updateError } = await supabase
+          .from('whatsapp_tasks')
+          .update({
+            assigned_to: task.assignedTo,
+            source_id: existingQueueEntry.source_id || task.sourceId || null
+          })
+          .eq('id', existingQueueEntry.id);
+
+        if (updateError) throw updateError;
+      }
+
+      return { created: false, existingTaskId: existingQueueEntry.id };
+    }
+
+    const { error } = await insertWhatsAppTaskRecord({
       client_id: task.clientId,
       assigned_to: task.assignedTo,
       type: task.type,
       status: task.status || 'pending',
       source: task.source || 'manual',
+      source_id: task.sourceId,
+      proposito: task.proposito
     });
+    if (error && isUniqueViolationError(error)) {
+      const existingAfterConflict = await findOpenWhatsAppTask(task.clientId, task.type);
+      if (existingAfterConflict) {
+        return { created: false, existingTaskId: existingAfterConflict.id };
+      }
+    }
     if (error) throw error;
+    return { created: true };
   },
 
   getWhatsAppTasks: async (operatorId?: string, startDate?: string, endDate?: string): Promise<WhatsAppTask[]> => {
-    let query = supabase.from('whatsapp_tasks').select('*, clients(name, phone)');
+    if (!startDate && !endDate) {
+      await cleanupDuplicateWhatsAppQueueEntries();
+      await cleanupInvalidWhatsAppQueueEntries({ operatorId });
+    }
+
+    let query = supabase.from('whatsapp_tasks').select('*, clients(name, phone, invalid)');
     if (operatorId) {
       query = query.eq('assigned_to', operatorId);
     }
@@ -3664,24 +4707,33 @@ export const dataService = {
     const { data, error } = await query.order('created_at', { ascending: true });
     if (error) throw error;
 
-    return (data || []).map(t => ({
-      id: t.id,
-      clientId: t.client_id,
-      assignedTo: t.assigned_to,
-      status: t.status,
-      type: t.type,
-      source: t.source,
-      sourceId: t.source_id,
-      skipReason: t.skip_reason,
-      skipNote: t.skip_note,
-      startedAt: t.started_at,
-      completedAt: t.completed_at,
-      responses: t.responses,
-      createdAt: t.created_at,
-      updatedAt: t.updated_at,
-      clientName: t.clients?.name || 'Cliente Desconhecido',
-      clientPhone: t.clients?.phone || ''
-    }));
+    return (data || [])
+      .filter((t: any) => {
+        const clientObj = Array.isArray(t.clients) ? t.clients[0] : t.clients;
+        return clientObj?.invalid !== true;
+      })
+      .map(t => {
+        const clientObj = Array.isArray(t.clients) ? t.clients[0] : t.clients;
+        return {
+          id: t.id,
+          clientId: t.client_id,
+          assignedTo: t.assigned_to,
+          status: t.status,
+          type: t.type,
+          source: t.source,
+          sourceId: t.source_id,
+          skipReason: t.skip_reason,
+          skipNote: t.skip_note,
+          startedAt: t.started_at,
+          completedAt: t.completed_at,
+          responses: t.responses,
+          createdAt: t.created_at,
+          updatedAt: t.updated_at,
+          clientName: clientObj?.name || 'Cliente Desconhecido',
+          clientPhone: clientObj?.phone || '',
+          proposito: t.proposito
+        };
+      });
   },
 
   startWhatsAppTask: async (id: string, operatorId: string): Promise<void> => {
@@ -3726,15 +4778,15 @@ export const dataService = {
     if (getError) throw getError;
 
     // 2. Create WhatsApp Task
-    const { error: createError } = await supabase.from('whatsapp_tasks').insert({
-      client_id: task.client_id,
-      assigned_to: operatorId, // Keep operator or reassign? Requirement says "integrated", usually same operator handling
+    await dataService.createWhatsAppTask({
+      clientId: task.client_id,
+      assignedTo: operatorId,
       status: 'pending',
       type: task.type,
       source: 'call_skip_whatsapp',
-      source_id: taskId
-    });
-    if (createError) throw createError;
+      sourceId: taskId,
+      proposito: task.proposito
+    }, { skipRecentCommunicationCheck: true });
 
     // 3. Skip original Task
     // We use a specific skip reason to indicate it moved to WhatsApp, this helps in Reports to not count as "Lost"
@@ -3888,19 +4940,9 @@ export const dataService = {
   },
 
   bulkCreateTasks: async (tasks: any[]): Promise<void> => {
-    const { error } = await supabase.from('tasks').insert(
-      tasks.map(t => ({
-        client_id: t.clientId,
-        type: t.type,
-        assigned_to: t.assignedTo,
-        status: t.status || 'pending',
-        scheduled_for: t.scheduledFor,
-        schedule_reason: t.scheduleReason,
-        proposito: t.proposito,
-        campanha_id: t.campanha_id
-      }))
-    );
-    if (error) throw error;
+    for (const task of tasks) {
+      await dataService.createTask(task);
+    }
   },
 
   bulkUpdateUpsell: async (prospectIds: string[], offer: string, notes: string, operatorId: string): Promise<void> => {

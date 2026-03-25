@@ -66,6 +66,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   const [emailCoverage, setEmailCoverage] = React.useState({ total: 0, withEmail: 0, coveragePercent: 0 });
 
   const [duplicateClients, setDuplicateClients] = React.useState<any[]>([]);
+  const [whatsAppRepairReport, setWhatsAppRepairReport] = React.useState<any | null>(null);
 
   const [userData, setUserData] = React.useState({ name: '', username: '', password: '', role: UserRole.OPERATOR });
   const [questionData, setQuestionData] = React.useState<Partial<Question>>({ text: '', options: [], type: 'ALL' as any, stageId: '' });
@@ -577,6 +578,25 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
       if (dups.length === 0) alert("Nenhum cliente duplicado encontrado!");
     } catch (e) {
       alert("Erro ao varrer clientes.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleRepairWhatsAppDuplicates = async () => {
+    if (!confirm('Deseja rastrear e corrigir cadastros duplicados com telefones concatenados? O sistema vai consolidar os clientes automaticamente, remapear filas relacionadas e invalidar o cadastro ruim quando o Supabase nao permitir o delete fisico.')) return;
+    setIsProcessing(true);
+    try {
+      const result = await dataService.repairWhatsAppPhoneDuplicates();
+      setWhatsAppRepairReport(result);
+      alert(
+        result.repairedClients > 0
+          ? `Correção concluída!\n- Suspeitos analisados: ${result.suspectClients}\n- Cadastros consolidados: ${result.repairedClients}\n- Tasks de WhatsApp remapeadas: ${result.remappedWhatsAppTasks}`
+          : `Nenhum caso elegível foi corrigido.\n- Suspeitos analisados: ${result.suspectClients}`
+      );
+      await refreshData();
+    } catch (e: any) {
+      alert(`Erro ao corrigir cadastros com telefone concatenado: ${e.message}`);
     } finally {
       setIsProcessing(false);
     }
@@ -1356,6 +1376,59 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+
+          <div className="p-8 bg-emerald-50/60 rounded-3xl border border-emerald-100 space-y-6">
+            <div>
+              <h4 className="font-black text-slate-800 flex items-center gap-2"><MessageCircle size={18} className="text-emerald-600" /> Reparar Telefones Concatenados</h4>
+              <p className="text-xs text-slate-500 font-medium mt-1">Rastreia cadastros com telefone primario/secundario colados, consolida os clientes corretos e limpa os reflexos na fila.</p>
+            </div>
+            <button onClick={handleRepairWhatsAppDuplicates} disabled={isProcessing} className="px-6 py-3 bg-emerald-600 text-white rounded-xl font-black uppercase tracking-widest text-[10px] shadow-lg flex items-center gap-2 transition-all active:scale-95">
+              {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <MessageCircle size={16} />} Corrigir Cadastros Concatenados
+            </button>
+
+            {whatsAppRepairReport && (
+              <div className="space-y-4 max-h-[520px] overflow-y-auto custom-scrollbar mt-6 pt-6 border-t border-emerald-100">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                  <div className="bg-white rounded-2xl border border-emerald-100 p-4">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Clientes lidos</p>
+                    <p className="text-xl font-black text-slate-800 mt-1">{whatsAppRepairReport.scannedClients}</p>
+                  </div>
+                  <div className="bg-white rounded-2xl border border-emerald-100 p-4">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Suspeitos</p>
+                    <p className="text-xl font-black text-slate-800 mt-1">{whatsAppRepairReport.suspectClients}</p>
+                  </div>
+                  <div className="bg-white rounded-2xl border border-emerald-100 p-4">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Corrigidos</p>
+                    <p className="text-xl font-black text-slate-800 mt-1">{whatsAppRepairReport.repairedClients}</p>
+                  </div>
+                  <div className="bg-white rounded-2xl border border-emerald-100 p-4">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Mesclagens</p>
+                    <p className="text-xl font-black text-slate-800 mt-1">{whatsAppRepairReport.mergedClients}</p>
+                  </div>
+                  <div className="bg-white rounded-2xl border border-emerald-100 p-4">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Tasks remapeadas</p>
+                    <p className="text-xl font-black text-slate-800 mt-1">{whatsAppRepairReport.remappedWhatsAppTasks}</p>
+                  </div>
+                </div>
+
+                {whatsAppRepairReport.repairs?.length > 0 && (
+                  <div className="space-y-3">
+                    {whatsAppRepairReport.repairs.map((repair: any) => (
+                      <div key={repair.malformedClientId} className="p-5 bg-white border border-slate-200 rounded-[24px] space-y-2">
+                        <p className="font-black text-sm text-slate-800">{repair.malformedName} <span className="text-emerald-600">→</span> {repair.keeperName}</p>
+                        <p className="text-[10px] font-bold uppercase text-slate-400">Telefone colado</p>
+                        <p className="text-xs font-bold text-slate-600">{repair.malformedPhone || 'N/D'}</p>
+                        <p className="text-[10px] font-bold uppercase text-slate-400">Telefones recuperados</p>
+                        <p className="text-xs font-bold text-slate-600">{(repair.normalizedPhones || []).join(' | ') || 'N/D'}</p>
+                        <p className="text-[10px] font-bold uppercase text-slate-400">Tasks migradas</p>
+                        <p className="text-xs font-bold text-slate-600">{repair.migratedTasks}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>

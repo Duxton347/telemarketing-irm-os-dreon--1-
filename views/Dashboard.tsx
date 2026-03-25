@@ -10,6 +10,7 @@ import { dataService } from '../services/dataService';
 import { UserRole, CallType, ProtocolStatus, User, Protocol, Client, Question, Task, ScheduleStatus } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { RepiqueModal, RepiqueData } from '../components/RepiqueModal';
+import { resolveQuestionnaireEntries } from '../utils/questionnaireInsights';
 
 interface DashboardProps {
   user: any;
@@ -542,11 +543,16 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                   <ClipboardList className="text-indigo-600" size={20} /> Respostas do Questionário
                 </h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {Object.entries(selectedAuditCall.responses || {}).filter(([k]) => k !== 'written_report' && k !== 'call_type' && !k.endsWith('_note')).map(([qId, response]: any) => {
-                    const question = questions.find(q => q.id === qId || q.id.toLowerCase() === qId.toLowerCase());
-                    const label = question ? `${question.order}. ${question.text}` : qId.toUpperCase();
+                  {resolveQuestionnaireEntries(
+                    selectedAuditCall.responses || {},
+                    questions,
+                    selectedAuditCall.type,
+                    selectedAuditCall.proposito
+                  ).map((entry: any) => {
+                    const response = String(entry.value);
+                    const label = entry.label;
                     return (
-                      <div key={qId} className="p-6 bg-white border border-slate-100 rounded-[28px] shadow-sm flex flex-col justify-between">
+                      <div key={entry.key} className="p-6 bg-white border border-slate-100 rounded-[28px] shadow-sm flex flex-col justify-between">
                         <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter mb-4 leading-tight">{label}</p>
                         <span className={`self-start px-4 py-2 rounded-xl text-xs font-black uppercase shadow-sm ${response === 'Ótimo' || response === 'Sim' || response === 'Atendeu' ? 'bg-green-600 text-white' :
                           response === 'Ruim' || response === 'Não' || response === 'Não atendeu' ? 'bg-red-600 text-white' : 'bg-slate-900 text-white'

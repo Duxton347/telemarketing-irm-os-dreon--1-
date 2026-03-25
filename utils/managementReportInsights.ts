@@ -7,6 +7,7 @@ import {
   resolveQuestionnaireEntries,
   resolveStoredResponseForQuestion
 } from './questionnaireInsights';
+import { QuestionnaireIndexKey, buildQuestionnaireBusinessContext } from './questionnaireBusinessRules';
 
 export interface ReportBreakdownItem {
   label: string;
@@ -59,6 +60,8 @@ export interface ManagementReportInsights {
   operatorInsights: ReportPerformanceInsight[];
   processInsights: ReportPerformanceInsight[];
   satisfactionAreas: ReportAreaInsight[];
+  averageBusinessIndices: Record<QuestionnaireIndexKey, number>;
+  profileCounts: Record<string, number>;
 }
 
 export const EMPTY_MANAGEMENT_REPORT_INSIGHTS: ManagementReportInsights = {
@@ -77,7 +80,18 @@ export const EMPTY_MANAGEMENT_REPORT_INSIGHTS: ManagementReportInsights = {
   productInsights: [],
   operatorInsights: [],
   processInsights: [],
-  satisfactionAreas: []
+  satisfactionAreas: [],
+  averageBusinessIndices: {
+    indice_satisfacao: 0,
+    indice_retencao: 0,
+    indice_interesse_comercial: 0,
+    indice_qualidade_cadastro: 0,
+    indice_risco_perda: 0,
+    indice_oportunidade_upsell: 0,
+    indice_gravidade_operacional: 0,
+    indice_recuperabilidade: 0
+  },
+  profileCounts: {}
 };
 
 type InteractionLike = {
@@ -337,6 +351,8 @@ export const buildManagementReportInsights = ({
   const processBuckets = new Map<string, AggregateBucket>();
   const blockerCounts = new Map<string, number>();
   const areaTotals = new Map<string, { total: number; count: number }>();
+  const businessIndexTotals = new Map<QuestionnaireIndexKey, { total: number; count: number }>();
+  const profileCounts = new Map<string, number>();
 
   let totalQuestionnaireInteractions = 0;
   let totalInterestHits = 0;
@@ -359,6 +375,12 @@ export const buildManagementReportInsights = ({
 
     const interestScore = getInterestScore(interaction, responses);
     const objectionReason = getObjectionReason(interaction, responses);
+    const business = buildQuestionnaireBusinessContext({
+      responses,
+      questions,
+      callType: interaction.type,
+      proposito: interaction.proposito
+    });
     const satisfaction = getSatisfactionSignals(
       responses,
       questions,
@@ -404,6 +426,23 @@ export const buildManagementReportInsights = ({
       totalObjectionHits += 1;
       blockerCounts.set(objectionReason, (blockerCounts.get(objectionReason) || 0) + 1);
     }
+
+    Object.entries(business.indices).forEach(([key, value]) => {
+      const bucket = businessIndexTotals.get(key as QuestionnaireIndexKey) || { total: 0, count: 0 };
+      bucket.total += value;
+      bucket.count += 1;
+      businessIndexTotals.set(key as QuestionnaireIndexKey, bucket);
+    });
+
+    [
+      business.profile.clientePerfil,
+      business.profile.retencaoPerfil,
+      business.profile.comercialPerfil,
+      business.profile.cadastroPerfil,
+      business.profile.leadTemperatura
+    ].forEach(profileKey => {
+      profileCounts.set(profileKey, (profileCounts.get(profileKey) || 0) + 1);
+    });
 
     if (satisfaction.averageScore !== null) {
       totalSatisfactionScore += satisfaction.averageScore;
@@ -478,6 +517,17 @@ export const buildManagementReportInsights = ({
     productInsights: toPerformanceInsights(productBuckets),
     operatorInsights: toPerformanceInsights(operatorBuckets),
     processInsights: toPerformanceInsights(processBuckets),
-    satisfactionAreas
+    satisfactionAreas,
+    averageBusinessIndices: {
+      indice_satisfacao: Math.round(((businessIndexTotals.get('indice_satisfacao')?.total || 0) / Math.max(1, businessIndexTotals.get('indice_satisfacao')?.count || 1)) * 10) / 10,
+      indice_retencao: Math.round(((businessIndexTotals.get('indice_retencao')?.total || 0) / Math.max(1, businessIndexTotals.get('indice_retencao')?.count || 1)) * 10) / 10,
+      indice_interesse_comercial: Math.round(((businessIndexTotals.get('indice_interesse_comercial')?.total || 0) / Math.max(1, businessIndexTotals.get('indice_interesse_comercial')?.count || 1)) * 10) / 10,
+      indice_qualidade_cadastro: Math.round(((businessIndexTotals.get('indice_qualidade_cadastro')?.total || 0) / Math.max(1, businessIndexTotals.get('indice_qualidade_cadastro')?.count || 1)) * 10) / 10,
+      indice_risco_perda: Math.round(((businessIndexTotals.get('indice_risco_perda')?.total || 0) / Math.max(1, businessIndexTotals.get('indice_risco_perda')?.count || 1)) * 10) / 10,
+      indice_oportunidade_upsell: Math.round(((businessIndexTotals.get('indice_oportunidade_upsell')?.total || 0) / Math.max(1, businessIndexTotals.get('indice_oportunidade_upsell')?.count || 1)) * 10) / 10,
+      indice_gravidade_operacional: Math.round(((businessIndexTotals.get('indice_gravidade_operacional')?.total || 0) / Math.max(1, businessIndexTotals.get('indice_gravidade_operacional')?.count || 1)) * 10) / 10,
+      indice_recuperabilidade: Math.round(((businessIndexTotals.get('indice_recuperabilidade')?.total || 0) / Math.max(1, businessIndexTotals.get('indice_recuperabilidade')?.count || 1)) * 10) / 10
+    },
+    profileCounts: Object.fromEntries(profileCounts)
   };
 };
