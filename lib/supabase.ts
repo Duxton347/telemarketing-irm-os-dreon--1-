@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, navigatorLock, processLock, type GoTrueClientOptions } from '@supabase/supabase-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
@@ -11,9 +11,51 @@ if (!supabaseUrl || !supabaseAnonKey) {
   console.log('Supabase environment loaded successfully.');
 }
 
+type AuthLock = NonNullable<GoTrueClientOptions['lock']>;
+
+let hasLoggedAuthLockFallback = false;
+
+const hasNavigatorLocks = () =>
+  typeof globalThis !== 'undefined' &&
+  typeof globalThis.navigator !== 'undefined' &&
+  typeof globalThis.navigator.locks !== 'undefined';
+
+const resilientAuthLock: AuthLock = async (name, acquireTimeout, fn) => {
+  if (!hasNavigatorLocks()) {
+    return processLock(name, acquireTimeout, fn);
+  }
+
+  try {
+    return await navigatorLock(name, acquireTimeout, fn);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const shouldFallback =
+      Boolean((error as { isAcquireTimeout?: boolean } | null | undefined)?.isAcquireTimeout) ||
+      message.includes('Navigator LockManager lock');
+
+    if (!shouldFallback) {
+      throw error;
+    }
+
+    if (!hasLoggedAuthLockFallback) {
+      hasLoggedAuthLockFallback = true;
+      console.warn('Supabase auth lock timed out; using in-tab fallback lock.', error);
+    }
+
+    return processLock(name, acquireTimeout, fn);
+  }
+};
+
+const sharedAuthOptions = {
+  lock: resilientAuthLock
+};
+
 export const supabase = createClient(
   supabaseUrl || 'https://placeholder.supabase.co',
-  supabaseAnonKey || 'placeholder-key'
+  supabaseAnonKey || 'placeholder-key',
+  {
+    auth: sharedAuthOptions
+  }
 );
 
 export const createAuthClient = () => createClient(
@@ -21,6 +63,7 @@ export const createAuthClient = () => createClient(
   supabaseAnonKey || 'placeholder-key',
   {
     auth: {
+      ...sharedAuthOptions,
       persistSession: false,
       autoRefreshToken: false,
       detectSessionInUrl: false

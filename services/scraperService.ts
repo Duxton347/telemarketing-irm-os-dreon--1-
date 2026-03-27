@@ -44,6 +44,29 @@ export interface ScraperResult {
     // ... other fields
 }
 
+type ScraperResultsFilters = {
+    status?: string;
+    runId?: string;
+};
+
+type ScraperResultsOptions = {
+    limit?: number;
+};
+
+const SCRAPER_RESULTS_PAGE_SIZE = 1000;
+
+const buildResultsQuery = (filters?: ScraperResultsFilters) => {
+    let query = supabase
+        .from('scraper_results')
+        .select('*, scraper_runs(scraper_processes(name))')
+        .order('created_at', { ascending: false });
+
+    if (filters?.status) query = query.eq('review_status', filters.status);
+    if (filters?.runId) query = query.eq('run_id', filters.runId);
+
+    return query;
+};
+
 export const scraperService = {
     parseGoogleAddress: (fullAddress: string) => {
         const parsed = parseAddress(fullAddress);
@@ -286,18 +309,31 @@ export const scraperService = {
     },
 
     // --- DB OPERATIONS: RESULTS ---
-    getResults: async (filters?: { status?: string, runId?: string }) => {
-        let query = supabase
-            .from('scraper_results')
-            .select('*, scraper_runs(scraper_processes(name))')
-            .order('created_at', { ascending: false });
-
-        if (filters?.status) query = query.eq('review_status', filters.status);
-        if (filters?.runId) query = query.eq('run_id', filters.runId);
-
-        const { data, error } = await query.limit(100);
+    getResults: async (filters?: ScraperResultsFilters, options: ScraperResultsOptions = {}) => {
+        const limit = options.limit ?? 100;
+        const { data, error } = await buildResultsQuery(filters).limit(limit);
         if (error) throw error;
         return data as ScraperResult[];
+    },
+
+    getAllResults: async (filters?: ScraperResultsFilters) => {
+        const allResults: ScraperResult[] = [];
+        let from = 0;
+
+        while (true) {
+            const to = from + SCRAPER_RESULTS_PAGE_SIZE - 1;
+            const { data, error } = await buildResultsQuery(filters).range(from, to);
+
+            if (error) throw error;
+
+            const batch = (data || []) as ScraperResult[];
+            allResults.push(...batch);
+
+            if (batch.length < SCRAPER_RESULTS_PAGE_SIZE) break;
+            from += SCRAPER_RESULTS_PAGE_SIZE;
+        }
+
+        return allResults;
     },
 
     updateResultStatus: async (id: string, status: string, notes?: string, userId?: string) => {

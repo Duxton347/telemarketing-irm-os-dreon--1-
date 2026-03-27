@@ -242,9 +242,9 @@ const Calendar: React.FC<{ user: UserType }> = ({ user }: { user: UserType }) =>
                         </button>
                     </div>
                     <div className="grid grid-cols-7 gap-1 mb-2">
-                        {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map(d => (
-                            <div key={d} className="h-8 flex items-center justify-center text-[10px] font-black text-slate-300">
-                                {d}
+                        {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((dayLabel, index) => (
+                            <div key={`calendar-weekday-${index}-${dayLabel}`} className="h-8 flex items-center justify-center text-[10px] font-black text-slate-300">
+                                {dayLabel}
                             </div>
                         ))}
                     </div>
