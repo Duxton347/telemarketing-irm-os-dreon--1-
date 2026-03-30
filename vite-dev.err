@@ -1,2 +1,406 @@
 [2m14:38:46[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Failed to load url /utils/addressParser.ts (resolved id: C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/utils/addressParser.ts) in C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/views/WorkloadUpload.tsx. Does the file exist?
 [2m14:38:46[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Failed to load url /utils/addressParser.ts (resolved id: C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/utils/addressParser.ts) in C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/views/WorkloadUpload.tsx. Does the file exist?
+[2m07:48:16[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:793:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:793:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  791|        }
+  792|  
+  793|        const { data: clients, error } = await query;
+     |                                         ^
+  794|        if (error) throw new Error(error.message);
+  795|  
+  [39m
+[2m07:48:16[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:793:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:793:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  791|        }
+  792|  
+  793|        const { data: clients, error } = await query;
+     |                                         ^
+  794|        if (error) throw new Error(error.message);
+  795|  
+  [39m
+[2m07:48:16[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:793:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:793:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  791|        }
+  792|  
+  793|        const { data: clients, error } = await query;
+     |                                         ^
+  794|        if (error) throw new Error(error.message);
+  795|  
+  [39m
+[2m07:48:16[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:793:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:793:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  791|        }
+  792|  
+  793|        const { data: clients, error } = await query;
+     |                                         ^
+  794|        if (error) throw new Error(error.message);
+  795|  
+  [39m
+[2m07:48:16[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:793:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:793:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  791|        }
+  792|  
+  793|        const { data: clients, error } = await query;
+     |                                         ^
+  794|        if (error) throw new Error(error.message);
+  795|  
+  [39m
+[2m07:48:16[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:793:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:793:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  791|        }
+  792|  
+  793|        const { data: clients, error } = await query;
+     |                                         ^
+  794|        if (error) throw new Error(error.message);
+  795|  
+  [39m
+[2m07:48:16[22m [31m[1m[vite][22m[39m [31mInternal server error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:793:39: ERROR: "await" can only be used inside an "async" function[39m
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:793:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  791|        }
+  792|  
+  793|        const { data: clients, error } = await query;
+     |                                         ^
+  794|        if (error) throw new Error(error.message);
+  795|  
+  [39m
+      at failureErrorWithLog (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:1467:15)
+      at C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:736:50
+      at responseCallbacks.<computed> (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:603:9)
+      at handleIncomingPacket (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:658:12)
+      at Socket.readFromStdout (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:581:7)
+      at Socket.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushByteMode (node:internal/streams/readable:510:3)
+      at Readable.push (node:internal/streams/readable:390:5)
+      at Pipe.onStreamRead (node:internal/stream_base_commons:189:23)
+[2m07:48:36[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:795:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:795:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  793|        }
+  794|  
+  795|        const { data: clients, error } = await query;
+     |                                         ^
+  796|        if (error) throw new Error(error.message);
+  797|  
+  [39m
+[2m07:48:36[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:795:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:795:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  793|        }
+  794|  
+  795|        const { data: clients, error } = await query;
+     |                                         ^
+  796|        if (error) throw new Error(error.message);
+  797|  
+  [39m
+[2m07:48:36[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:795:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:795:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  793|        }
+  794|  
+  795|        const { data: clients, error } = await query;
+     |                                         ^
+  796|        if (error) throw new Error(error.message);
+  797|  
+  [39m
+[2m07:48:36[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:795:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:795:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  793|        }
+  794|  
+  795|        const { data: clients, error } = await query;
+     |                                         ^
+  796|        if (error) throw new Error(error.message);
+  797|  
+  [39m
+[2m07:48:36[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:795:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:795:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  793|        }
+  794|  
+  795|        const { data: clients, error } = await query;
+     |                                         ^
+  796|        if (error) throw new Error(error.message);
+  797|  
+  [39m
+[2m07:48:36[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:795:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:795:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  793|        }
+  794|  
+  795|        const { data: clients, error } = await query;
+     |                                         ^
+  796|        if (error) throw new Error(error.message);
+  797|  
+  [39m
+[2m07:48:36[22m [31m[1m[vite][22m[39m [31mInternal server error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:795:39: ERROR: "await" can only be used inside an "async" function[39m
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:795:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  793|        }
+  794|  
+  795|        const { data: clients, error } = await query;
+     |                                         ^
+  796|        if (error) throw new Error(error.message);
+  797|  
+  [39m
+      at failureErrorWithLog (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:1467:15)
+      at C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:736:50
+      at responseCallbacks.<computed> (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:603:9)
+      at handleIncomingPacket (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:658:12)
+      at Socket.readFromStdout (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:581:7)
+      at Socket.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushByteMode (node:internal/streams/readable:510:3)
+      at Readable.push (node:internal/streams/readable:390:5)
+      at Pipe.onStreamRead (node:internal/stream_base_commons:189:23)
+[2m07:48:49[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:792:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:792:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  790|        }
+  791|  
+  792|        const { data: clients, error } = await query;
+     |                                         ^
+  793|        if (error) throw new Error(error.message);
+  794|  
+  [39m
+[2m07:48:49[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:792:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:792:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  790|        }
+  791|  
+  792|        const { data: clients, error } = await query;
+     |                                         ^
+  793|        if (error) throw new Error(error.message);
+  794|  
+  [39m
+[2m07:48:49[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:792:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:792:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  790|        }
+  791|  
+  792|        const { data: clients, error } = await query;
+     |                                         ^
+  793|        if (error) throw new Error(error.message);
+  794|  
+  [39m
+[2m07:48:49[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:792:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:792:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  790|        }
+  791|  
+  792|        const { data: clients, error } = await query;
+     |                                         ^
+  793|        if (error) throw new Error(error.message);
+  794|  
+  [39m
+[2m07:48:49[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:792:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:792:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  790|        }
+  791|  
+  792|        const { data: clients, error } = await query;
+     |                                         ^
+  793|        if (error) throw new Error(error.message);
+  794|  
+  [39m
+[2m07:48:49[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:792:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:792:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  790|        }
+  791|  
+  792|        const { data: clients, error } = await query;
+     |                                         ^
+  793|        if (error) throw new Error(error.message);
+  794|  
+  [39m
+[2m07:48:49[22m [31m[1m[vite][22m[39m [31mInternal server error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:792:39: ERROR: "await" can only be used inside an "async" function[39m
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:792:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  790|        }
+  791|  
+  792|        const { data: clients, error } = await query;
+     |                                         ^
+  793|        if (error) throw new Error(error.message);
+  794|  
+  [39m
+      at failureErrorWithLog (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:1467:15)
+      at C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:736:50
+      at responseCallbacks.<computed> (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:603:9)
+      at handleIncomingPacket (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:658:12)
+      at Socket.readFromStdout (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:581:7)
+      at Socket.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushByteMode (node:internal/streams/readable:510:3)
+      at Readable.push (node:internal/streams/readable:390:5)
+      at Pipe.onStreamRead (node:internal/stream_base_commons:189:23)
+[2m07:49:03[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:791:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:791:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  789|        }
+  790|  
+  791|        const { data: clients, error } = await query;
+     |                                         ^
+  792|        if (error) throw new Error(error.message);
+  793|  
+  [39m
+[2m07:49:03[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:791:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:791:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  789|        }
+  790|  
+  791|        const { data: clients, error } = await query;
+     |                                         ^
+  792|        if (error) throw new Error(error.message);
+  793|  
+  [39m
+[2m07:49:03[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:791:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:791:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  789|        }
+  790|  
+  791|        const { data: clients, error } = await query;
+     |                                         ^
+  792|        if (error) throw new Error(error.message);
+  793|  
+  [39m
+[2m07:49:03[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:791:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:791:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  789|        }
+  790|  
+  791|        const { data: clients, error } = await query;
+     |                                         ^
+  792|        if (error) throw new Error(error.message);
+  793|  
+  [39m
+[2m07:49:03[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:791:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:791:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  789|        }
+  790|  
+  791|        const { data: clients, error } = await query;
+     |                                         ^
+  792|        if (error) throw new Error(error.message);
+  793|  
+  [39m
+[2m07:49:03[22m [31m[1m[vite][22m[39m [31mInternal server error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:791:39: ERROR: "await" can only be used inside an "async" function[39m
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:791:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  789|        }
+  790|  
+  791|        const { data: clients, error } = await query;
+     |                                         ^
+  792|        if (error) throw new Error(error.message);
+  793|  
+  [39m
+      at failureErrorWithLog (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:1467:15)
+      at C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:736:50
+      at responseCallbacks.<computed> (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:603:9)
+      at handleIncomingPacket (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:658:12)
+      at Socket.readFromStdout (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\esbuild\lib\main.js:581:7)
+      at Socket.emit (node:events:508:28)
+      at addChunk (node:internal/streams/readable:559:12)
+      at readableAddChunkPushByteMode (node:internal/streams/readable:510:3)
+      at Readable.push (node:internal/streams/readable:390:5)
+      at Pipe.onStreamRead (node:internal/stream_base_commons:189:23)
+[2m07:49:03[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Transform failed with 1 error:
+C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts:791:39: ERROR: "await" can only be used inside an "async" function
+  Plugin: [35mvite:esbuild[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaignPlannerService.ts[39m:791:39
+[33m  
+  [33m"await" can only be used inside an "async" function[33m
+  789|        }
+  790|  
+  791|        const { data: clients, error } = await query;
+     |                                         ^
+  792|        if (error) throw new Error(error.message);
+  793|  
+  [39m

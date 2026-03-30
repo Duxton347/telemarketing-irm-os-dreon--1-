@@ -153,6 +153,7 @@ export interface Client {
   history?: Interaction[];
   // New Fields for Scraper & Prospects
   origin?: 'MANUAL' | 'GOOGLE_SEARCH' | 'CSV_IMPORT';
+  origin_detail?: string;
   email?: string;
   website?: string;
   status?: 'CLIENT' | 'LEAD' | 'INATIVO';

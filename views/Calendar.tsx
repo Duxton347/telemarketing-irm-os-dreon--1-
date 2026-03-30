@@ -8,6 +8,7 @@ import { dataService } from '../services/dataService';
 import { Task, Visit, User as UserType, CallRecord, Client, Question, CallType, UserRole, CallScheduleWithClient, OperatorEventType } from '../types';
 import { QuestionnaireForm } from '../components/QuestionnaireForm';
 import { ManualScheduleModal } from '../components/ManualScheduleModal';
+import { getTaskAssignableUsers } from '../utils/taskAssignment';
 
 const Calendar: React.FC<{ user: UserType }> = ({ user }: { user: UserType }) => {
     const [date, setDate] = React.useState(new Date());
@@ -47,7 +48,7 @@ const Calendar: React.FC<{ user: UserType }> = ({ user }: { user: UserType }) =>
             setCalls(allCalls);
             setClients(allClients);
             setQuestions(allQuestions);
-            setOperators(allUsers.filter(u => u.role === UserRole.OPERATOR || u.role === UserRole.SUPERVISOR)); // Filter operators
+            setOperators(getTaskAssignableUsers(allUsers));
         } catch (e) {
             console.error(e);
         } finally {

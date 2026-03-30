@@ -10,6 +10,16 @@ import { dataService } from '../services/dataService';
 import { Sale, SaleCategory, SaleChannel, SaleStatus, User as UserType, UserRole } from '../types';
 import { CurrencyInput } from '../components/CurrencyInput';
 
+type SaleFormState = {
+    saleNumber: string;
+    clientName: string;
+    clientId: string;
+    address: string;
+    category: SaleCategory;
+    channel: SaleChannel;
+    value: number | string;
+};
+
 const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
     const [sales, setSales] = React.useState<Sale[]>([]);
     const [operators, setOperators] = React.useState<UserType[]>([]);
@@ -36,7 +46,7 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
     const [channelFilter, setChannelFilter] = React.useState('');
     const [operatorFilter, setOperatorFilter] = React.useState('');
 
-    const [newSale, setNewSale] = React.useState({
+    const [newSale, setNewSale] = React.useState<SaleFormState>({
         saleNumber: '',
         clientName: '',
         clientId: '', // New field

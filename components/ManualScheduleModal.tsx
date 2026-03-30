@@ -4,6 +4,7 @@ import { X, Calendar, User, Phone, Search, Loader2, Save, Plus } from 'lucide-re
 import { dataService } from '../services/dataService';
 import { Client, CallType, User as AppUser, UserRole } from '../types';
 import { normalizePhone } from '../lib/supabase';
+import { getTaskAssignableUsers } from '../utils/taskAssignment';
 
 interface ManualScheduleModalProps {
     onClose: () => void;
@@ -36,9 +37,14 @@ export const ManualScheduleModal: React.FC<ManualScheduleModalProps> = ({ onClos
     useEffect(() => {
         // Load Operators
         dataService.getUsers().then(users => {
-            setOperators(users.filter(u => u.role === UserRole.OPERATOR || u.role === UserRole.SUPERVISOR));
+            const assignableUsers = getTaskAssignableUsers(users);
+            setOperators(assignableUsers);
+            setScheduleForm(prev => ({
+                ...prev,
+                operatorId: prev.operatorId || assignableUsers.find(operator => operator.id === user.id)?.id || assignableUsers[0]?.id || ''
+            }));
         });
-    }, []);
+    }, [user.id]);
 
     useEffect(() => {
         // Debounced search

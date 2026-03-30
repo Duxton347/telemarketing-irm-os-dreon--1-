@@ -13,6 +13,7 @@ import { HelpTooltip } from '../components/HelpTooltip';
 import { PortfolioCategoryBrowser } from '../components/PortfolioCategoryBrowser';
 import { HELP_TEXTS } from '../utils/helpTexts';
 import { buildQuestionnaireTextSummary, enrichQuestionnaireResponses } from '../utils/questionnaireInsights';
+import { getTaskAssignableUsers } from '../utils/taskAssignment';
 import {
   buildPortfolioCategoryGroups,
   collectPortfolioMetadata,
@@ -46,10 +47,12 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   React.useEffect(() => {
     if (user.role === UserRole.ADMIN) {
       dataService.getUsers().then(users => {
-        setOperators(users.filter(u => u.role === UserRole.OPERATOR || u.role === UserRole.SUPERVISOR));
+        setOperators(
+          getTaskAssignableUsers(users).filter(operator => operator.id !== user.id)
+        );
       }).catch(e => console.error("Error fetching operators:", e));
     }
-  }, [user.role]);
+  }, [user.id, user.role]);
 
   const [isLoading, setIsLoading] = React.useState(true);
   const [isProcessing, setIsProcessing] = React.useState(false);
@@ -729,7 +732,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
           <User size={24} />
         </div>
         <div className="flex-1">
-          <p className="text-[10px] uppercase tracking-widest font-black text-slate-400 mb-1">Visualizar Carga como Operador</p>
+          <p className="text-[10px] uppercase tracking-widest font-black text-slate-400 mb-1">Visualizar Carga por Usuário</p>
           <select
             value={effectiveOperatorId}
             onChange={(e) => setEffectiveOperatorId(e.target.value)}

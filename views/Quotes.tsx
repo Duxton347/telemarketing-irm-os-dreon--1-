@@ -132,8 +132,7 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
                     const newClient = await dataService.upsertClient({
                         name: newQuote.client_name,
                         phone: '00000000000', // Dummy phone to satisfy schema constraints for manual entry
-                        status: 'LEAD',
-                        operator_id: user.id
+                        status: 'LEAD'
                     });
                     finalClientId = newClient.id;
                     setClients(prev => [...prev, newClient]); // Update local state

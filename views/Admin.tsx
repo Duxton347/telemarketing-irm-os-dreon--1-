@@ -17,6 +17,7 @@ import { HelpTooltip } from '../components/HelpTooltip';
 import { HELP_TEXTS } from '../utils/helpTexts';
 import { CampaignPlannerService } from '../services/campaignPlannerService';
 import { EmailService } from '../services/emailService';
+import { getTaskAssignableUsers } from '../utils/taskAssignment';
 
 interface AdminProps {
   user?: User;
@@ -73,6 +74,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
 
   const [selectedOperatorId, setSelectedOperatorId] = React.useState<string>('');
   const [selectedCallType, setSelectedCallType] = React.useState<CallType>(CallType.POS_VENDA);
+  const assignableUsers = React.useMemo(() => getTaskAssignableUsers(users), [users]);
 
   const refreshData = async () => {
     setIsProcessing(true);
@@ -121,9 +123,11 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
       }));
       setPendingWhatsAppTasks(pendingWa);
 
-      const operators = userList.filter(u => u.role === UserRole.OPERATOR || u.role === UserRole.SUPERVISOR);
-      if (operators.length > 0 && !selectedOperatorId) {
-        setSelectedOperatorId(operators[0].id);
+      const assignableUserList = getTaskAssignableUsers(userList);
+      if (assignableUserList.length > 0 && !selectedOperatorId) {
+        setSelectedOperatorId(
+          assignableUserList.find(assignableUser => assignableUser.id === user?.id)?.id || assignableUserList[0].id
+        );
       }
 
       // Load Metrics if on analytics tab (or initial load?)
@@ -677,7 +681,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                 className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-black text-[10px] uppercase outline-none"
               >
                 <option value="">Operador alvo...</option>
-                {users.filter(u => u.role !== UserRole.ADMIN).map(u => (
+                {assignableUsers.map(u => (
                   <option key={u.id} value={u.id}>{u.name}</option>
                 ))}
               </select>
@@ -932,7 +936,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                   className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-[11px] uppercase outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
                 >
                   <option value="">Selecione um operador...</option>
-                  {users.filter(u => u.role === UserRole.OPERATOR || u.role === UserRole.SUPERVISOR).map(u => (
+                  {assignableUsers.map(u => (
                     <option key={u.id} value={u.id}>{u.name} (@{u.username})</option>
                   ))}
                 </select>
@@ -1635,7 +1639,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                   className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-[11px] uppercase outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
                 >
                   <option value="">Manter atual...</option>
-                  {users.filter(u => u.role === UserRole.OPERATOR || u.role === UserRole.SUPERVISOR).map(u => (
+                  {assignableUsers.map(u => (
                     <option key={u.id} value={u.id}>{u.name} (@{u.username})</option>
                   ))}
                 </select>

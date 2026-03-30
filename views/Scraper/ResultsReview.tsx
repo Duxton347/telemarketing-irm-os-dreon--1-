@@ -41,7 +41,7 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
     const loadData = async () => {
         setIsLoading(true);
         try {
-            const data = await scraperService.getResults({
+            const data = await scraperService.getAllResults({
                 status: filterStatus,
                 runId: selectedRunId || undefined
             });
@@ -244,6 +244,10 @@ export const ResultsReview: React.FC<{ user: any }> = ({ user }) => {
 
                 <p className="text-[11px] font-medium text-slate-400">
                     A exportacao respeita os filtros desta tela e gera colunas separadas para nome, numero, site e endereco.
+                </p>
+
+                <p className="text-[11px] font-medium text-slate-500">
+                    Carregados {results.length} registro(s); exibindo {filteredResults.length} com os filtros atuais.
                 </p>
             </div>
 

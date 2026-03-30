@@ -33,6 +33,7 @@ export interface CampaignPlannerFilters {
   equipamentos?: string[];
   bairros?: string[];
   cidades?: string[];
+  campanhasBusca?: string[];
   campanhaAtual?: string;
   temEmail?: boolean;
   produtoAlvo?: string;
@@ -337,6 +338,43 @@ const chunkValues = <T,>(values: T[], chunkSize = 200) => {
   return chunks;
 };
 
+const CLIENT_QUERY_PAGE_SIZE = 1000;
+
+const fetchAllPaginatedRows = async (
+  buildQuery: (fromIndex: number, toIndex: number) => any,
+  pageSize = CLIENT_QUERY_PAGE_SIZE
+) => {
+  const rows: any[] = [];
+  let fromIndex = 0;
+
+  while (true) {
+    const toIndex = fromIndex + pageSize - 1;
+    const { data, error } = await buildQuery(fromIndex, toIndex);
+
+    if (error) throw error;
+
+    if (data?.length) {
+      rows.push(...data);
+    }
+
+    if (!data || data.length < pageSize) {
+      break;
+    }
+
+    fromIndex += pageSize;
+  }
+
+  return rows;
+};
+
+const normalizeCampaignClientStatus = (value?: unknown): Client['status'] => {
+  const normalized = String(value || '').trim().toUpperCase();
+
+  if (normalized === 'LEAD') return 'LEAD';
+  if (normalized === 'INATIVO') return 'INATIVO';
+  return 'CLIENT';
+};
+
 const collectIdSet = async (
   ids: string[],
   loader: (chunk: string[]) => Promise<string[]>
@@ -549,11 +587,14 @@ export const CampaignPlannerService = {
 
   getDistinctCities: async (): Promise<string[]> => {
     try {
-      const { data, error } = await supabase
-        .from('clients')
-        .select('city, address, invalid')
-        .neq('invalid', true);
-      if (error) throw error;
+      const data = await fetchAllPaginatedRows((fromIndex, toIndex) =>
+        supabase
+          .from('clients')
+          .select('city, address, invalid')
+          .neq('invalid', true)
+          .order('id', { ascending: true })
+          .range(fromIndex, toIndex)
+      );
       const bucket = new Map<string, string>();
       (data || []).forEach((row: any) => {
         const resolvedCity = resolveCampaignClientLocation(row).city;
@@ -568,12 +609,14 @@ export const CampaignPlannerService = {
 
   getDistinctNeighborhoods: async (city?: string): Promise<string[]> => {
     try {
-      const query = supabase
-        .from('clients')
-        .select('city, neighborhood, address, invalid')
-        .neq('invalid', true);
-      const { data, error } = await query;
-      if (error) throw error;
+      const data = await fetchAllPaginatedRows((fromIndex, toIndex) =>
+        supabase
+          .from('clients')
+          .select('city, neighborhood, address, invalid')
+          .neq('invalid', true)
+          .order('id', { ascending: true })
+          .range(fromIndex, toIndex)
+      );
       const normalizedCityFilter = normalizeComparableText(resolveKnownCity(city) || city);
       const bucket = new Map<string, string>();
 
@@ -620,15 +663,18 @@ export const CampaignPlannerService = {
 
   getPortfolioFilterOptions: async (): Promise<PortfolioFilterOptions> => {
     try {
-      const [catalog, { data, error }] = await Promise.all([
+      const [catalog, data] = await Promise.all([
         PortfolioCatalogService.getCatalogConfig(),
-        supabase
-          .from('clients')
-          .select('customer_profiles, product_categories, equipment_models, portfolio_entries, invalid')
-          .neq('invalid', true)
+        fetchAllPaginatedRows((fromIndex, toIndex) =>
+          supabase
+            .from('clients')
+            .select('customer_profiles, product_categories, equipment_models, portfolio_entries, invalid')
+            .neq('invalid', true)
+            .order('id', { ascending: true })
+            .range(fromIndex, toIndex)
+        )
       ]);
 
-      if (error) throw error;
       return buildPortfolioFilterOptions(catalog, data || []);
     } catch (e) {
       console.error(e);
@@ -655,6 +701,29 @@ export const CampaignPlannerService = {
       ];
 
       return normalizeInterestProductList(allProducts).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+    } catch (e) { console.error(e); return []; }
+  },
+
+  getDistinctSearchCampaigns: async (): Promise<string[]> => {
+    try {
+      const data = await fetchAllPaginatedRows((fromIndex, toIndex) =>
+        supabase
+          .from('clients')
+          .select('origin, origin_detail, invalid')
+          .eq('origin', 'GOOGLE_SEARCH')
+          .neq('invalid', true)
+          .not('origin_detail', 'is', null)
+          .neq('origin_detail', '')
+          .order('id', { ascending: true })
+          .range(fromIndex, toIndex)
+      );
+
+      const bucket = new Map<string, string>();
+      (data || []).forEach((row: any) => {
+        addUniqueComparableValue(bucket, row.origin_detail);
+      });
+
+      return Array.from(bucket.values()).sort((a, b) => a.localeCompare(b, 'pt-BR'));
     } catch (e) { console.error(e); return []; }
   },
 
@@ -692,21 +761,20 @@ export const CampaignPlannerService = {
         PortfolioCatalogService.getCatalogConfig(),
         dataService.getQuestions()
       ]);
-      let query = supabase
-        .from('clients')
-        .select(`
-          *, 
-          call_logs (
-            id, call_type, responses, start_time, operator_id, proposito
-          )
-        `);
+      const clients = await fetchAllPaginatedRows((fromIndex, toIndex) => {
+        let query = supabase
+          .from('clients')
+          .select(`
+            *, 
+            call_logs (
+              id, call_type, responses, start_time, operator_id, proposito
+            )
+          `)
+          .neq('invalid', true)
+          .order('id', { ascending: true });
 
-      if (filters.statusCliente?.length) {
-        query = query.in('status', filters.statusCliente);
-      }
       
       // Filtra números inválidos
-      query = query.neq('invalid', true);
 
       // Exclui prospects que já são clientes (evita duplicidade no disparador)
       if (filters.tags?.length) {
@@ -720,8 +788,8 @@ export const CampaignPlannerService = {
         query = query.or('email.is.null,email.eq.');
       }
 
-      const { data: clients, error } = await query;
-      if (error) throw new Error(error.message);
+        return query.range(fromIndex, toIndex);
+      });
 
       return (clients ?? [])
         .map(client => {
@@ -806,6 +874,7 @@ export const CampaignPlannerService = {
 
           return {
             ...client,
+            status: normalizeCampaignClientStatus(client.status),
             city: resolvedLocation.city || client.city,
             neighborhood: resolvedLocation.neighborhood || client.neighborhood,
             interest_product: normalizedInterestProduct,
@@ -839,12 +908,16 @@ export const CampaignPlannerService = {
           const matchesHistory = requiresMissingHistory
             ? client.call_logs_filtradas.length === 0
             : (!temFiltroLigacao || client.call_logs_filtradas.length > 0);
+          const matchesStatus = !filters.statusCliente?.length || filters.statusCliente.includes(client.status || 'CLIENT');
 
           const matchesProfiles = matchesPortfolioFilter(client.customer_profiles, filters.perfisCliente, 'profile');
           const matchesCategories = matchesPortfolioFilter(client.product_categories, filters.categoriasProduto);
           const matchesEquipment = matchesPortfolioFilter(client.equipment_models, filters.equipamentos);
           const matchesCities = matchesNormalizedLocationFilter(client.city, filters.cidades, 'city');
           const matchesNeighborhoods = matchesNormalizedLocationFilter(client.neighborhood, filters.bairros, 'neighborhood');
+          const matchesSearchCampaigns = !filters.campanhasBusca?.length || filters.campanhasBusca.some(campaign =>
+            normalizeComparableText(campaign) === normalizeComparableText(client.origin_detail)
+          );
           const matchesInterests = !filters.interesses?.length || matchesPortfolioFilter(
             [client.interest_product, ...(client.offers || [])].filter(Boolean),
             filters.interesses
@@ -853,12 +926,14 @@ export const CampaignPlannerService = {
             filters.niveisSatisfacao.includes(client.ultima_satisfacao_nivel || 'SEM_LEITURA');
 
           return !isLeadAlreadyClient &&
+            matchesStatus &&
             matchesHistory &&
             matchesProfiles &&
             matchesCategories &&
             matchesEquipment &&
             matchesCities &&
             matchesNeighborhoods &&
+            matchesSearchCampaigns &&
             matchesInterests &&
             matchesSatisfaction;
         }) as any[];

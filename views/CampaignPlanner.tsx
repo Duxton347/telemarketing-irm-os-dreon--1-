@@ -60,6 +60,7 @@ export const CampaignPlanner: React.FC = () => {
   const [tagCategoriesList, setTagCategoriesList] = useState<string[]>([]);
   const [operadoresList, setOperadoresList] = useState<any[]>([]);
   const [interestProductsList, setInterestProductsList] = useState<string[]>([]);
+  const [searchCampaignsList, setSearchCampaignsList] = useState<string[]>([]);
   const [catalogConfig, setCatalogConfig] = useState<PortfolioCatalogConfig | null>(null);
   const [portfolioFilterOptions, setPortfolioFilterOptions] = useState<PortfolioFilterOptions>({
     profiles: [],
@@ -86,6 +87,7 @@ export const CampaignPlanner: React.FC = () => {
     equipamentos: [],
     bairros: [],
     cidades: [],
+    campanhasBusca: [],
     temEmail: undefined,
     produtoAlvo: '',
     ofertaAlvo: '',
@@ -120,7 +122,8 @@ export const CampaignPlanner: React.FC = () => {
       portfolioOptions,
       callTypes,
       tagCategories,
-      interestProducts
+      interestProducts,
+      searchCampaigns
     ] = await Promise.all([
       dataService.getUsers(),
       CampaignPlannerService.getDistinctCities(),
@@ -128,7 +131,8 @@ export const CampaignPlanner: React.FC = () => {
       CampaignPlannerService.getPortfolioFilterOptions(),
       CampaignPlannerService.getDistinctCallTypes(),
       CampaignPlannerService.getDistinctTagCategories(),
-      CampaignPlannerService.getDistinctInterestProducts()
+      CampaignPlannerService.getDistinctInterestProducts(),
+      CampaignPlannerService.getDistinctSearchCampaigns()
     ]);
 
     const activeOperators = users.filter(u => u.active && u.id && String(u.id).trim().toLowerCase() !== 'undefined');
@@ -142,6 +146,7 @@ export const CampaignPlanner: React.FC = () => {
     setCallTypesList(callTypes);
     setTagCategoriesList(tagCategories);
     setInterestProductsList(interestProducts);
+    setSearchCampaignsList(searchCampaigns);
   }, []);
 
   useEffect(() => {
@@ -489,6 +494,54 @@ export const CampaignPlanner: React.FC = () => {
                       className={`flex-1 py-1.5 text-xs font-bold rounded-lg transition-all ${filters.temEmail === undefined ? 'bg-slate-800 text-white' : 'bg-slate-50 text-slate-500 border border-slate-200'}`}
                     >Ambos</button>
                   </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                    <Search size={12} /> Campanha de Busca
+                  </label>
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      list="search-campaigns-list"
+                      placeholder="Buscar nome da busca do Google..."
+                      className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-blue-500 focus:bg-white transition-all shadow-inner"
+                      onChange={(e) => {
+                        const matchedCampaign = findMatchingListOption(e.target.value, searchCampaignsList, 'neighborhood');
+                        if (matchedCampaign) {
+                          if (!filters.campanhasBusca?.includes(matchedCampaign)) {
+                            setFilters({ ...filters, campanhasBusca: [...(filters.campanhasBusca || []), matchedCampaign] });
+                          }
+                          e.target.value = '';
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const matchedCampaign = findMatchingListOption(e.currentTarget.value, searchCampaignsList, 'neighborhood');
+                          if (matchedCampaign && !filters.campanhasBusca?.includes(matchedCampaign)) {
+                            setFilters({ ...filters, campanhasBusca: [...(filters.campanhasBusca || []), matchedCampaign] });
+                            e.currentTarget.value = '';
+                          }
+                        }
+                      }}
+                    />
+                    <datalist id="search-campaigns-list">
+                      {searchCampaignsList.map(campaign => <option key={campaign} value={campaign} />)}
+                    </datalist>
+                  </div>
+                  {filters.campanhasBusca && filters.campanhasBusca.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {filters.campanhasBusca.map(campaign => (
+                        <span key={campaign} className="inline-flex items-center gap-1 bg-gradient-to-r from-blue-500 to-sky-500 text-white shadow-sm px-2.5 py-1 rounded-lg text-xs font-bold animate-in zoom-in duration-200">
+                          {campaign} <X size={12} className="cursor-pointer hover:text-blue-100 transition-colors" onClick={() => toggleFilterArray('campanhasBusca', campaign)} />
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-[11px] font-bold text-slate-500">
+                    Usa o nome da busca/processo que gerou o lead aprovado no Google Maps.
+                  </p>
                 </div>
               </div>
 
@@ -1032,6 +1085,11 @@ export const CampaignPlanner: React.FC = () => {
                         <td className="px-4 py-4">
                           <div className="text-xs text-slate-700 font-semibold">{c.city || 'Cidade N/D'}</div>
                           <div className="text-xs text-slate-500">{c.neighborhood || 'Bairro N/D'}</div>
+                          {c.origin === 'GOOGLE_SEARCH' && c.origin_detail && (
+                            <div className="text-[10px] text-sky-600 mt-1 font-black uppercase tracking-wider">
+                              Busca: {c.origin_detail}
+                            </div>
+                          )}
                           {c.email && <div className="text-[10px] text-blue-500 mt-1 flex items-center gap-1"><Mail size={10}/> {c.email}</div>}
                         </td>
                         <td className="px-4 py-4">

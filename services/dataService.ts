@@ -27,6 +27,7 @@ import {
 import { normalizeInterestProduct, normalizeInterestProductList } from '../utils/interestCatalog';
 import { PortfolioCatalogService } from './portfolioCatalogService';
 import { decodeLatin1 } from '../utils/textEncoding';
+import { getTaskAssignableUsers } from '../utils/taskAssignment';
 import {
   buildQuestionnaireBusinessContext,
   buildQuestionnaireClientContext
@@ -1848,6 +1849,7 @@ const mapClientRecord = (record: any): Client => {
     acceptance: (record.acceptance as any) || 'medium',
     satisfaction: (record.satisfaction as any) || 'medium',
     origin: getSafeClientOrigin(record.origin),
+    origin_detail: getTrimmedText(record.origin_detail),
     email: getTrimmedText(record.email),
     website: getTrimmedText(record.website),
     status: getSafeClientStatus(record.status),
@@ -2520,7 +2522,7 @@ export const dataService = {
             const { error: updateError } = await runUpdateWithUpdatedAtFallback(
               'tasks',
               { ...payload, updated_at: new Date().toISOString() },
-              (safePayload) => supabase.from('tasks').update(safePayload).eq('id', existingTask.id)
+              async (safePayload) => await supabase.from('tasks').update(safePayload).eq('id', existingTask.id)
             );
             if (updateError) throw updateError;
           }
@@ -2571,7 +2573,7 @@ export const dataService = {
     const { data: updatedTasks, error: tError } = await runUpdateWithUpdatedAtFallback(
       'tasks',
       payload,
-      (safePayload) => supabase.from('tasks').update(safePayload).eq('id', taskId).select('id')
+      async (safePayload) => await supabase.from('tasks').update(safePayload).eq('id', taskId).select('id')
     );
     if (tError) throw tError;
     const count = updatedTasks?.length || 0;
@@ -2593,7 +2595,7 @@ export const dataService = {
          const { error: schedError } = await runUpdateWithUpdatedAtFallback(
            'call_schedules',
            schedulePayload,
-           (safePayload) => supabase.from('call_schedules').update(safePayload).eq('id', taskId)
+           async (safePayload) => await supabase.from('call_schedules').update(safePayload).eq('id', taskId)
          );
          if (schedError) throw schedError;
        }
@@ -2618,20 +2620,22 @@ export const dataService = {
 
   updateTaskStatus: async (taskId: string, status: 'pending' | 'completed' | 'skipped'): Promise<{ error: any }> => {
     const payload = { status, updated_at: new Date().toISOString() };
-    return await runUpdateWithUpdatedAtFallback(
+    const result = await runUpdateWithUpdatedAtFallback(
       'tasks',
       payload,
-      (safePayload) => supabase.from('tasks').update(safePayload).eq('id', taskId)
+      async (safePayload) => await supabase.from('tasks').update(safePayload).eq('id', taskId)
     );
+    return { error: result?.error };
   },
 
   updateWhatsAppTaskStatus: async (taskId: string, status: 'pending' | 'started' | 'completed' | 'skipped'): Promise<{ error: any }> => {
     const payload = { status, updated_at: new Date().toISOString() };
-    return await runUpdateWithUpdatedAtFallback(
+    const result = await runUpdateWithUpdatedAtFallback(
       'whatsapp_tasks',
       payload,
-      (safePayload) => supabase.from('whatsapp_tasks').update(safePayload).eq('id', taskId)
+      async (safePayload) => await supabase.from('whatsapp_tasks').update(safePayload).eq('id', taskId)
     );
+    return { error: result?.error };
   },
 
   deleteTask: async (taskId: string): Promise<void> => {
@@ -3644,6 +3648,7 @@ export const dataService = {
       offers: normalizedOffers,
       last_interaction: existing?.last_interaction || new Date().toISOString(),
       origin: existing?.origin || client.origin || 'MANUAL',
+      origin_detail: existing?.origin_detail || client.origin_detail || null,
       email: existing?.email || client.email,
       website: existing?.website || client.website,
       // Ensure INATIVO is respected from payload if passed, otherwise existing status is preserved.
@@ -3770,6 +3775,7 @@ export const dataService = {
       offers: normalizedOffers,
       last_interaction: existing.last_interaction || new Date().toISOString(),
       origin: updates.origin ?? existing.origin ?? 'MANUAL',
+      origin_detail: updates.origin_detail ?? existing.origin_detail ?? null,
       email: updates.email ?? existing.email ?? null,
       website: updates.website ?? existing.website ?? null,
       status: updates.status === 'INATIVO'
@@ -4884,7 +4890,7 @@ export const dataService = {
 
   getProductivityMetrics: async (startDate: string, endDate: string): Promise<ProductivityMetrics> => {
     const users = await dataService.getUsers();
-    const operators = users.filter(u => u.role === UserRole.OPERATOR || u.role === UserRole.SUPERVISOR);
+    const operators = getTaskAssignableUsers(users);
 
     const [events, sales] = await Promise.all([
       dataService.getOperatorEvents(startDate, endDate),
