@@ -11,6 +11,7 @@ import { UserRole, CallType, ProtocolStatus, User, Protocol, Client, Question, T
 import { useNavigate } from 'react-router-dom';
 import { RepiqueModal, RepiqueData } from '../components/RepiqueModal';
 import { resolveQuestionnaireEntries } from '../utils/questionnaireInsights';
+import { buildScheduledForValue } from '../utils/scheduleDateTime';
 
 interface DashboardProps {
   user: any;
@@ -623,7 +624,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
               customerId: t.clientId,
               requestedByOperatorId: user.id, // Who requested? The logged in user (Admin/Manager)
               assignedOperatorId: t.assignedTo, // Keep assigned to same operator
-              scheduledFor: `${data.date}T${data.time}:00`,
+              scheduledFor: buildScheduledForValue(data.date, data.time),
               callType: t.type,
               status: 'PENDENTE_APROVACAO' as ScheduleStatus, // Always require approval for repicks
               scheduleReason: data.reason,

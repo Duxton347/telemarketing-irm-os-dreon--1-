@@ -30,6 +30,14 @@ const isPostSaleRemarketingType = (value?: string | null) => {
     return normalized === 'POS_VENDA' || normalized === 'REATIVACAO' || normalized === 'VENDA';
 };
 
+const shouldHideSkipReasonForDelay = (row: UnifiedReportRow) =>
+    Boolean(row.lastDelayDays && row.lastSkipReason && normalizeCallTypeToken(row.lastSkipReason).includes('ATRAS'));
+
+const formatDelayBadge = (delayDays?: number) => {
+    if (!delayDays || delayDays <= 0) return null;
+    return `Atraso: ${delayDays} ${delayDays === 1 ? 'dia' : 'dias'}`;
+};
+
 const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenProspect, dateRange }) => {
     const [data, setData] = useState<UnifiedReportRow[]>([]);
     const [calls, setCalls] = useState<CallRecord[]>([]);
@@ -440,7 +448,12 @@ const PostSaleRemarketingReport: React.FC<Props> = ({ user, operators, onOpenPro
                                                         Nota: {row.lastRating}
                                                     </span>
                                                 )}
-                                                {row.responseStatus === 'Sem Resposta' && row.lastSkipReason && (
+                                                {row.lastDelayDays !== undefined && row.lastDelayDays > 0 && (
+                                                    <span className="w-max px-2 py-0.5 rounded text-[10px] font-black uppercase bg-rose-100 text-rose-700">
+                                                        {formatDelayBadge(row.lastDelayDays)}
+                                                    </span>
+                                                )}
+                                                {row.responseStatus === 'Sem Resposta' && row.lastSkipReason && !shouldHideSkipReasonForDelay(row) && (
                                                     <span className="w-max px-2 py-0.5 rounded text-[10px] font-black uppercase bg-slate-100 text-slate-600">
                                                         Motivo: {row.lastSkipReason}
                                                     </span>

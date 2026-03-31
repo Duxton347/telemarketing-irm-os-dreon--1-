@@ -37,6 +37,7 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
     const [interestProducts, setInterestProducts] = useState<string[]>([]);
 
     const [isLoading, setIsLoading] = useState(true);
+    const [isSavingQuote, setIsSavingQuote] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState<'ALL' | 'OPEN' | 'WON' | 'LOST'>('OPEN');
     const [salespersonFilter, setSalespersonFilter] = useState('ALL');
@@ -113,16 +114,49 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
         };
     }, [filteredQuotes]);
 
+    const normalizeQuoteNumber = (value?: string) => (value || '').trim();
+
+    const revealQuoteInList = (quoteNumber: string) => {
+        setStatusFilter('ALL');
+        setSearchTerm(quoteNumber);
+    };
+
+    const getQuoteStatusLabel = (status?: QuoteStatus) => {
+        switch (status) {
+            case 'WON':
+                return 'Fechado (Ganho)';
+            case 'LOST':
+                return 'Perdido';
+            case 'OPEN':
+            default:
+                return 'Em Aberto';
+        }
+    };
+
+    const buildDuplicateQuoteMessage = (quoteNumber: string, existingQuote?: Quote | null) => {
+        if (existingQuote) {
+            return `O orçamento ${quoteNumber} já existe para ${existingQuote.client_name} e está com status ${getQuoteStatusLabel(existingQuote.status)}. Ajustei os filtros para mostrar todos os status e busquei por esse número. Feche esta janela para localizá-lo.`;
+        }
+
+        return `O número ${quoteNumber} já existe no banco. Ajustei os filtros para mostrar todos os status e busquei por esse número. Se ele ainda não aparecer, provavelmente está fora do filtro anterior ou da sua visualização atual.`;
+    };
+
     const handleSaveQuote = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!newQuote.client_name || !newQuote.salesperson_name || !newQuote.quote_number) {
+        if (isSavingQuote) return;
+        const normalizedQuoteNumber = normalizeQuoteNumber(newQuote.quote_number);
+        if (!newQuote.client_name || !newQuote.salesperson_name || !normalizedQuoteNumber) {
             alert("Preencha o nome do cliente, o vendedor e o número do orçamento.");
             return;
         }
 
+        setIsSavingQuote(true);
         try {
             if (newQuote.id) {
-                await dataService.updateQuote(newQuote.id, newQuote);
+                await dataService.updateQuote(newQuote.id, {
+                    ...newQuote,
+                    quote_number: normalizedQuoteNumber
+                });
             } else {
                 let currentClient = clients.find(c => c.name === newQuote.client_name);
                 let finalClientId = newQuote.client_id;
@@ -140,19 +174,24 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
 
                 await dataService.saveQuote({
                     ...newQuote,
+                    quote_number: normalizedQuoteNumber,
                     client_id: finalClientId
                 });
             }
             setIsModalOpen(false);
             setNewQuote({ status: 'OPEN', win_probability: 50, value: 0 });
-            loadData();
+            await loadData();
         } catch (e: any) {
             console.error(e);
             if (e.code === '23505' || e.message?.includes('duplicate') || e.message?.includes('violates unique constraint')) {
-                alert("Orçamento não foi salvo por estar duplicado (Este cliente já possui um orçamento com este número).");
+                const existingQuote = e.existingQuote || await dataService.findQuoteByNumber(normalizedQuoteNumber).catch(() => null);
+                revealQuoteInList(normalizedQuoteNumber);
+                alert(buildDuplicateQuoteMessage(normalizedQuoteNumber, existingQuote));
             } else {
                 alert("Erro ao salvar orçamento: " + (e.message || 'Erro desconhecido.'));
             }
+        } finally {
+            setIsSavingQuote(false);
         }
     };
 
@@ -539,7 +578,9 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
 
                             <div className="pt-4 flex justify-end gap-3">
                                 <button type="button" onClick={() => setIsModalOpen(false)} className="px-6 py-3 font-bold text-slate-500 hover:bg-slate-100 rounded-xl transition-colors">Cancelar</button>
-                                <button type="submit" className="px-8 py-3 bg-blue-600 text-white font-black uppercase tracking-widest text-xs rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-500/30 transition-all active:scale-95">Salvar Orçamento</button>
+                                <button type="submit" disabled={isSavingQuote} className="px-8 py-3 bg-blue-600 text-white font-black uppercase tracking-widest text-xs rounded-xl hover:bg-blue-700 shadow-lg shadow-blue-500/30 transition-all active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center gap-2">
+                                    {isSavingQuote ? <><Loader2 size={14} className="animate-spin" /> Salvando...</> : 'Salvar Orçamento'}
+                                </button>
                             </div>
                         </form>
                     </div>
@@ -570,3 +611,4 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
         </div>
     );
 };
+

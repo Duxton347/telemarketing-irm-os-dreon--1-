@@ -19,6 +19,178 @@ export interface User {
   name: string;
   role: UserRole;
   active: boolean;
+  teamId?: string | null;
+  teamName?: string | null;
+  sectorCode?: string | null;
+}
+
+export interface OperationTeam {
+  id: string;
+  name: string;
+  sectorCode?: string | null;
+  description?: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskList {
+  id: string;
+  name: string;
+  ownerUserId: string;
+  createdBy?: string | null;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type TaskScope = 'SETOR' | 'PESSOAL';
+export type TaskRecurrenceType = 'NONE' | 'DAILY' | 'WEEKDAYS' | 'WEEKLY' | 'MONTHLY' | 'CUSTOM';
+export type TaskPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+export type TaskAssignMode = 'SPECIFIC' | 'ALL' | 'ROLE' | 'TEAM';
+export type TaskVisibilityScope = 'PRIVATE' | 'TEAM' | 'SECTOR';
+export type TaskInstanceStatus = 'PENDENTE' | 'EM_ANDAMENTO' | 'AGUARDANDO' | 'CONCLUIDO' | 'ATRASADO' | 'CANCELADO' | 'ARQUIVADO';
+export type AgendaSourceType = 'REPIQUE' | 'AGENDAMENTO' | 'PROTOCOLO' | 'ROTEIRO' | 'VISITA' | 'DEMANDA_SETOR' | 'TAREFA_PESSOAL';
+export type AgendaQuickFilter = 'ALL' | 'MY' | 'SECTOR' | 'REPIQUE' | 'PROTOCOL' | 'ROUTE' | 'INTERNAL' | 'OVERDUE' | 'TODAY';
+
+export interface TaskTemplate {
+  id: string;
+  title: string;
+  description?: string | null;
+  category: string;
+  taskScope: TaskScope;
+  recurrenceType: TaskRecurrenceType;
+  recurrenceConfig?: Record<string, any> | null;
+  isAccumulative: boolean;
+  generateOnlyIfPreviousClosed: boolean;
+  requiresApproval: boolean;
+  requiresCommentOnCompletion: boolean;
+  defaultPriority: TaskPriority;
+  defaultDueTime?: string | null;
+  createdBy?: string | null;
+  isActive: boolean;
+  assignMode: TaskAssignMode;
+  assignConfig?: Record<string, any> | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskInstance {
+  id: string;
+  templateId?: string | null;
+  sourceType: 'TASK_INTERNAL' | 'REPIQUE' | 'AGENDAMENTO' | 'PROTOCOLO' | 'VISITA' | 'ROTEIRO' | 'WHATSAPP';
+  sourceId?: string | null;
+  title: string;
+  description?: string | null;
+  category: string;
+  assignedTo?: string | null;
+  assignedBy?: string | null;
+  visibilityScope: TaskVisibilityScope;
+  priority: TaskPriority;
+  dueAt?: string | null;
+  startsAt?: string | null;
+  completedAt?: string | null;
+  status: TaskInstanceStatus;
+  isRecurringInstance: boolean;
+  isAccumulated: boolean;
+  carryoverFrom?: string | null;
+  completionNote?: string | null;
+  metadata?: Record<string, any> | null;
+  recurrenceKey?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  assignedUser?: User | null;
+  assignedByUser?: User | null;
+  template?: TaskTemplate | null;
+}
+
+export interface TaskActivityLog {
+  id: string;
+  taskInstanceId: string;
+  action: string;
+  actorId?: string | null;
+  oldValue?: Record<string, any> | null;
+  newValue?: Record<string, any> | null;
+  note?: string | null;
+  createdAt: string;
+  actorName?: string | null;
+}
+
+export interface UserNotification {
+  id: string;
+  userId: string;
+  type: string;
+  title: string;
+  body?: string | null;
+  relatedEntityType?: string | null;
+  relatedEntityId?: string | null;
+  isRead: boolean;
+  createdAt: string;
+}
+
+export interface AgendaCentralActionContext {
+  canOpen: boolean;
+  canComplete: boolean;
+  canReschedule: boolean;
+  canApprove: boolean;
+  canReassign: boolean;
+}
+
+export interface AgendaCentralItem {
+  id: string;
+  sourceType: AgendaSourceType;
+  sourceId?: string;
+  title: string;
+  subtitle?: string;
+  description?: string;
+  responsibleId?: string;
+  responsibleName?: string;
+  clientId?: string;
+  clientName?: string;
+  dueAt?: string;
+  startsAt?: string;
+  priority: TaskPriority;
+  status: Exclude<TaskInstanceStatus, 'ARQUIVADO'>;
+  category: string;
+  isCollapsibleGroupItem?: boolean;
+  itemCount?: number;
+  metadata?: Record<string, any>;
+  deepLink?: string;
+  isMine?: boolean;
+  isOverdue?: boolean;
+  isDueToday?: boolean;
+  actionContext?: AgendaCentralActionContext;
+}
+
+export interface AgendaCentralSummary {
+  totalToday: number;
+  repiques: number;
+  protocolos: number;
+  roteiro: number;
+  tarefasSetor: number;
+  minhasTarefas: number;
+  atrasados: number;
+}
+
+export interface AgendaCentralSection {
+  key: string;
+  title: string;
+  icon: string;
+  count: number;
+  items: AgendaCentralItem[];
+  defaultExpanded?: boolean;
+}
+
+export interface AgendaCentralFilters {
+  quickFilter: AgendaQuickFilter;
+  ownerScope: 'all' | 'mine' | 'sector';
+  type: 'ALL' | AgendaSourceType;
+  priority: 'ALL' | TaskPriority;
+  status: 'ALL' | Exclude<TaskInstanceStatus, 'ARQUIVADO'>;
+  dueWindow: 'ALL' | 'TODAY' | 'WEEK';
+  overdueOnly: boolean;
+  operatorId: string;
+  search: string;
 }
 
 export enum CallType {
@@ -452,6 +624,7 @@ export interface UnifiedReportRow {
   responseStatus: string; // 'Não Contatado', 'Sem Resposta', 'Respondeu'
   conversionStatus: string; // 'Gerou Venda', 'Sem Venda'
   lastSkipReason?: string;
+  lastDelayDays?: number;
 }
 
 // Dreon Skill v3 New Interfaces

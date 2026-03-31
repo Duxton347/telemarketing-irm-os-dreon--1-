@@ -1,4 +1,5 @@
 import React from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
     MapPin, Plus, Calendar, User, Search, Navigation,
     MoreVertical, CheckCircle2, Clock, X, Save, Loader2,
@@ -12,10 +13,16 @@ import { CurrencyInput } from '../components/CurrencyInput';
 
 const Routes: React.FC<{ user: UserType }> = ({ user }) => {
     // --- STATE ---
+    const [searchParams, setSearchParams] = useSearchParams();
     const canBuildRoutes = user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR || user.role === UserRole.OPERATOR;
     const canManageSalespeople = user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR;
+    const requestedTab = searchParams.get('tab') as 'BUILDER' | 'EXECUTION' | 'HISTORY' | null;
+    const focusedVisitId = searchParams.get('visitId');
+    const requestedAction = searchParams.get('action');
     const [activeTab, setActiveTab] = React.useState<'BUILDER' | 'EXECUTION' | 'HISTORY'>(
-        user.role === UserRole.OPERATOR ? 'BUILDER' : 'EXECUTION'
+        requestedTab && ['BUILDER', 'EXECUTION', 'HISTORY'].includes(requestedTab)
+            ? requestedTab
+            : (user.role === UserRole.OPERATOR ? 'BUILDER' : 'EXECUTION')
     );
 
     // Data State
@@ -106,6 +113,26 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
     }, []);
 
     React.useEffect(() => { loadData(); }, [loadData]);
+
+    React.useEffect(() => {
+        if (requestedTab && ['BUILDER', 'EXECUTION', 'HISTORY'].includes(requestedTab)) {
+            setActiveTab(requestedTab);
+        }
+    }, [requestedTab]);
+
+    const syncRouteSearchParams = React.useCallback((updates: Record<string, string | null>) => {
+        const nextParams = new URLSearchParams(searchParams);
+
+        Object.entries(updates).forEach(([key, value]) => {
+            if (value) {
+                nextParams.set(key, value);
+            } else {
+                nextParams.delete(key);
+            }
+        });
+
+        setSearchParams(nextParams, { replace: true });
+    }, [searchParams, setSearchParams]);
 
     // --- BUILDER ACTIONS ---
     const handleSearchCandidates = async () => {
@@ -304,6 +331,11 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
 
     // --- FINALIZATION ---
     const openFinalizeModal = (visit: Visit) => {
+        syncRouteSearchParams({
+            tab: 'EXECUTION',
+            visitId: visit.id,
+            action: 'finalize'
+        });
         setActiveVisit(visit);
         setFinalizeData({
             outcome: 'REALIZED',
@@ -324,6 +356,16 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
         setModalType('FINALIZE');
         setIsModalOpen(true);
     };
+
+    React.useEffect(() => {
+        if (!focusedVisitId || visits.length === 0) return;
+        const targetVisit = visits.find(visit => visit.id === focusedVisitId);
+        if (!targetVisit) return;
+
+        if (requestedAction === 'finalize') {
+            openFinalizeModal(targetVisit);
+        }
+    }, [focusedVisitId, requestedAction, visits]);
 
     const handleFinalize = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -405,6 +447,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
 
             setIsModalOpen(false);
             setModalType(null);
+            syncRouteSearchParams({ visitId: null, action: null });
             loadData();
             alert("Visita finalizada com sucesso!");
         } catch (e: any) {
@@ -917,7 +960,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                         <div className="bg-white w-full max-w-lg rounded-[48px] shadow-2xl p-8 max-h-[90vh] overflow-y-auto animate-in zoom-in-50 duration-200 custom-scrollbar">
                             <div className="flex justify-between items-center mb-6">
                                 <h3 className="text-xl font-black uppercase text-slate-800">Finalizar Visita</h3>
-                                <button onClick={() => setIsModalOpen(false)} className="p-2 bg-slate-100 rounded-full text-slate-400 hover:bg-slate-200"><X size={20} /></button>
+                                <button onClick={() => { setIsModalOpen(false); syncRouteSearchParams({ visitId: null, action: null }); }} className="p-2 bg-slate-100 rounded-full text-slate-400 hover:bg-slate-200"><X size={20} /></button>
                             </div>
 
                             <form onSubmit={handleFinalize} className="space-y-6">

@@ -4,7 +4,8 @@ import {
   UserRole, CallType, ProtocolStatus, ProtocolEvent,
   OperatorEventType, OperatorEvent, Sale, SaleStatus, Visit,
   CallSchedule, CallScheduleWithClient, ScheduleStatus, WhatsAppTask, ProductivityMetrics,
-  UnifiedReportRow, Protocol, ClientTag, TagStatus, Quote, ClientHistoryData, ClientHistorySummary
+  UnifiedReportRow, Protocol, ClientTag, TagStatus, Quote, ClientHistoryData, ClientHistorySummary,
+  OperationTeam, TaskTemplate, TaskInstance, TaskActivityLog, UserNotification, TaskList
 } from '../types';
 import { TagDecisionEngine } from './tagDecisionEngine';
 import { SCORE_MAP, STAGE_CONFIG } from '../constants';
@@ -106,6 +107,8 @@ const getTrimmedText = (value?: unknown) => {
   const text = String(value).trim();
   return text.length > 0 ? text : undefined;
 };
+
+const normalizeQuoteNumber = (value?: unknown) => getTrimmedText(value);
 
 const normalizeUuidReference = (value?: unknown) => {
   const text = getTrimmedText(value);
@@ -442,95 +445,51 @@ const loadClientIdsWithRecentCommunication = async (clientIds: string[]): Promis
   return recentClientIds;
 };
 
-const restoreVoiceTasksBlockedByWhatsAppTransfers = async (
-  options?: {
-    clientId?: string;
+const restoreLatestBlockedVoiceTask = async (
+  options: {
+    clientId: string;
     operatorId?: string;
     taskType?: string;
   }
-): Promise<number> => {
-  const blockDays = await getConfiguredCommunicationBlockDays();
-  if (blockDays <= 0) {
-    return 0;
-  }
-
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - blockDays);
-  const cutoffIso = cutoff.toISOString();
-
-  let transfersQuery = supabase
-    .from('whatsapp_tasks')
-    .select('client_id, assigned_to, type')
-    .eq('status', 'skipped')
-    .eq('skip_reason', 'moved_to_voice')
-    .or(`completed_at.gte.${cutoffIso},updated_at.gte.${cutoffIso}`);
-
-  if (options?.clientId) {
-    transfersQuery = transfersQuery.eq('client_id', options.clientId);
-  }
-
-  if (options?.operatorId) {
-    transfersQuery = transfersQuery.eq('assigned_to', options.operatorId);
-  }
-
-  const { data: transferMarkers, error: transferMarkersError } = await transfersQuery;
-  if (transferMarkersError) throw transferMarkersError;
-  if (!transferMarkers || transferMarkers.length === 0) {
-    return 0;
-  }
-
-  const transferableKeys = new Set(
-    transferMarkers.map((marker: any) => `${marker.client_id || ''}::${marker.assigned_to || ''}`)
-  );
-
-  let blockedTasksQuery = supabase
+): Promise<string | null> => {
+  let blockedTaskQuery = supabase
     .from('tasks')
-    .select('id, client_id, assigned_to, status, skip_reason')
+    .select('id')
+    .eq('client_id', options.clientId)
     .eq('status', 'skipped')
-    .eq('skip_reason', 'recent_communication_block');
+    .eq('skip_reason', 'recent_communication_block')
+    .order('updated_at', { ascending: false })
+    .order('created_at', { ascending: false })
+    .limit(1);
 
-  if (options?.clientId) {
-    blockedTasksQuery = blockedTasksQuery.eq('client_id', options.clientId);
+  if (options.operatorId) {
+    blockedTaskQuery = blockedTaskQuery.eq('assigned_to', options.operatorId);
   }
 
-  if (options?.operatorId) {
-    blockedTasksQuery = blockedTasksQuery.eq('assigned_to', options.operatorId);
+  if (options.taskType) {
+    blockedTaskQuery = blockedTaskQuery.eq('type', options.taskType);
   }
 
-  if (options?.taskType) {
-    blockedTasksQuery = blockedTasksQuery.eq('type', options.taskType);
-  }
-
-  const { data: blockedTasks, error: blockedTasksError } = await blockedTasksQuery;
+  const { data: blockedTasks, error: blockedTasksError } = await blockedTaskQuery;
   if (blockedTasksError) throw blockedTasksError;
-  if (!blockedTasks || blockedTasks.length === 0) {
-    return 0;
+
+  const blockedTaskId = blockedTasks?.[0]?.id;
+  if (!blockedTaskId) {
+    return null;
   }
 
-  const idsToRestore = blockedTasks
-    .filter((task: any) => transferableKeys.has(`${task.client_id || ''}::${task.assigned_to || ''}`))
-    .map((task: any) => task.id);
+  const { error: restoreError } = await runUpdateWithUpdatedAtFallback(
+    'tasks',
+    {
+      status: 'pending',
+      skip_reason: null,
+      updated_at: new Date().toISOString()
+    },
+    async (safePayload) => await supabase.from('tasks').update(safePayload).eq('id', blockedTaskId)
+  );
+  if (restoreError) throw restoreError;
 
-  if (idsToRestore.length === 0) {
-    return 0;
-  }
-
-  const chunkSize = 50;
-  for (let index = 0; index < idsToRestore.length; index += chunkSize) {
-    const chunk = idsToRestore.slice(index, index + chunkSize);
-    const { error: restoreError } = await runUpdateWithUpdatedAtFallback(
-      'tasks',
-      {
-        status: 'pending',
-        skip_reason: null,
-        updated_at: new Date().toISOString()
-      },
-      async (safePayload) => await supabase.from('tasks').update(safePayload).in('id', chunk)
-    );
-    if (restoreError) throw restoreError;
-  }
-
-  return idsToRestore.length;
+  return blockedTaskId;
 };
 
 const cleanupStaleVoiceQueueEntries = async (
@@ -540,8 +499,6 @@ const cleanupStaleVoiceQueueEntries = async (
     taskType?: string;
   }
 ): Promise<number> => {
-  await restoreVoiceTasksBlockedByWhatsAppTransfers(options);
-
   let query = supabase
     .from('tasks')
     .select('id, client_id')
@@ -1408,6 +1365,128 @@ const extractUnifiedReportOffer = (
   return undefined;
 };
 
+const extractDelayDaysFromValue = (value: unknown) => {
+  if (!isMeaningfulReportValue(value)) return undefined;
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 0 ? Math.round(value) : undefined;
+  }
+
+  const text = String(value).trim();
+  const numericMatch = text.match(/\d+/);
+  if (!numericMatch) return undefined;
+
+  const numeric = Number(numericMatch[0]);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
+};
+
+const extractUnifiedReportDelayDays = (
+  responses: Record<string, any> = {},
+  questions: Question[] = [],
+  callType?: string,
+  proposito?: string | null
+) => {
+  const delayQuestion = findQuestionByReportHints(
+    questions,
+    callType,
+    proposito,
+    ['prazo_dias_atraso', 'atraso_entrega_dias', 'quantos dias', 'dias de atraso']
+  );
+
+  if (delayQuestion) {
+    const resolved = resolveStoredResponseForQuestion(responses, delayQuestion);
+    const fromQuestion = extractDelayDaysFromValue(resolved);
+    if (fromQuestion !== undefined) return fromQuestion;
+  }
+
+  const explicitCandidates = [
+    responses.prazo_dias_atraso,
+    responses.atraso_entrega_dias,
+    responses.dias_atraso,
+    responses.delivery_delay_days
+  ];
+
+  for (const candidate of explicitCandidates) {
+    const delayDays = extractDelayDaysFromValue(candidate);
+    if (delayDays !== undefined) return delayDays;
+  }
+
+  for (const [key, value] of Object.entries(responses)) {
+    const normalizedKey = normalizeReportText(key);
+    if (!normalizedKey.includes('atras')) continue;
+    if (!normalizedKey.includes('dia')) continue;
+
+    const delayDays = extractDelayDaysFromValue(value);
+    if (delayDays !== undefined) return delayDays;
+  }
+
+  return undefined;
+};
+
+const loadUnifiedReportDelayDays = async (
+  clientIds: string[],
+  operatorId?: string
+): Promise<Map<string, number>> => {
+  if (clientIds.length === 0) return new Map<string, number>();
+
+  let callsQuery = supabase
+    .from('call_logs')
+    .select('client_id, operator_id, start_time, call_type, responses, proposito')
+    .in('client_id', clientIds);
+  let whatsappQuery = supabase
+    .from('whatsapp_tasks')
+    .select('client_id, assigned_to, type, status, created_at, completed_at, responses')
+    .in('client_id', clientIds);
+
+  if (operatorId) {
+    callsQuery = callsQuery.eq('operator_id', operatorId);
+    whatsappQuery = whatsappQuery.eq('assigned_to', operatorId);
+  }
+
+  const [questions, callsResult, whatsappResult] = await Promise.all([
+    loadActiveQuestions(),
+    callsQuery,
+    whatsappQuery
+  ]);
+
+  if (callsResult.error) throw callsResult.error;
+  if (whatsappResult.error) throw whatsappResult.error;
+
+  const latestDelayByClient = new Map<string, { timestamp: number; delayDays: number }>();
+
+  const registerDelay = (clientId?: string | null, timestamp?: string | null, delayDays?: number) => {
+    if (!clientId || !delayDays || delayDays <= 0) return;
+
+    const currentTimestamp = new Date(timestamp || 0).getTime();
+    const previous = latestDelayByClient.get(clientId);
+
+    if (!previous || currentTimestamp >= previous.timestamp) {
+      latestDelayByClient.set(clientId, {
+        timestamp: currentTimestamp,
+        delayDays
+      });
+    }
+  };
+
+  for (const call of (callsResult.data || []).filter(call => isPostSaleRemarketingCallType(call.call_type))) {
+    registerDelay(
+      call.client_id,
+      call.start_time,
+      extractUnifiedReportDelayDays(call.responses || {}, questions, call.call_type, call.proposito)
+    );
+  }
+
+  for (const task of (whatsappResult.data || []).filter(task => task.status === 'completed')) {
+    registerDelay(
+      task.client_id,
+      task.completed_at || task.created_at,
+      extractUnifiedReportDelayDays(task.responses || {}, questions, CallType.WHATSAPP)
+    );
+  }
+
+  return new Map(Array.from(latestDelayByClient.entries()).map(([clientId, value]) => [clientId, value.delayDays]));
+};
+
 const buildUnifiedReportFallback = async (
   operatorId?: string,
   statusFilter?: string
@@ -1527,6 +1606,7 @@ const buildUnifiedReportFallback = async (
       rating?: number | null;
       upsellOffer?: string;
       skipReason?: string;
+      delayDays?: number;
     }> = [];
 
     clientCalls.forEach(call => {
@@ -1539,7 +1619,8 @@ const buildUnifiedReportFallback = async (
         operatorId: call.operator_id,
         channel: 'Ligação',
         rating: extractUnifiedReportRating(call.responses || {}, questions, call.call_type, call.proposito),
-        upsellOffer: extractUnifiedReportOffer(call.responses || {}, questions, call.call_type, call.proposito)
+        upsellOffer: extractUnifiedReportOffer(call.responses || {}, questions, call.call_type, call.proposito),
+        delayDays: extractUnifiedReportDelayDays(call.responses || {}, questions, call.call_type, call.proposito)
       });
     });
 
@@ -1565,7 +1646,8 @@ const buildUnifiedReportFallback = async (
         channel: 'WhatsApp',
         rating: extractUnifiedReportRating(task.responses || {}, questions, CallType.WHATSAPP),
         upsellOffer: extractUnifiedReportOffer(task.responses || {}, questions, CallType.WHATSAPP),
-        skipReason: task.status === 'skipped' ? task.skip_reason || undefined : undefined
+        skipReason: task.status === 'skipped' ? task.skip_reason || undefined : undefined,
+        delayDays: extractUnifiedReportDelayDays(task.responses || {}, questions, CallType.WHATSAPP)
       });
     });
 
@@ -1574,6 +1656,7 @@ const buildUnifiedReportFallback = async (
     const lastEvent = events[0];
     const lastRatedEvent = events.find(event => event.rating !== null && event.rating !== undefined);
     const lastOfferEvent = events.find(event => event.upsellOffer);
+    const lastDelayEvent = events.find(event => event.delayDays !== undefined);
     const hasSale = clientSales.length > 0;
 
     return {
@@ -1592,7 +1675,8 @@ const buildUnifiedReportFallback = async (
       upsellStatus: lastOfferEvent?.upsellOffer ? (hasSale ? 'DONE' : 'OPEN') : undefined,
       responseStatus: events.length === 0 ? 'Não Contatado' : (lastEvent?.responseStatus || 'Sem Resposta'),
       conversionStatus: hasSale ? 'Gerou Venda' : 'Sem Venda',
-      lastSkipReason: lastEvent?.responseStatus === 'Sem Resposta' ? lastEvent?.skipReason : undefined
+      lastSkipReason: lastEvent?.responseStatus === 'Sem Resposta' ? lastEvent?.skipReason : undefined,
+      lastDelayDays: lastDelayEvent?.delayDays
     } as UnifiedReportRow;
   });
 
@@ -1928,6 +2012,350 @@ const buildClientHistorySummary = (calls: CallRecord[], protocols: Protocol[]): 
   )
 });
 
+const INTERNAL_TASK_DONE_STATUSES = ['CONCLUIDO', 'CANCELADO', 'ARQUIVADO'];
+
+const parseJsonValue = (value: any) => {
+  if (!value) return null;
+  if (typeof value === 'object') return value;
+
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    console.warn('Nao foi possivel converter JSON armazenado.', error);
+    return null;
+  }
+};
+
+const normalizeTaskInstanceStatus = (status?: string, dueAt?: string | null): TaskInstance['status'] => {
+  const normalizedStatus = (status || 'PENDENTE') as TaskInstance['status'];
+  if (
+    normalizedStatus === 'PENDENTE'
+    && dueAt
+    && new Date(dueAt).getTime() < Date.now()
+  ) {
+    return 'ATRASADO';
+  }
+
+  return normalizedStatus;
+};
+
+const normalizeUserRole = (value?: unknown): UserRole => {
+  const normalizedValue = getSafeText(value).toUpperCase();
+
+  switch (normalizedValue) {
+    case UserRole.ADMIN:
+      return UserRole.ADMIN;
+    case UserRole.SUPERVISOR:
+    case 'MANAGER':
+      return UserRole.SUPERVISOR;
+    case UserRole.OPERATOR:
+    case 'USER':
+      return UserRole.OPERATOR;
+    default:
+      return UserRole.OPERATOR;
+  }
+};
+
+const enrichProfilesWithTeamMetadata = async (profiles: any[] = []) => {
+  const safeProfiles = profiles.filter(Boolean);
+  const teamIds = Array.from(new Set(safeProfiles.map(profile => profile?.team_id).filter(Boolean)));
+
+  if (teamIds.length === 0) {
+    return safeProfiles;
+  }
+
+  const { data, error } = await supabase
+    .from('operation_teams')
+    .select('id, name')
+    .in('id', teamIds);
+
+  if (error) {
+    return safeProfiles;
+  }
+
+  const teamsById = new Map((data || []).map((team: any) => [team.id, team]));
+
+  return safeProfiles.map(profile => {
+    const team = profile?.team_id ? teamsById.get(profile.team_id) : null;
+
+    if (!team) {
+      return profile;
+    }
+
+    return {
+      ...profile,
+      operation_teams: {
+        ...(profile?.operation_teams && typeof profile.operation_teams === 'object' ? profile.operation_teams : {}),
+        ...team
+      }
+    };
+  });
+};
+
+const mapProfileToUser = (profile: any): User => ({
+  id: getSafeText(profile?.id),
+  name: getSafeText(profile?.username_display, 'Sem Nome'),
+  username: getSafeText(profile?.username_slug || profile?.username),
+  role: normalizeUserRole(
+    profile?.role
+    ?? profile?.user_role
+    ?? profile?.app_metadata?.role
+    ?? profile?.user_metadata?.role
+  ),
+  active: profile?.active ?? true,
+  teamId: profile?.team_id || null,
+  teamName: profile?.operation_teams?.name || null,
+  sectorCode: profile?.sector_code || null
+});
+
+const mapOperationTeamRecord = (team: any): OperationTeam => ({
+  id: team.id,
+  name: team.name,
+  sectorCode: team.sector_code,
+  description: team.description,
+  active: team.active ?? true,
+  createdAt: team.created_at,
+  updatedAt: team.updated_at
+});
+
+const mapTaskTemplateRecord = (template: any): TaskTemplate => ({
+  id: template.id,
+  title: template.title,
+  description: template.description,
+  category: template.category,
+  taskScope: template.task_scope,
+  recurrenceType: template.recurrence_type,
+  recurrenceConfig: parseJsonValue(template.recurrence_config),
+  isAccumulative: template.is_accumulative ?? false,
+  generateOnlyIfPreviousClosed: template.generate_only_if_previous_closed ?? false,
+  requiresApproval: template.requires_approval ?? false,
+  requiresCommentOnCompletion: template.requires_comment_on_completion ?? false,
+  defaultPriority: template.default_priority || 'MEDIUM',
+  defaultDueTime: template.default_due_time,
+  createdBy: template.created_by,
+  isActive: template.is_active ?? true,
+  assignMode: template.assign_mode || 'SPECIFIC',
+  assignConfig: parseJsonValue(template.assign_config),
+  createdAt: template.created_at,
+  updatedAt: template.updated_at
+});
+
+const mapTaskListRecord = (list: any): TaskList => ({
+  id: list.id,
+  name: list.name,
+  ownerUserId: list.owner_user_id,
+  createdBy: list.created_by,
+  active: list.active ?? true,
+  createdAt: list.created_at,
+  updatedAt: list.updated_at
+});
+
+const mapTaskInstanceRecord = (task: any): TaskInstance => ({
+  id: task.id,
+  templateId: task.template_id,
+  sourceType: task.source_type,
+  sourceId: task.source_id,
+  title: task.title,
+  description: task.description,
+  category: task.category,
+  assignedTo: task.assigned_to,
+  assignedBy: task.assigned_by,
+  visibilityScope: task.visibility_scope || 'PRIVATE',
+  priority: task.priority || 'MEDIUM',
+  dueAt: task.due_at,
+  startsAt: task.starts_at,
+  completedAt: task.completed_at,
+  status: normalizeTaskInstanceStatus(task.status, task.due_at),
+  isRecurringInstance: task.is_recurring_instance ?? false,
+  isAccumulated: task.is_accumulated ?? false,
+  carryoverFrom: task.carryover_from,
+  completionNote: task.completion_note,
+  metadata: parseJsonValue(task.metadata),
+  recurrenceKey: task.recurrence_key,
+  createdAt: task.created_at,
+  updatedAt: task.updated_at,
+  assignedUser: task.assigned_profile ? mapProfileToUser(task.assigned_profile) : null,
+  assignedByUser: task.assigned_by_profile ? mapProfileToUser(task.assigned_by_profile) : null,
+  template: task.task_templates ? mapTaskTemplateRecord(Array.isArray(task.task_templates) ? task.task_templates[0] : task.task_templates) : null
+});
+
+const mapTaskActivityLogRecord = (row: any): TaskActivityLog => ({
+  id: row.id,
+  taskInstanceId: row.task_instance_id,
+  action: row.action,
+  actorId: row.actor_id,
+  oldValue: parseJsonValue(row.old_value),
+  newValue: parseJsonValue(row.new_value),
+  note: row.note,
+  createdAt: row.created_at,
+  actorName: row.actor_profile?.username_display || null
+});
+
+const mapUserNotificationRecord = (row: any): UserNotification => ({
+  id: row.id,
+  userId: row.user_id,
+  type: row.type,
+  title: row.title,
+  body: row.body,
+  relatedEntityType: row.related_entity_type,
+  relatedEntityId: row.related_entity_id,
+  isRead: row.is_read ?? false,
+  createdAt: row.created_at
+});
+
+const isMissingSchemaResourceError = (error: any, resourceNames: string[] = []) => {
+  if (!error) return false;
+
+  const message = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`.toLowerCase();
+  const errorCode = String(error?.code || '').toUpperCase();
+  const normalizedResources = resourceNames.map(resource => resource.toLowerCase());
+  const mentionsRequestedResource =
+    normalizedResources.length === 0
+    || normalizedResources.some(resource => message.includes(resource));
+
+  if (!mentionsRequestedResource) return false;
+
+  return (
+    ['PGRST205', 'PGRST202', '42P01', '42883'].includes(errorCode)
+    || message.includes('schema cache')
+    || message.includes('could not find the table')
+    || message.includes('could not find the function')
+    || message.includes('does not exist')
+  );
+};
+
+const listAssignableProfileRecords = async (includeInactive: boolean = true) => {
+  try {
+    const { data, error } = await supabase.rpc('list_assignable_profiles', {
+      p_include_inactive: includeInactive
+    });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    if (!isMissingSchemaResourceError(error, ['list_assignable_profiles'])) {
+      console.warn('Nao foi possivel carregar perfis via RPC list_assignable_profiles, usando fallback direto.', error);
+    }
+
+    let query = supabase
+      .from('profiles')
+      .select('id, username_display, username_slug, role, active, team_id, sector_code')
+      .order('username_display');
+
+    if (!includeInactive) {
+      query = query.eq('active', true);
+    }
+
+    const { data, error: fallbackError } = await query;
+    if (fallbackError) throw fallbackError;
+    return data || [];
+  }
+};
+
+const loadProfileRecord = async (profileId: string, allowMissing: boolean = false) => {
+  const response = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', profileId)
+    .maybeSingle();
+
+  if (response.error) {
+    if (allowMissing && isMissingSchemaResourceError(response.error, ['profiles'])) {
+      return null;
+    }
+    throw response.error;
+  }
+
+  if (!response.data) {
+    return null;
+  }
+
+  const [enrichedProfile] = await enrichProfilesWithTeamMetadata([response.data]);
+  return enrichedProfile || response.data;
+};
+
+const getActiveManagerIds = async () => {
+  const profiles = await listAssignableProfileRecords(false);
+  return profiles
+    .filter((profile: any) => [UserRole.ADMIN, UserRole.SUPERVISOR].includes(normalizeUserRole(profile?.role)))
+    .map((profile: any) => profile.id)
+    .filter(Boolean);
+};
+
+const createUserNotifications = async (notifications: Array<Partial<UserNotification>>) => {
+  const payload = notifications
+    .filter(notification => notification.userId && notification.title && notification.type)
+    .map(notification => ({
+      user_id: notification.userId,
+      type: notification.type,
+      title: notification.title,
+      body: notification.body || null,
+      related_entity_type: notification.relatedEntityType || null,
+      related_entity_id: notification.relatedEntityId || null,
+      is_read: notification.isRead ?? false
+    }));
+
+  if (payload.length === 0) return;
+
+  const { error } = await supabase.from('user_notifications').insert(payload);
+  if (error) {
+    if (isMissingSchemaResourceError(error, ['user_notifications'])) return;
+    throw error;
+  }
+};
+
+const resolveTargetProfileIds = async (params: {
+  assignMode: TaskTemplate['assignMode'];
+  assignConfig?: Record<string, any> | null;
+}) => {
+  const { assignMode, assignConfig } = params;
+  const profiles = await listAssignableProfileRecords(false);
+
+  if (assignMode === 'SPECIFIC') {
+    const userIds = [
+      ...(Array.isArray(assignConfig?.userIds) ? assignConfig.userIds : []),
+      assignConfig?.userId
+    ].filter(Boolean);
+
+    if (userIds.length === 0) return [];
+    return profiles
+      .filter((profile: any) => userIds.includes(profile.id))
+      .map((profile: any) => profile.id)
+      .filter(Boolean);
+  }
+
+  if (assignMode === 'ROLE') {
+    const roles = Array.isArray(assignConfig?.roles) ? assignConfig.roles : [];
+    if (roles.length === 0) return [];
+    return profiles
+      .filter((profile: any) => roles.includes(profile.role))
+      .map((profile: any) => profile.id)
+      .filter(Boolean);
+  }
+
+  if (assignMode === 'TEAM') {
+    const teamIds = [
+      ...(Array.isArray(assignConfig?.teamIds) ? assignConfig.teamIds : []),
+      assignConfig?.teamId
+    ].filter(Boolean);
+    const sectorCodes = [
+      ...(Array.isArray(assignConfig?.sectorCodes) ? assignConfig.sectorCodes : []),
+      assignConfig?.sectorCode
+    ].filter(Boolean);
+
+    if (teamIds.length === 0 && sectorCodes.length === 0) return [];
+    return profiles
+      .filter((profile: any) =>
+        teamIds.includes(profile.team_id)
+        || sectorCodes.includes(profile.sector_code)
+      )
+      .map((profile: any) => profile.id)
+      .filter(Boolean);
+  }
+
+  return profiles.map((profile: any) => profile.id).filter(Boolean);
+};
+
 const mapClientRecord = (record: any): Client => {
   const portfolioEntries = getClientPortfolioEntries(record);
   const portfolioMetadata = collectPortfolioMetadata(portfolioEntries);
@@ -2057,11 +2485,7 @@ export const dataService = {
   // --- CALL SCHEDULES (Agendamentos) ---
   createScheduleRequest: async (schedule: Partial<CallSchedule>): Promise<void> => {
     await validateScheduleRequests([schedule]);
-    // Build schedule_reason including any skip/whatsapp metadata
-    let reason = schedule.scheduleReason || '';
-    if (schedule.skipReason) reason += ` | Motivo: ${schedule.skipReason}`;
-    if (schedule.whatsappSent) reason += ' | WhatsApp: Sim';
-    if (schedule.hasRepick) reason += ' | Repique';
+    const reason = schedule.scheduleReason || '';
 
     // Normalize call_type to match DB CHECK constraint
     // DB accepts: VENDA, POS_VENDA, PROSPECCAO, CONFIRMACAO_PROTOCOLO, WHATSAPP
@@ -2082,7 +2506,7 @@ export const dataService = {
     const dbCallType = CALL_TYPE_DB_MAP[rawType] || CALL_TYPE_DB_MAP[rawType.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/-/g, '_')] || 'VENDA';
     console.log('🔍 [createScheduleRequest] rawType:', JSON.stringify(rawType), '→ dbCallType:', JSON.stringify(dbCallType));
 
-    const { error } = await supabase.from('call_schedules').insert({
+    const { data, error } = await supabase.from('call_schedules').insert({
       customer_id: schedule.customerId || null,
       origin_call_id: schedule.originCallId || null,
       requested_by_operator_id: schedule.requestedByOperatorId,
@@ -2091,9 +2515,34 @@ export const dataService = {
       call_type: dbCallType,
       status: schedule.status || 'PENDENTE_APROVACAO',
       schedule_reason: reason,
-      resolution_channel: schedule.resolutionChannel || 'telefone'
-    });
+      resolution_channel: schedule.resolutionChannel || 'telefone',
+      skip_reason: schedule.skipReason || null,
+      whatsapp_sent: schedule.whatsappSent ?? false,
+      whatsapp_note: schedule.whatsappNote || null,
+      has_repick: schedule.hasRepick ?? false
+    }).select('id').single();
     if (error) throw error;
+
+    const scheduleType = schedule.hasRepick || schedule.skipReason ? 'REPIQUE' : 'AGENDAMENTO';
+    const managerIds = await getActiveManagerIds();
+    await createUserNotifications([
+      ...(schedule.assignedOperatorId ? [{
+        userId: schedule.assignedOperatorId,
+        type: `${scheduleType}_CREATED`,
+        title: scheduleType === 'REPIQUE' ? 'Novo repique criado' : 'Novo agendamento criado',
+        body: reason || 'Um item operacional foi atribuido para voce.',
+        relatedEntityType: 'call_schedule',
+        relatedEntityId: data?.id
+      }] : []),
+      ...managerIds.map(managerId => ({
+        userId: managerId,
+        type: `${scheduleType}_CREATED`,
+        title: scheduleType === 'REPIQUE' ? 'Repique registrado' : 'Agendamento registrado',
+        body: reason || 'Um item operacional entrou na agenda central.',
+        relatedEntityType: 'call_schedule',
+        relatedEntityId: data?.id
+      }))
+    ]);
   },
 
   bulkCreateScheduleRequest: async (schedules: Partial<CallSchedule>[]): Promise<void> => {
@@ -2107,20 +2556,59 @@ export const dataService = {
     const mapType = (t: string) => {
       return CALL_TYPE_DB_MAP[t] || CALL_TYPE_DB_MAP[t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/-/g, '_')] || 'VENDA';
     };
-    const { error } = await supabase.from('call_schedules').insert(
-      schedules.map(s => ({
-        customer_id: s.customerId || null,
-        origin_call_id: s.originCallId || null,
-        requested_by_operator_id: s.requestedByOperatorId,
-        assigned_operator_id: s.assignedOperatorId,
-        scheduled_for: s.scheduledFor,
-        call_type: mapType(s.callType || 'VENDA'),
-        status: s.status || 'PENDENTE_APROVACAO',
-        schedule_reason: s.scheduleReason,
-        resolution_channel: s.resolutionChannel || 'telefone'
-      }))
-    );
+    const { data, error } = await supabase.from('call_schedules').insert(
+      schedules.map(s => {
+        const reason = s.scheduleReason || '';
+
+        return {
+          customer_id: s.customerId || null,
+          origin_call_id: s.originCallId || null,
+          requested_by_operator_id: s.requestedByOperatorId,
+          assigned_operator_id: s.assignedOperatorId,
+          scheduled_for: s.scheduledFor,
+          call_type: mapType(s.callType || 'VENDA'),
+          status: s.status || 'PENDENTE_APROVACAO',
+          schedule_reason: reason,
+          resolution_channel: s.resolutionChannel || 'telefone',
+          skip_reason: s.skipReason || null,
+          whatsapp_sent: s.whatsappSent ?? false,
+          whatsapp_note: s.whatsappNote || null,
+          has_repick: s.hasRepick ?? false
+        };
+      })
+    ).select('id, assigned_operator_id, schedule_reason, has_repick, skip_reason');
     if (error) throw error;
+
+    const managerIds = await getActiveManagerIds();
+    const notifications: Array<Partial<UserNotification>> = [];
+
+    (data || []).forEach((schedule: any) => {
+      const scheduleType = schedule.has_repick || schedule.skip_reason ? 'REPIQUE' : 'AGENDAMENTO';
+
+      if (schedule.assigned_operator_id) {
+        notifications.push({
+          userId: schedule.assigned_operator_id,
+          type: `${scheduleType}_CREATED`,
+          title: scheduleType === 'REPIQUE' ? 'Novo repique criado' : 'Novo agendamento criado',
+          body: schedule.schedule_reason || 'Um novo item operacional foi atribuido para voce.',
+          relatedEntityType: 'call_schedule',
+          relatedEntityId: schedule.id
+        });
+      }
+
+      managerIds.forEach(managerId => {
+        notifications.push({
+          userId: managerId,
+          type: `${scheduleType}_CREATED`,
+          title: scheduleType === 'REPIQUE' ? 'Repique registrado' : 'Agendamento registrado',
+          body: schedule.schedule_reason || 'Um item operacional entrou na agenda central.',
+          relatedEntityType: 'call_schedule',
+          relatedEntityId: schedule.id
+        });
+      });
+    });
+
+    await createUserNotifications(notifications);
   },
 
   getSchedules: async (filters?: { status?: string, assignedTo?: string }): Promise<CallScheduleWithClient[]> => {
@@ -2167,6 +2655,12 @@ export const dataService = {
   },
 
   updateSchedule: async (id: string, updates: Partial<CallSchedule>, userId: string): Promise<void> => {
+    const { data: existingSchedule } = await supabase
+      .from('call_schedules')
+      .select('id, assigned_operator_id, requested_by_operator_id, scheduled_for, schedule_reason, has_repick, skip_reason')
+      .eq('id', id)
+      .maybeSingle();
+
     // Explicitly map camelCase to snake_case only for fields we allow updating
     const payload: any = {};
     if (updates.status) payload.status = updates.status;
@@ -2174,11 +2668,59 @@ export const dataService = {
     if (updates.approvalReason) payload.approval_reason = updates.approvalReason;
     if (updates.scheduledFor) payload.scheduled_for = updates.scheduledFor;
     if (updates.assignedOperatorId) payload.assigned_operator_id = updates.assignedOperatorId;
+    if (updates.callType) payload.call_type = mapTaskTypeToDb(updates.callType);
+    if (updates.scheduleReason !== undefined) payload.schedule_reason = updates.scheduleReason;
+    if (updates.skipReason !== undefined) payload.skip_reason = updates.skipReason;
+    if (updates.whatsappSent !== undefined) payload.whatsapp_sent = updates.whatsappSent;
+    if (updates.whatsappNote !== undefined) payload.whatsapp_note = updates.whatsappNote;
+    if (updates.hasRepick !== undefined) payload.has_repick = updates.hasRepick;
+    if (updates.resolutionChannel !== undefined) payload.resolution_channel = updates.resolutionChannel;
 
     payload.updated_at = new Date().toISOString();
 
     const { error } = await supabase.from('call_schedules').update(payload).eq('id', id);
     if (error) throw error;
+
+    const recipientIds = Array.from(new Set([
+      existingSchedule?.assigned_operator_id,
+      existingSchedule?.requested_by_operator_id,
+      updates.assignedOperatorId,
+      ...(await getActiveManagerIds())
+    ].filter(Boolean)));
+
+    if (recipientIds.length > 0 && (updates.status || updates.scheduledFor || updates.assignedOperatorId)) {
+      const scheduleType = existingSchedule?.has_repick || existingSchedule?.skip_reason ? 'REPIQUE' : 'AGENDAMENTO';
+      let notificationType = `${scheduleType}_UPDATED`;
+      let title = scheduleType === 'REPIQUE' ? 'Repique atualizado' : 'Agendamento atualizado';
+      let body = updates.status
+        ? `Status alterado para ${updates.status}.`
+        : (updates.scheduledFor ? `Novo horario: ${new Date(updates.scheduledFor).toLocaleString('pt-BR')}.` : 'Item operacional atualizado.');
+
+      if (updates.status === 'CONCLUIDO' && updates.approvedByAdminId) {
+        notificationType = `${scheduleType}_APPROVED`;
+        title = scheduleType === 'REPIQUE' ? 'Repique aprovado' : 'Agendamento aprovado';
+        body = 'Item aprovado e enviado para a fila operacional.';
+      } else if (updates.status === 'CANCELADO') {
+        notificationType = `${scheduleType}_CANCELED`;
+        title = scheduleType === 'REPIQUE' ? 'Repique cancelado' : 'Agendamento cancelado';
+      } else if (updates.scheduledFor) {
+        notificationType = `${scheduleType}_RESCHEDULED`;
+        title = scheduleType === 'REPIQUE' ? 'Repique reagendado' : 'Agendamento reagendado';
+      } else if (updates.assignedOperatorId && updates.assignedOperatorId !== existingSchedule?.assigned_operator_id) {
+        notificationType = `${scheduleType}_REASSIGNED`;
+        title = scheduleType === 'REPIQUE' ? 'Repique reatribuido' : 'Agendamento reatribuido';
+        body = 'O responsavel pelo item foi atualizado.';
+      }
+
+      await createUserNotifications(recipientIds.map(recipientId => ({
+        userId: recipientId,
+        type: notificationType,
+        title,
+        body,
+        relatedEntityType: 'call_schedule',
+        relatedEntityId: id
+      })));
+    }
   },
 
   // --- MÓDULO DE VENDAS ---
@@ -2346,16 +2888,13 @@ export const dataService = {
 
   getUsers: async (): Promise<User[]> => {
     try {
-      const { data, error } = await supabase.from('profiles').select('*').order('username_display');
-      if (error) throw error;
-      return (data || []).map(p => ({
-        id: getSafeText(p.id),
-        name: getSafeText(p.username_display, 'Sem Nome'),
-        username: getSafeText(p.username_slug),
-        role: (p.role as UserRole) || UserRole.OPERATOR,
-        active: p.active ?? true
-      })).filter(user => Boolean(user.id));
-    } catch (e) { return []; }
+      const data = await listAssignableProfileRecords(true);
+      const enrichedProfiles = await enrichProfilesWithTeamMetadata(data || []);
+      return enrichedProfiles.map(mapProfileToUser).filter(user => Boolean(user.id));
+    } catch (e) {
+      console.error('Erro ao carregar usuarios atribuiveis.', e);
+      return [];
+    }
   },
 
   updateUser: async (userId: string, updates: Partial<User>): Promise<void> => {
@@ -2363,6 +2902,8 @@ export const dataService = {
     if (updates.role) payload.role = updates.role;
     if (updates.active !== undefined) payload.active = updates.active;
     if (updates.name) payload.username_display = updates.name;
+    if (updates.teamId !== undefined) payload.team_id = updates.teamId;
+    if (updates.sectorCode !== undefined) payload.sector_code = updates.sectorCode;
     await supabase.from('profiles').update(payload).eq('id', userId);
   },
 
@@ -2375,7 +2916,9 @@ export const dataService = {
       username_display: user.name,
       username_slug: slugify(user.username || ''),
       role: user.role,
-      active: true
+      active: true,
+      team_id: user.teamId || null,
+      sector_code: user.sectorCode || null
     });
   },
 
@@ -2383,14 +2926,12 @@ export const dataService = {
     const email = getInternalEmail(username);
     const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password });
     if (authError) throw authError;
-    const { data: profile } = await supabase.from('profiles').select('*').eq('id', authData.user!.id).single();
-    return {
-      id: profile.id,
-      name: profile.username_display,
-      username: profile.username_slug,
-      role: profile.role as UserRole,
-      active: profile.active
-    };
+    const profile = await loadProfileRecord(authData.user!.id);
+    return mapProfileToUser({
+      ...(profile || {}),
+      app_metadata: authData.user?.app_metadata,
+      user_metadata: authData.user?.user_metadata
+    });
   },
 
   getCurrentSignedUser: async (): Promise<User | null> => {
@@ -2402,22 +2943,14 @@ export const dataService = {
       return null;
     }
 
-    const { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', sessionUser.id)
-      .maybeSingle();
-
-    if (profileError) throw profileError;
+    const profile = await loadProfileRecord(sessionUser.id, true);
     if (!profile) return null;
 
-    return {
-      id: profile.id,
-      name: profile.username_display || 'Sem Nome',
-      username: profile.username_slug || '',
-      role: (profile.role as UserRole) || UserRole.OPERATOR,
-      active: profile.active ?? true
-    };
+    return mapProfileToUser({
+      ...(profile || {}),
+      app_metadata: sessionUser.app_metadata,
+      user_metadata: sessionUser.user_metadata
+    });
   },
 
   signOut: async (): Promise<void> => {
@@ -2505,6 +3038,7 @@ export const dataService = {
           clientPhone: clientObj?.phone,
           clients: clientObj || null, // Pass embedded client data for fallback
           approvalStatus: t.approval_status as any,
+          originCallId: t.origin_call_id,
           scheduledFor: t.scheduled_for,
           scheduleReason: t.schedule_reason,
           proposito: resolvedProposito,
@@ -2638,6 +3172,7 @@ export const dataService = {
       type: dbType,
       assigned_to: normalizedAssignedTo,
       status,
+      origin_call_id: task.originCallId || null,
       scheduled_for: task.scheduledFor,
       schedule_reason: task.scheduleReason,
       proposito: task.proposito,
@@ -2668,6 +3203,7 @@ export const dataService = {
     if (updates.assignedTo !== undefined) payload.assigned_to = updates.assignedTo;
     if (updates.type !== undefined) payload.type = mapTaskTypeToDb(updates.type);
     if (updates.approvalStatus !== undefined) payload.approval_status = updates.approvalStatus;
+    if (updates.originCallId !== undefined) payload.origin_call_id = updates.originCallId;
     payload.updated_at = new Date().toISOString();
     
     // Attempt update on legacy tasks
@@ -2690,6 +3226,7 @@ export const dataService = {
        if (updates.scheduleReason !== undefined) schedulePayload.schedule_reason = updates.scheduleReason;
        if (updates.assignedTo !== undefined) schedulePayload.assigned_operator_id = updates.assignedTo;
        if (updates.type !== undefined) schedulePayload.call_type = mapTaskTypeToDb(updates.type);
+       if (updates.originCallId !== undefined) schedulePayload.origin_call_id = updates.originCallId;
        schedulePayload.updated_at = new Date().toISOString();
        
        if (Object.keys(schedulePayload).length > 0) {
@@ -4377,6 +4914,26 @@ export const dataService = {
         note: 'Protocolo aberto manualmente',
         actor_id: actorId
       });
+
+      const managerIds = await getActiveManagerIds();
+      await createUserNotifications([
+        ...(p.ownerOperatorId ? [{
+          userId: p.ownerOperatorId,
+          type: 'PROTOCOL_ASSIGNED',
+          title: 'Novo protocolo atribuido',
+          body: p.title,
+          relatedEntityType: 'protocol',
+          relatedEntityId: data.id
+        }] : []),
+        ...managerIds.map(managerId => ({
+          userId: managerId,
+          type: 'PROTOCOL_CREATED',
+          title: 'Novo protocolo aberto',
+          body: p.title,
+          relatedEntityType: 'protocol',
+          relatedEntityId: data.id
+        }))
+      ]);
       return true;
     } catch (err) {
       console.error("[dataService.saveProtocol] Fatal Error:", err);
@@ -4385,6 +4942,12 @@ export const dataService = {
   },
 
   updateProtocol: async (protocolId: string, updates: Partial<Protocol>, actorId: string, note?: string): Promise<boolean> => {
+    const { data: existingProtocol } = await supabase
+      .from('protocols')
+      .select('owner_id, title, status')
+      .eq('id', protocolId)
+      .maybeSingle();
+
     const payload: any = { updated_at: new Date().toISOString() };
     if (updates.status) payload.status = updates.status;
     if (updates.ownerOperatorId) payload.owner_id = updates.ownerOperatorId;
@@ -4398,6 +4961,24 @@ export const dataService = {
       note: note || 'Atualização de protocolo',
       actor_id: actorId
     });
+
+    const managerIds = await getActiveManagerIds();
+    const recipientIds = Array.from(new Set([
+      existingProtocol?.owner_id,
+      updates.ownerOperatorId,
+      ...managerIds
+    ].filter(Boolean)));
+
+    if (recipientIds.length > 0) {
+      await createUserNotifications(recipientIds.map(recipientId => ({
+        userId: recipientId,
+        type: updates.ownerOperatorId && updates.ownerOperatorId !== existingProtocol?.owner_id ? 'PROTOCOL_REASSIGNED' : 'PROTOCOL_UPDATED',
+        title: updates.ownerOperatorId && updates.ownerOperatorId !== existingProtocol?.owner_id ? 'Protocolo reatribuido' : 'Protocolo atualizado',
+        body: updates.status ? `Status: ${updates.status}` : (existingProtocol?.title || 'Um protocolo foi atualizado.'),
+        relatedEntityType: 'protocol',
+        relatedEntityId: protocolId
+      })));
+    }
     return true;
   },
 
@@ -4503,14 +5084,45 @@ export const dataService = {
     }));
   },
 
+  findQuoteByNumber: async (quoteNumber: string): Promise<Quote | null> => {
+    const normalizedQuoteNumber = normalizeQuoteNumber(quoteNumber);
+    if (!normalizedQuoteNumber) return null;
+
+    const { data, error } = await supabase
+      .from('quotes')
+      .select('*')
+      .eq('quote_number', normalizedQuoteNumber)
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!data) return null;
+
+    return {
+      ...data,
+      interest_product: normalizeInterestProduct(data.interest_product)
+    };
+  },
+
   saveQuote: async (quote: Partial<Quote>): Promise<Quote> => {
     const normalizedInterestProduct = normalizeInterestProduct(quote.interest_product);
+    const normalizedQuoteNumber = normalizeQuoteNumber(quote.quote_number);
     const payload = {
       ...quote,
+      ...(normalizedQuoteNumber ? { quote_number: normalizedQuoteNumber } : {}),
       interest_product: normalizedInterestProduct
     };
     const { data, error } = await supabase.from('quotes').insert(payload).select().single();
-    if (error) throw error;
+    if (error) {
+      if (normalizedQuoteNumber && (error.code === '23505' || error.message?.includes('quotes_quote_number_key'))) {
+        try {
+          (error as typeof error & { existingQuote?: Quote | null }).existingQuote = await dataService.findQuoteByNumber(normalizedQuoteNumber);
+        } catch {
+          // Preserve the original database error when lookup fails.
+        }
+      }
+
+      throw error;
+    }
 
     // Sync interest_product back to the client so it can be filtered in Campaign Planner
     if (normalizedInterestProduct && quote.client_id) {
@@ -4527,12 +5139,26 @@ export const dataService = {
     const normalizedInterestProduct = updates.interest_product !== undefined
       ? normalizeInterestProduct(updates.interest_product)
       : undefined;
+    const normalizedQuoteNumber = updates.quote_number !== undefined
+      ? normalizeQuoteNumber(updates.quote_number)
+      : undefined;
     const payload = {
       ...updates,
+      ...(updates.quote_number !== undefined ? { quote_number: normalizedQuoteNumber } : {}),
       ...(updates.interest_product !== undefined ? { interest_product: normalizedInterestProduct } : {})
     };
     const { data, error } = await supabase.from('quotes').update(payload).eq('id', id).select().single();
-    if (error) throw error;
+    if (error) {
+      if (normalizedQuoteNumber && (error.code === '23505' || error.message?.includes('quotes_quote_number_key'))) {
+        try {
+          (error as typeof error & { existingQuote?: Quote | null }).existingQuote = await dataService.findQuoteByNumber(normalizedQuoteNumber);
+        } catch {
+          // Preserve the original database error when lookup fails.
+        }
+      }
+
+      throw error;
+    }
 
     // Sync interest_product back to the client so it can be filtered in Campaign Planner
     if (normalizedInterestProduct && data?.client_id) {
@@ -4585,7 +5211,7 @@ export const dataService = {
   },
 
   saveVisit: async (visit: Partial<Visit>): Promise<void> => {
-    const { error } = await supabase.from('visits').insert({
+    const { data, error } = await supabase.from('visits').insert({
       client_id: visit.clientId,
       client_name: visit.clientName,
       address: visit.address,
@@ -4604,11 +5230,37 @@ export const dataService = {
       origin_id: visit.originId,
       contact_person: visit.contactPerson,
       notes: visit.notes
-    });
+    }).select('id').single();
     if (error) throw error;
+
+    const managerIds = await getActiveManagerIds();
+    await createUserNotifications([
+      ...(visit.salespersonId ? [{
+        userId: visit.salespersonId,
+        type: 'VISIT_CREATED',
+        title: 'Nova visita no roteiro',
+        body: visit.clientName || 'Um novo item entrou no roteiro.',
+        relatedEntityType: 'visit',
+        relatedEntityId: data?.id
+      }] : []),
+      ...managerIds.map(managerId => ({
+        userId: managerId,
+        type: 'VISIT_CREATED',
+        title: 'Nova visita criada',
+        body: visit.clientName || 'Um novo item entrou no roteiro.',
+        relatedEntityType: 'visit',
+        relatedEntityId: data?.id
+      }))
+    ]);
   },
 
   updateVisit: async (id: string, updates: Partial<Visit>): Promise<void> => {
+    const { data: existingVisit } = await supabase
+      .from('visits')
+      .select('salesperson_id, client_name')
+      .eq('id', id)
+      .maybeSingle();
+
     const payload: any = {};
     if (updates.status) payload.status = updates.status;
     if (updates.outcome) payload.outcome = updates.outcome;
@@ -4633,6 +5285,28 @@ export const dataService = {
           await supabase.from('clients').update({ funnel_status: 'PHYSICAL_VISIT' }).eq('id', visitData.client_id);
         }
       }
+    }
+
+    if (updates.status || updates.realized === true) {
+      const managerIds = await getActiveManagerIds();
+      await createUserNotifications([
+        ...(existingVisit?.salesperson_id ? [{
+          userId: existingVisit.salesperson_id,
+          type: updates.status === 'COMPLETED' ? 'VISIT_COMPLETED' : 'VISIT_UPDATED',
+          title: updates.status === 'COMPLETED' ? 'Visita concluida' : 'Visita atualizada',
+          body: existingVisit.client_name || 'O roteiro recebeu uma atualizacao.',
+          relatedEntityType: 'visit',
+          relatedEntityId: id
+        }] : []),
+        ...managerIds.map(managerId => ({
+          userId: managerId,
+          type: updates.status === 'COMPLETED' ? 'VISIT_COMPLETED' : 'VISIT_UPDATED',
+          title: updates.status === 'COMPLETED' ? 'Visita concluida' : 'Visita atualizada',
+          body: existingVisit?.client_name || 'O roteiro recebeu uma atualizacao.',
+          relatedEntityType: 'visit',
+          relatedEntityId: id
+        }))
+      ]);
     }
   },
 
@@ -4969,20 +5643,31 @@ export const dataService = {
   moveWhatsAppToCall: async (taskId: string, operatorId: string): Promise<void> => {
     const { data: task, error: getError } = await supabase
       .from('whatsapp_tasks')
-      .select('id, client_id, assigned_to, type')
+      .select('id, client_id, assigned_to, type, status')
       .eq('id', taskId)
       .maybeSingle();
     if (getError) throw getError;
     if (!task) throw new Error('Tarefa de WhatsApp nao encontrada.');
+    if (task.status !== 'pending') {
+      throw new Error('Somente tarefas pendentes do WhatsApp podem ser movidas para ligacao.');
+    }
 
     const responsibleOperatorId = task.assigned_to || operatorId;
 
-    await dataService.createTask({
+    const restoredTaskId = await restoreLatestBlockedVoiceTask({
       clientId: task.client_id,
-      assignedTo: responsibleOperatorId,
-      status: 'pending',
-      type: task.type
-    }, { skipRecentCommunicationCheck: true });
+      operatorId: responsibleOperatorId,
+      taskType: task.type
+    });
+
+    if (!restoredTaskId) {
+      await dataService.createTask({
+        clientId: task.client_id,
+        assignedTo: responsibleOperatorId,
+        status: 'pending',
+        type: task.type
+      }, { skipRecentCommunicationCheck: true });
+    }
 
     await dataService.updateWhatsAppTask(taskId, {
       status: 'skipped',
@@ -5105,7 +5790,7 @@ export const dataService = {
       const { data, error } = await supabase.rpc('get_unified_remarketing_report', rpcArgs);
       if (error) throw error;
 
-      return (data || []).map((row: any) => ({
+      const rows = (data || []).map((row: any) => ({
         clientId: row.client_id,
         clientName: row.client_name,
         clientPhone: row.client_phone,
@@ -5121,8 +5806,24 @@ export const dataService = {
         upsellStatus: row.upsell_status,
         responseStatus: row.response_status,
         conversionStatus: row.conversion_status,
-        lastSkipReason: row.last_skip_reason
+        lastSkipReason: row.last_skip_reason,
+        lastDelayDays: row.last_delay_days
       }));
+
+      try {
+        const delayDaysByClient = await loadUnifiedReportDelayDays(
+          rows.map(row => row.clientId),
+          operatorId
+        );
+
+        return rows.map(row => ({
+          ...row,
+          lastDelayDays: row.lastDelayDays ?? delayDaysByClient.get(row.clientId)
+        }));
+      } catch (delayError) {
+        console.warn('Unable to enrich unified report with delay days.', delayError);
+        return rows;
+      }
     } catch (error) {
       console.warn('Unified remarketing RPC unavailable, using fallback aggregation.', error);
       try {
@@ -5131,6 +5832,582 @@ export const dataService = {
         throw new Error(formatUnknownError(fallbackError));
       }
     }
+  },
+
+  getOperationTeams: async (): Promise<OperationTeam[]> => {
+    const { data, error } = await supabase
+      .from('operation_teams')
+      .select('*')
+      .order('name');
+
+    if (error) {
+      if (isMissingSchemaResourceError(error, ['operation_teams'])) return [];
+      throw error;
+    }
+    return (data || []).map(mapOperationTeamRecord);
+  },
+
+  getTaskLists: async (ownerUserId: string): Promise<TaskList[]> => {
+    try {
+      const { data, error } = await supabase
+        .from('task_lists')
+        .select('*')
+        .eq('owner_user_id', ownerUserId)
+        .eq('active', true)
+        .order('name');
+
+      if (error) throw error;
+      return (data || []).map(mapTaskListRecord);
+    } catch (error) {
+      if (isMissingSchemaResourceError(error, ['task_lists'])) return [];
+      throw error;
+    }
+  },
+
+  createTaskList: async (params: {
+    name: string;
+    ownerUserId: string;
+    createdBy: string;
+  }): Promise<TaskList> => {
+    const { data, error } = await supabase
+      .from('task_lists')
+      .insert({
+        name: params.name.trim(),
+        owner_user_id: params.ownerUserId,
+        created_by: params.createdBy,
+        active: true
+      })
+      .select('*')
+      .single();
+
+    if (error) {
+      if (isMissingSchemaResourceError(error, ['task_lists'])) {
+        throw new Error('A estrutura de listas de tarefas ainda nao existe no banco. Rode a migration nova das task_lists.');
+      }
+      throw error;
+    }
+
+    return mapTaskListRecord(data);
+  },
+
+  archiveTaskList: async (taskListId: string): Promise<void> => {
+    const { error } = await supabase
+      .from('task_lists')
+      .update({ active: false })
+      .eq('id', taskListId);
+
+    if (error) {
+      if (isMissingSchemaResourceError(error, ['task_lists'])) {
+        throw new Error('A estrutura de listas de tarefas ainda nao existe no banco. Rode a migration nova das task_lists.');
+      }
+      throw error;
+    }
+  },
+
+  saveOperationTeam: async (team: Partial<OperationTeam>): Promise<OperationTeam> => {
+    const payload = {
+      name: team.name,
+      sector_code: team.sectorCode || null,
+      description: team.description || null,
+      active: team.active ?? true
+    };
+
+    const query = team.id
+      ? supabase.from('operation_teams').update(payload).eq('id', team.id).select('*').single()
+      : supabase.from('operation_teams').insert(payload).select('*').single();
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return mapOperationTeamRecord(data);
+  },
+
+  getTaskTemplates: async (): Promise<TaskTemplate[]> => {
+    const { data, error } = await supabase
+      .from('task_templates')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    return (data || []).map(mapTaskTemplateRecord);
+  },
+
+  saveTaskTemplate: async (template: Partial<TaskTemplate>): Promise<TaskTemplate> => {
+    const payload = {
+      title: template.title,
+      description: template.description || null,
+      category: template.category || 'GERAL',
+      task_scope: template.taskScope || 'PESSOAL',
+      recurrence_type: template.recurrenceType || 'NONE',
+      recurrence_config: template.recurrenceConfig || null,
+      is_accumulative: template.isAccumulative ?? false,
+      generate_only_if_previous_closed: template.generateOnlyIfPreviousClosed ?? false,
+      requires_approval: template.requiresApproval ?? false,
+      requires_comment_on_completion: template.requiresCommentOnCompletion ?? false,
+      default_priority: template.defaultPriority || 'MEDIUM',
+      default_due_time: template.defaultDueTime || null,
+      created_by: template.createdBy || null,
+      is_active: template.isActive ?? true,
+      assign_mode: template.assignMode || 'SPECIFIC',
+      assign_config: template.assignConfig || null
+    };
+
+    const query = template.id
+      ? supabase.from('task_templates').update(payload).eq('id', template.id).select('*').single()
+      : supabase.from('task_templates').insert(payload).select('*').single();
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return mapTaskTemplateRecord(data);
+  },
+
+  syncTaskRecurringInstances: async (referenceDate?: string, horizonDays: number = 14): Promise<any> => {
+    const { data, error } = await supabase.rpc('sync_task_recurring_instances', {
+      p_reference: referenceDate || new Date().toISOString(),
+      p_horizon_days: horizonDays
+    });
+
+    if (error) {
+      if (isMissingSchemaResourceError(error, ['sync_task_recurring_instances'])) return null;
+      throw error;
+    }
+    return data;
+  },
+
+  getTaskInstances: async (filters?: {
+    assignedTo?: string;
+    statuses?: TaskInstance['status'][];
+    includeArchived?: boolean;
+  }): Promise<TaskInstance[]> => {
+    let query = supabase
+      .from('task_instances')
+      .select(`
+        *,
+        assigned_profile:assigned_to(*, operation_teams(name)),
+        assigned_by_profile:assigned_by(*, operation_teams(name)),
+        task_templates(*)
+      `)
+      .order('due_at', { ascending: true, nullsFirst: false })
+      .order('created_at', { ascending: false });
+
+    if (filters?.assignedTo) {
+      query = query.eq('assigned_to', filters.assignedTo);
+    }
+
+    if (filters?.statuses && filters.statuses.length > 0) {
+      query = query.in('status', filters.statuses);
+    } else if (!filters?.includeArchived) {
+      query = query.not('status', 'eq', 'ARQUIVADO');
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      if (isMissingSchemaResourceError(error, ['task_instances', 'task_templates', 'operation_teams'])) return [];
+      throw error;
+    }
+    return (data || []).map(mapTaskInstanceRecord);
+  },
+
+  getTaskActivityLogs: async (taskInstanceId: string): Promise<TaskActivityLog[]> => {
+    const { data, error } = await supabase
+      .from('task_activity_logs')
+      .select('*, actor_profile:actor_id(username_display)')
+      .eq('task_instance_id', taskInstanceId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      if (isMissingSchemaResourceError(error, ['task_activity_logs'])) return [];
+      throw error;
+    }
+    return (data || []).map(mapTaskActivityLogRecord);
+  },
+
+  createTaskActivityLog: async (payload: Partial<TaskActivityLog>): Promise<void> => {
+    const { error } = await supabase.from('task_activity_logs').insert({
+      task_instance_id: payload.taskInstanceId,
+      action: payload.action,
+      actor_id: payload.actorId || null,
+      old_value: payload.oldValue || null,
+      new_value: payload.newValue || null,
+      note: payload.note || null
+    });
+
+    if (error) {
+      if (isMissingSchemaResourceError(error, ['task_activity_logs'])) return;
+      throw error;
+    }
+  },
+
+  createInternalTasks: async (params: {
+    title: string;
+    description?: string;
+    category: string;
+    priority?: TaskInstance['priority'];
+    dueAt?: string | null;
+    startsAt?: string | null;
+    assignedBy: string;
+    taskScope: TaskTemplate['taskScope'];
+    assignMode: TaskTemplate['assignMode'];
+    assignConfig?: Record<string, any> | null;
+    assignedToIds?: string[];
+    visibilityScope?: TaskInstance['visibilityScope'];
+    metadata?: Record<string, any> | null;
+    requiresApproval?: boolean;
+    requiresCommentOnCompletion?: boolean;
+    templateId?: string | null;
+  }): Promise<TaskInstance[]> => {
+    const resolvedAssignedIds = params.assignedToIds && params.assignedToIds.length > 0
+      ? params.assignedToIds
+      : await resolveTargetProfileIds({
+        assignMode: params.assignMode,
+        assignConfig: params.assignConfig
+      });
+
+    const visibilityScope = params.visibilityScope
+      || (params.taskScope === 'PESSOAL'
+        ? 'PRIVATE'
+        : (params.assignMode === 'TEAM' ? 'TEAM' : 'SECTOR'));
+
+    const rows = (resolvedAssignedIds.length > 0 ? resolvedAssignedIds : [null]).map(assignedTo => ({
+      template_id: params.templateId || null,
+      source_type: 'TASK_INTERNAL',
+      source_id: null,
+      title: params.title,
+      description: params.description || null,
+      category: params.category,
+      assigned_to: assignedTo,
+      assigned_by: params.assignedBy,
+      visibility_scope: visibilityScope,
+      priority: params.priority || 'MEDIUM',
+      due_at: params.dueAt || null,
+      starts_at: params.startsAt || params.dueAt || null,
+      status: params.dueAt && new Date(params.dueAt).getTime() < Date.now() ? 'ATRASADO' : 'PENDENTE',
+      is_recurring_instance: false,
+      is_accumulated: false,
+      metadata: {
+        ...(params.metadata || {}),
+        requiresApproval: params.requiresApproval ?? false,
+        requiresCommentOnCompletion: params.requiresCommentOnCompletion ?? false,
+        taskScope: params.taskScope,
+        assignMode: params.assignMode
+      }
+    }));
+
+    const { data, error } = await supabase
+      .from('task_instances')
+      .insert(rows)
+      .select(`
+        *,
+        assigned_profile:assigned_to(*, operation_teams(name)),
+        assigned_by_profile:assigned_by(*, operation_teams(name)),
+        task_templates(*)
+      `);
+
+    if (error) throw error;
+
+    const createdTasks = (data || []).map(mapTaskInstanceRecord);
+
+    await Promise.all(createdTasks.map(task => dataService.createTaskActivityLog({
+      taskInstanceId: task.id,
+      action: 'CREATED',
+      actorId: params.assignedBy,
+      newValue: {
+        assignedTo: task.assignedTo,
+        dueAt: task.dueAt,
+        priority: task.priority
+      },
+      note: 'Tarefa interna criada.'
+    })));
+
+    const managerIds = await getActiveManagerIds();
+    const notifications: Array<Partial<UserNotification>> = [];
+
+    createdTasks.forEach(task => {
+      if (task.assignedTo) {
+        notifications.push({
+          userId: task.assignedTo,
+          type: 'TASK_ASSIGNED',
+          title: 'Nova tarefa atribuida',
+          body: task.title,
+          relatedEntityType: 'task_instance',
+          relatedEntityId: task.id
+        });
+      }
+
+      managerIds
+        .filter(managerId => managerId !== task.assignedTo)
+        .forEach(managerId => {
+          notifications.push({
+            userId: managerId,
+            type: 'TASK_CREATED',
+            title: 'Nova demanda interna criada',
+            body: task.title,
+            relatedEntityType: 'task_instance',
+            relatedEntityId: task.id
+          });
+        });
+    });
+
+    await createUserNotifications(notifications);
+
+    return createdTasks;
+  },
+
+  updateTaskInstance: async (
+    taskInstanceId: string,
+    updates: Partial<TaskInstance>,
+    actorId: string,
+    note?: string
+  ): Promise<TaskInstance> => {
+    const { data: existing, error: existingError } = await supabase
+      .from('task_instances')
+      .select('*')
+      .eq('id', taskInstanceId)
+      .single();
+
+    if (existingError) throw existingError;
+
+    const payload: Record<string, any> = {};
+    if (updates.title !== undefined) payload.title = updates.title;
+    if (updates.description !== undefined) payload.description = updates.description;
+    if (updates.category !== undefined) payload.category = updates.category;
+    if (updates.assignedTo !== undefined) payload.assigned_to = updates.assignedTo;
+    if (updates.assignedBy !== undefined) payload.assigned_by = updates.assignedBy;
+    if (updates.visibilityScope !== undefined) payload.visibility_scope = updates.visibilityScope;
+    if (updates.priority !== undefined) payload.priority = updates.priority;
+    if (updates.dueAt !== undefined) payload.due_at = updates.dueAt;
+    if (updates.startsAt !== undefined) payload.starts_at = updates.startsAt;
+    if (updates.completedAt !== undefined) payload.completed_at = updates.completedAt;
+    if (updates.status !== undefined) payload.status = updates.status;
+    if (updates.completionNote !== undefined) payload.completion_note = updates.completionNote;
+    if (updates.metadata !== undefined) payload.metadata = updates.metadata;
+
+    const { data, error } = await supabase
+      .from('task_instances')
+      .update(payload)
+      .eq('id', taskInstanceId)
+      .select(`
+        *,
+        assigned_profile:assigned_to(*, operation_teams(name)),
+        assigned_by_profile:assigned_by(*, operation_teams(name)),
+        task_templates(*)
+      `)
+      .single();
+
+    if (error) throw error;
+
+    const updatedTask = mapTaskInstanceRecord(data);
+
+    await dataService.createTaskActivityLog({
+      taskInstanceId,
+      action: 'UPDATED',
+      actorId,
+      oldValue: existing,
+      newValue: payload,
+      note: note || 'Tarefa atualizada.'
+    });
+
+    if (updates.assignedTo && updates.assignedTo !== existing.assigned_to) {
+      await createUserNotifications([{
+        userId: updates.assignedTo,
+        type: 'TASK_REASSIGNED',
+        title: 'Voce recebeu uma tarefa',
+        body: updatedTask.title,
+        relatedEntityType: 'task_instance',
+        relatedEntityId: taskInstanceId
+      }]);
+    }
+
+    return updatedTask;
+  },
+
+  startTaskInstance: async (taskInstanceId: string, actorId: string): Promise<TaskInstance> => (
+    dataService.updateTaskInstance(taskInstanceId, { status: 'EM_ANDAMENTO' }, actorId, 'Tarefa iniciada.')
+  ),
+
+  completeTaskInstance: async (
+    taskInstanceId: string,
+    actorId: string,
+    completionNote?: string
+  ): Promise<TaskInstance> => {
+    const { data: existing, error } = await supabase
+      .from('task_instances')
+      .select('*, task_templates(*)')
+      .eq('id', taskInstanceId)
+      .single();
+
+    if (error) throw error;
+
+    const metadata = parseJsonValue(existing.metadata) || {};
+    const template = existing.task_templates ? mapTaskTemplateRecord(existing.task_templates) : null;
+    const requiresComment = metadata.requiresCommentOnCompletion || template?.requiresCommentOnCompletion;
+    const requiresApproval = metadata.requiresApproval || template?.requiresApproval;
+
+    if (requiresComment && !completionNote?.trim()) {
+      throw new Error('Esta tarefa exige comentario na conclusao.');
+    }
+
+    const nextStatus: TaskInstance['status'] = requiresApproval ? 'AGUARDANDO' : 'CONCLUIDO';
+    const completedTask = await dataService.updateTaskInstance(taskInstanceId, {
+      status: nextStatus,
+      completedAt: new Date().toISOString(),
+      completionNote: completionNote || null
+    }, actorId, requiresApproval ? 'Tarefa concluida e enviada para aprovacao.' : 'Tarefa concluida.');
+
+    const managerIds = await getActiveManagerIds();
+    const notifications: Array<Partial<UserNotification>> = [];
+
+    if (completedTask.assignedTo) {
+      notifications.push({
+        userId: completedTask.assignedTo,
+        type: 'TASK_COMPLETED',
+        title: requiresApproval ? 'Tarefa enviada para aprovacao' : 'Tarefa concluida',
+        body: completedTask.title,
+        relatedEntityType: 'task_instance',
+        relatedEntityId: completedTask.id
+      });
+    }
+
+    managerIds
+      .filter(managerId => managerId !== actorId)
+      .forEach(managerId => {
+        notifications.push({
+          userId: managerId,
+          type: 'TASK_COMPLETED',
+          title: 'Uma tarefa foi concluida',
+          body: completedTask.title,
+          relatedEntityType: 'task_instance',
+          relatedEntityId: completedTask.id
+        });
+      });
+
+    await createUserNotifications(notifications);
+
+    return completedTask;
+  },
+
+  approveTaskInstance: async (taskInstanceId: string, actorId: string, note?: string): Promise<TaskInstance> => {
+    const task = await dataService.updateTaskInstance(taskInstanceId, {
+      status: 'CONCLUIDO',
+      completedAt: new Date().toISOString()
+    }, actorId, note || 'Conclusao aprovada.');
+
+    if (task.assignedTo) {
+      await createUserNotifications([{
+        userId: task.assignedTo,
+        type: 'TASK_APPROVED',
+        title: 'Conclusao aprovada',
+        body: task.title,
+        relatedEntityType: 'task_instance',
+        relatedEntityId: task.id
+      }]);
+    }
+
+    return task;
+  },
+
+  cancelTaskInstance: async (taskInstanceId: string, actorId: string, note?: string): Promise<TaskInstance> => (
+    dataService.updateTaskInstance(taskInstanceId, { status: 'CANCELADO' }, actorId, note || 'Tarefa cancelada.')
+  ),
+
+  duplicateTaskInstance: async (taskInstanceId: string, actorId: string): Promise<TaskInstance[]> => {
+    const { data, error } = await supabase
+      .from('task_instances')
+      .select('*')
+      .eq('id', taskInstanceId)
+      .single();
+
+    if (error) throw error;
+
+    return dataService.createInternalTasks({
+      title: data.title,
+      description: data.description,
+      category: data.category,
+      priority: data.priority,
+      dueAt: data.due_at,
+      startsAt: data.starts_at,
+      assignedBy: actorId,
+      taskScope: (parseJsonValue(data.metadata)?.taskScope || 'PESSOAL') as TaskTemplate['taskScope'],
+      assignMode: 'SPECIFIC',
+      assignedToIds: data.assigned_to ? [data.assigned_to] : [],
+      visibilityScope: data.visibility_scope,
+      metadata: parseJsonValue(data.metadata)
+    });
+  },
+
+  getOperationalQueueEntries: async (): Promise<Task[]> => {
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('*, clients(*)')
+      .in('status', ['pending', 'skipped'])
+      .order('scheduled_for', { ascending: true, nullsFirst: false })
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+
+    return (data || []).map((task: any) => {
+      const clientObj = Array.isArray(task.clients) ? task.clients[0] : task.clients;
+      return {
+        id: task.id,
+        clientId: task.client_id,
+        type: task.type ? mapStoredCallTypeToApp(task.type) : CallType.POS_VENDA,
+        deadline: task.deadline || task.created_at,
+        assignedTo: task.assigned_to,
+        status: task.status,
+        skipReason: task.skip_reason,
+        scheduledFor: task.scheduled_for,
+        scheduleReason: task.schedule_reason,
+        approvalStatus: task.approval_status,
+        originCallId: task.origin_call_id,
+        createdAt: task.created_at,
+        updatedAt: task.updated_at,
+        clientName: clientObj?.name,
+        clientPhone: clientObj?.phone,
+        clients: clientObj || null
+      };
+    });
+  },
+
+  getUserNotifications: async (userId: string, unreadOnly: boolean = false): Promise<UserNotification[]> => {
+    let query = supabase
+      .from('user_notifications')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (unreadOnly) {
+      query = query.eq('is_read', false);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      if (isMissingSchemaResourceError(error, ['user_notifications'])) return [];
+      throw error;
+    }
+    return (data || []).map(mapUserNotificationRecord);
+  },
+
+  markUserNotificationsRead: async (userId: string, notificationIds?: string[]): Promise<void> => {
+    let query = supabase
+      .from('user_notifications')
+      .update({ is_read: true })
+      .eq('user_id', userId);
+
+    if (notificationIds && notificationIds.length > 0) {
+      query = query.in('id', notificationIds);
+    } else {
+      query = query.eq('is_read', false);
+    }
+
+    const { error } = await query;
+    if (error) {
+      if (isMissingSchemaResourceError(error, ['user_notifications'])) return;
+      throw error;
+    }
+  },
+
+  createUserNotifications: async (notifications: Array<Partial<UserNotification>>): Promise<void> => {
+    await createUserNotifications(notifications);
   },
 
   bulkCreateTasks: async (tasks: any[]): Promise<void> => {

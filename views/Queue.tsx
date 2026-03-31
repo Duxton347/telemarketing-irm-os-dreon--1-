@@ -13,6 +13,7 @@ import { HelpTooltip } from '../components/HelpTooltip';
 import { PortfolioCategoryBrowser } from '../components/PortfolioCategoryBrowser';
 import { HELP_TEXTS } from '../utils/helpTexts';
 import { buildQuestionnaireTextSummary, enrichQuestionnaireResponses } from '../utils/questionnaireInsights';
+import { buildScheduledForValue } from '../utils/scheduleDateTime';
 import { getTaskAssignableUsers } from '../utils/taskAssignment';
 import {
   buildPortfolioCategoryGroups,
@@ -496,7 +497,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
 
       let date: Date;
       if (interval === 'manual' && manualDate) {
-        date = new Date(`${manualDate}T${manualTime || '09:00'}:00`);
+        date = new Date(buildScheduledForValue(manualDate, manualTime));
       } else {
         date = new Date();
         if (interval === '1d') date.setDate(date.getDate() + 1);
@@ -534,7 +535,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
         originCallId: null, // No call record exists when skipping
         scheduledFor: date.toISOString(),
         callType: currentTask.type,
-        scheduleReason: `Repique: ${finalSkipReason}`,
+        scheduleReason: currentTask.scheduleReason || finalSkipReason,
         status: 'PENDENTE_APROVACAO',
         skipReason: finalSkipReason,
         whatsappSent: whatsappCheck,
@@ -1512,7 +1513,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                 <button
                   onClick={() => {
                     if (!manualRepDate) { alert('Selecione uma data.'); return; }
-                    confirmRescheduleSkip('manual', manualRepDate, manualRepTime || '09:00');
+                    confirmRescheduleSkip('manual', manualRepDate, manualRepTime);
                   }}
                   disabled={!manualRepDate}
                   className="w-full py-4 bg-orange-500 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-lg hover:bg-orange-400 active:scale-95 transition-all disabled:opacity-50"

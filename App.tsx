@@ -24,6 +24,7 @@ import { DataCenter } from './views/DataCenter';
 import { dataService } from './services/dataService';
 import { formatUnknownError } from './utils/errorFormatting';
 import { publishAppError } from './utils/appErrorBus';
+import { NotificationProvider } from './components/NotificationProvider';
 // Import updated views
 import { UserRole } from './types';
 
@@ -34,40 +35,42 @@ const AuthenticatedApp: React.FC<{
   const location = useLocation();
 
   return (
-    <Layout user={user} onLogout={onLogout}>
-      <AppErrorBoundary resetKey={location.pathname}>
-        <Routes>
-          <Route path="/" element={<Dashboard user={user} />} />
-          <Route path="/queue" element={
-            <Queue user={user} />
-          } />
-          <Route path="/sales" element={<Sales user={user} />} />
-          <Route path="/clients" element={<Clients user={user} />} />
-          <Route path="/protocols" element={<Protocols user={user} />} />
-          <Route path="/admin" element={
-            user.role === UserRole.ADMIN ? <Admin user={user} /> : <Navigate to="/" />
-          } />
-          <Route path="/calendar" element={<Calendar user={user} />} />
-          <Route path="/routes" element={<RoutesView user={user} />} />
-          <Route path="/whatsapp" element={<WhatsAppDashboard user={user} />} />
-          <Route path="/scraper" element={<ScraperView user={user} />} />
-          <Route path="/reports" element={<Reports user={user} />} />
-          <Route path="/prospects" element={<Prospects />} />
-          <Route path="/quotes" element={<Quotes user={user} />} />
-          <Route path="/workload" element={
-            user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR ? <WorkloadUpload user={user} /> : <Navigate to="/" />
-          } />
-          <Route path="/campaigns" element={
-            user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR ? <CampaignPlanner /> : <Navigate to="/" />
-          } />
-          <Route path="/data-center" element={
-            user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR ? <DataCenter user={user} /> : <Navigate to="/" />
-          } />
-          <Route path="*" element={<Navigate to="/" />} />
-        </Routes>
-      </AppErrorBoundary>
-      <GlobalErrorCenter />
-    </Layout>
+    <NotificationProvider user={user}>
+      <Layout user={user} onLogout={onLogout}>
+        <AppErrorBoundary resetKey={location.pathname}>
+          <Routes>
+            <Route path="/" element={<Dashboard user={user} />} />
+            <Route path="/queue" element={
+              <Queue user={user} />
+            } />
+            <Route path="/sales" element={<Sales user={user} />} />
+            <Route path="/clients" element={<Clients user={user} />} />
+            <Route path="/protocols" element={<Protocols user={user} />} />
+            <Route path="/admin" element={
+              user.role === UserRole.ADMIN ? <Admin user={user} /> : <Navigate to="/" />
+            } />
+            <Route path="/calendar" element={<Calendar user={user} />} />
+            <Route path="/routes" element={<RoutesView user={user} />} />
+            <Route path="/whatsapp" element={<WhatsAppDashboard user={user} />} />
+            <Route path="/scraper" element={<ScraperView user={user} />} />
+            <Route path="/reports" element={<Reports user={user} />} />
+            <Route path="/prospects" element={<Prospects />} />
+            <Route path="/quotes" element={<Quotes user={user} />} />
+            <Route path="/workload" element={
+              user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR ? <WorkloadUpload user={user} /> : <Navigate to="/" />
+            } />
+            <Route path="/campaigns" element={
+              user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR ? <CampaignPlanner /> : <Navigate to="/" />
+            } />
+            <Route path="/data-center" element={
+              user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR ? <DataCenter user={user} /> : <Navigate to="/" />
+            } />
+            <Route path="*" element={<Navigate to="/" />} />
+          </Routes>
+        </AppErrorBoundary>
+        <GlobalErrorCenter />
+      </Layout>
+    </NotificationProvider>
   );
 };
 

@@ -8,7 +8,7 @@ import {
   PhoneOff, RefreshCw, ListFilter, Plus, UserCheck, UserMinus, Phone, PlayCircle, ChevronRight, LayoutList, Eraser, Sparkles, BarChart3, MessageCircle, Settings, Search, AlertTriangle, Calendar
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
-import { User, UserRole, CallType, Question, Task, ScheduleStatus, ProductivityMetrics, WhatsAppTask, ClientTag, Campanha } from '../types';
+import { User, UserRole, CallType, Question, Task, ScheduleStatus, ProductivityMetrics, WhatsAppTask, ClientTag, Campanha, OperationTeam } from '../types';
 import { RepiqueModal, RepiqueData } from '../components/RepiqueModal';
 import { SmartImportModal } from '../components/SmartImportModal';
 import { CampaignPlannerModal } from '../components/CampaignPlannerModal';
@@ -17,6 +17,7 @@ import { HelpTooltip } from '../components/HelpTooltip';
 import { HELP_TEXTS } from '../utils/helpTexts';
 import { CampaignPlannerService } from '../services/campaignPlannerService';
 import { EmailService } from '../services/emailService';
+import { buildScheduledForValue } from '../utils/scheduleDateTime';
 import { getTaskAssignableUsers } from '../utils/taskAssignment';
 
 interface AdminProps {
@@ -32,6 +33,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   const [googleMapsKey, setGoogleMapsKey] = React.useState('');
   const [communicationBlockDays, setCommunicationBlockDays] = React.useState('3');
   const [users, setUsers] = React.useState<User[]>([]);
+  const [teams, setTeams] = React.useState<OperationTeam[]>([]);
   const [questions, setQuestions] = React.useState<Question[]>([]);
   const [skippedTasks, setSkippedTasks] = React.useState<Task[]>([]);
   const [pendingTasks, setPendingTasks] = React.useState<Task[]>([]);
@@ -69,7 +71,19 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   const [duplicateClients, setDuplicateClients] = React.useState<any[]>([]);
   const [whatsAppRepairReport, setWhatsAppRepairReport] = React.useState<any | null>(null);
 
-  const [userData, setUserData] = React.useState({ name: '', username: '', password: '', role: UserRole.OPERATOR });
+  const [userData, setUserData] = React.useState({
+    name: '',
+    username: '',
+    password: '',
+    role: UserRole.OPERATOR,
+    teamId: '',
+    sectorCode: ''
+  });
+  const [newTeamData, setNewTeamData] = React.useState({
+    name: '',
+    sectorCode: '',
+    description: ''
+  });
   const [questionData, setQuestionData] = React.useState<Partial<Question>>({ text: '', options: [], type: 'ALL' as any, stageId: '' });
 
   const [taskOperatorFilterId, setTaskOperatorFilterId] = React.useState<string>('');
@@ -90,8 +104,9 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   const refreshData = async () => {
     setIsProcessing(true);
     try {
-      const [userList, questionList, taskList, allClients, whatsappList, mapsKey, blockDays, tagsList, campaignsList, coverage] = await Promise.all([
+      const [userList, teamList, questionList, taskList, allClients, whatsappList, mapsKey, blockDays, tagsList, campaignsList, coverage] = await Promise.all([
         dataService.getUsers(),
+        dataService.getOperationTeams(),
         dataService.getQuestions(),
         dataService.getTasks(),
         dataService.getClients(true), // Include LEADs (Prospects)
@@ -103,6 +118,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
         EmailService.getCoverageStats()
       ]);
       setUsers(userList);
+      setTeams(teamList);
       setQuestions(questionList);
       setGoogleMapsKey(mapsKey);
       setCommunicationBlockDays(String(blockDays));
@@ -337,11 +353,34 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
     try {
       await dataService.createUser(userData);
       setIsUserModalOpen(false);
-      setUserData({ name: '', username: '', password: '', role: UserRole.OPERATOR });
+      setUserData({ name: '', username: '', password: '', role: UserRole.OPERATOR, teamId: '', sectorCode: '' });
       await refreshData();
       alert("Usuário criado com sucesso!");
     } catch (e) {
       alert("Erro ao criar usuário.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleCreateTeam = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTeamData.name.trim()) return alert("Informe o nome do time.");
+
+    setIsProcessing(true);
+    try {
+      await dataService.saveOperationTeam({
+        name: newTeamData.name.trim(),
+        sectorCode: newTeamData.sectorCode.trim() || null,
+        description: newTeamData.description.trim() || null,
+        active: true
+      });
+      setNewTeamData({ name: '', sectorCode: '', description: '' });
+      await refreshData();
+      alert("Time criado com sucesso!");
+    } catch (e) {
+      console.error(e);
+      alert("Erro ao criar time.");
     } finally {
       setIsProcessing(false);
     }
@@ -394,7 +433,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
 
   const handleRescheduleTask = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingTaskId || !scheduleDate.date || !scheduleDate.time) return;
+    if (!editingTaskId || !scheduleDate.date) return;
 
     setIsProcessing(true);
     // ... existing logic ...
@@ -405,7 +444,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
 
     setIsProcessing(true);
     try {
-      const scheduledFor = `${scheduleDate.date}T${scheduleDate.time}:00`;
+      const scheduledFor = buildScheduledForValue(scheduleDate.date, scheduleDate.time);
       await dataService.updateTask(editingTaskId, { scheduledFor, status: 'pending' });
       setIsTaskModalOpen(false);
       setEditingTaskId(null);
@@ -779,6 +818,57 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
           </div>
 
 
+          <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_0.8fr] gap-6">
+            <div className="p-6 rounded-[28px] border border-slate-100 bg-slate-50 space-y-4">
+              <div>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Times operacionais</p>
+                <h4 className="mt-2 text-lg font-black text-slate-800">Base de atribuicao da Agenda Central</h4>
+              </div>
+
+              <form onSubmit={handleCreateTeam} className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <input
+                  type="text"
+                  placeholder="Nome do time"
+                  value={newTeamData.name}
+                  onChange={e => setNewTeamData({ ...newTeamData, name: e.target.value })}
+                  className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold"
+                />
+                <input
+                  type="text"
+                  placeholder="Codigo do setor"
+                  value={newTeamData.sectorCode}
+                  onChange={e => setNewTeamData({ ...newTeamData, sectorCode: e.target.value.toUpperCase() })}
+                  className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold uppercase"
+                />
+                <button type="submit" className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-2">
+                  <Plus size={16} /> Criar time
+                </button>
+              </form>
+
+              <input
+                type="text"
+                placeholder="Descricao opcional"
+                value={newTeamData.description}
+                onChange={e => setNewTeamData({ ...newTeamData, description: e.target.value })}
+                className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold"
+              />
+            </div>
+
+            <div className="p-6 rounded-[28px] border border-slate-100 bg-slate-50">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Resumo rapido</p>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <div className="p-4 rounded-2xl bg-white border border-slate-100">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Times ativos</p>
+                  <p className="mt-2 text-2xl font-black text-slate-800">{teams.filter(team => team.active).length}</p>
+                </div>
+                <div className="p-4 rounded-2xl bg-white border border-slate-100">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Usuarios ativos</p>
+                  <p className="mt-2 text-2xl font-black text-slate-800">{users.filter(u => u.active).length}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div className="overflow-x-auto">
             <table className="w-full text-left">
               <thead>
@@ -871,16 +961,67 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
         </div>
       )}
 
-      {activeTab === 'users' && (
+            {activeTab === 'users' && (
         <div className="bg-white p-10 rounded-[40px] border border-slate-100 shadow-sm space-y-8 animate-in fade-in duration-300">
           <div className="flex justify-between items-center">
             <div>
-              <h3 className="text-2xl font-black text-slate-800">Equipe e Permissões</h3>
-              <p className="text-xs text-slate-400 font-bold">Gerencie os acessos e funções dos colaboradores.</p>
+              <h3 className="text-2xl font-black text-slate-800">Equipe e Permissoes</h3>
+              <p className="text-xs text-slate-400 font-bold">Gerencie acessos, times operacionais e o setor base da Agenda Central.</p>
             </div>
             <button onClick={() => setIsUserModalOpen(true)} className="px-8 py-4 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-xl flex items-center gap-2">
-              <UserPlus size={18} /> Novo Usuário
+              <UserPlus size={18} /> Novo Usuario
             </button>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_0.8fr] gap-6">
+            <div className="p-6 rounded-[28px] border border-slate-100 bg-slate-50 space-y-4">
+              <div>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Times operacionais</p>
+                <h4 className="mt-2 text-lg font-black text-slate-800">Base de atribuicao da Agenda Central</h4>
+              </div>
+
+              <form onSubmit={handleCreateTeam} className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <input
+                  type="text"
+                  placeholder="Nome do time"
+                  value={newTeamData.name}
+                  onChange={e => setNewTeamData({ ...newTeamData, name: e.target.value })}
+                  className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold"
+                />
+                <input
+                  type="text"
+                  placeholder="Codigo do setor"
+                  value={newTeamData.sectorCode}
+                  onChange={e => setNewTeamData({ ...newTeamData, sectorCode: e.target.value.toUpperCase() })}
+                  className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold uppercase"
+                />
+                <button type="submit" className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-2">
+                  <Plus size={16} /> Criar time
+                </button>
+              </form>
+
+              <input
+                type="text"
+                placeholder="Descricao opcional"
+                value={newTeamData.description}
+                onChange={e => setNewTeamData({ ...newTeamData, description: e.target.value })}
+                className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold"
+              />
+            </div>
+
+            <div className="p-6 rounded-[28px] border border-slate-100 bg-slate-50">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Resumo rapido</p>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <div className="p-4 rounded-2xl bg-white border border-slate-100">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Times ativos</p>
+                  <p className="mt-2 text-2xl font-black text-slate-800">{teams.filter(team => team.active).length}</p>
+                </div>
+                <div className="p-4 rounded-2xl bg-white border border-slate-100">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Usuarios ativos</p>
+                  <p className="mt-2 text-2xl font-black text-slate-800">{users.filter(u => u.active).length}</p>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
@@ -888,7 +1029,9 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
               <thead>
                 <tr className="border-b border-slate-100">
                   <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Colaborador</th>
-                  <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Função</th>
+                  <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Funcao</th>
+                  <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Time</th>
+                  <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Setor</th>
                   <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Status</th>
                 </tr>
               </thead>
@@ -912,6 +1055,28 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                       >
                         {Object.values(UserRole).map(role => <option key={role} value={role}>{role}</option>)}
                       </select>
+                    </td>
+                    <td className="py-6 px-4">
+                      <select
+                        value={u.teamId || ''}
+                        onChange={(e) => handleUpdateUser(u.id, { teamId: e.target.value || null })}
+                        className="bg-white border border-slate-200 rounded-xl px-4 py-2 text-[10px] font-black uppercase tracking-tighter text-slate-700 outline-none min-w-[180px]"
+                      >
+                        <option value="">Sem time</option>
+                        {teams.filter(team => team.active).map(team => (
+                          <option key={team.id} value={team.id}>{team.name}</option>
+                        ))}
+                      </select>
+                      <p className="mt-2 text-[9px] font-bold text-slate-400 uppercase tracking-widest">{u.teamName || 'Nao vinculado'}</p>
+                    </td>
+                    <td className="py-6 px-4">
+                      <input
+                        type="text"
+                        value={u.sectorCode || ''}
+                        onChange={(e) => handleUpdateUser(u.id, { sectorCode: e.target.value.toUpperCase() || null })}
+                        placeholder="SETOR"
+                        className="w-full min-w-[120px] bg-white border border-slate-200 rounded-xl px-4 py-2 text-[10px] font-black uppercase tracking-widest text-slate-700 outline-none"
+                      />
                     </td>
                     <td className="py-6 px-4">
                       <button
@@ -1351,6 +1516,11 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
               <select value={userData.role} onChange={e => setUserData({ ...userData, role: e.target.value as UserRole })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-[10px] uppercase">
                 {Object.values(UserRole).map(role => <option key={role} value={role}>{role}</option>)}
               </select>
+              <select value={userData.teamId} onChange={e => setUserData({ ...userData, teamId: e.target.value })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-[10px] uppercase">
+                <option value="">Sem time</option>
+                {teams.filter(team => team.active).map(team => <option key={team.id} value={team.id}>{team.name}</option>)}
+              </select>
+              <input type="text" placeholder="Codigo do setor" value={userData.sectorCode} onChange={e => setUserData({ ...userData, sectorCode: e.target.value.toUpperCase() })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold uppercase" />
               <button type="submit" className="w-full py-6 bg-slate-900 text-white rounded-[32px] font-black uppercase tracking-widest text-[10px]">Criar Usuário</button>
             </form>
           </div>
@@ -1392,8 +1562,8 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                 <input type="date" required value={scheduleDate.date} onChange={e => setScheduleDate({ ...scheduleDate, date: e.target.value })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" />
               </div>
               <div className="space-y-2">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">Horário</label>
-                <input type="time" required value={scheduleDate.time} onChange={e => setScheduleDate({ ...scheduleDate, time: e.target.value })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" />
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">Horário (opcional)</label>
+                <input type="time" value={scheduleDate.time} onChange={e => setScheduleDate({ ...scheduleDate, time: e.target.value })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" />
               </div>
               <button type="submit" disabled={isProcessing} className="w-full py-6 bg-blue-600 text-white rounded-[32px] font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-2">
                 {isProcessing ? <Loader2 className="animate-spin" /> : <Clock size={16} />} Confirmar Agendamento
@@ -1636,7 +1806,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
               customerId: t.clientId,
               requestedByOperatorId: user.id,
               assignedOperatorId: t.assignedTo || user.id,
-              scheduledFor: `${data.date}T${data.time}:00`,
+              scheduledFor: buildScheduledForValue(data.date, data.time),
               callType: t.type,
               status: 'PENDENTE_APROVACAO' as ScheduleStatus, // Force approval
               scheduleReason: data.reason,
@@ -1791,3 +1961,4 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
 };
 
 export default Admin;
+
