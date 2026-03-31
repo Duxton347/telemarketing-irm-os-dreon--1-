@@ -444,7 +444,7 @@ export const dataService = {
 
   getTasks: async (operatorId?: string): Promise<Task[]> => {
     // 1. Fetch Legacy Tasks (standard queue)
-    let tasksQuery = supabase.from('tasks').select('*, clients(*), profiles:assigned_to(*)').in('status', ['pending', 'skipped']);
+    let tasksQuery = supabase.from('tasks').select('*, clients(*)').in('status', ['pending', 'skipped']);
     if (operatorId) {
       tasksQuery = tasksQuery.eq('assigned_to', operatorId);
     }
@@ -455,10 +455,15 @@ export const dataService = {
       .filter(t => t.client_id) // Only require a valid client_id, don't filter by join result
       .map(t => {
         const clientObj = Array.isArray(t.clients) ? t.clients[0] : t.clients;
+        // Ensure that tasks dispatched with a specific call type (e.g., from Campaign Planner) retain it,
+        // unless it's explicitly a reativation logic condition.
+        // We will prefer the explicitly assigned task type, falling back to logic based on client status.
+        const taskType = t.type ? (t.type as CallType) : (clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : CallType.POS_VENDA);
+
         return {
           id: t.id,
           clientId: t.client_id,
-          type: clientObj?.status === 'INATIVO' ? CallType.REATIVACAO : (t.type as CallType),
+          type: taskType,
           deadline: t.created_at,
           assignedTo: t.assigned_to,
           status: t.status as any,

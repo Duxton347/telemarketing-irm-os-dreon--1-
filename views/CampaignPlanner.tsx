@@ -136,7 +136,7 @@ export const CampaignPlanner: React.FC = () => {
         proposito: campProposito,
         callType: campCallType,
         canal: campCanal,
-        operatorId: campOperador,
+        operatorId: campOperador || null, // Ensure empty string becomes null for database integrity
         clientIds: Array.from(selectedIds),
         filters
       });
@@ -288,7 +288,7 @@ export const CampaignPlanner: React.FC = () => {
                   </label>
                   <div className="relative">
                     <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input 
+                    <input
                       list="cities-list"
                       placeholder="Buscar Cidade..."
                       className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-blue-500 focus:bg-white transition-all shadow-inner"
@@ -326,7 +326,7 @@ export const CampaignPlanner: React.FC = () => {
 
                   <div className="relative mt-3">
                     <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input 
+                    <input
                       list="neighborhoods-list"
                       placeholder="Buscar Bairro..."
                       className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-blue-500 focus:bg-white transition-all shadow-inner"
@@ -369,7 +369,7 @@ export const CampaignPlanner: React.FC = () => {
                   </label>
                   <div className="relative">
                     <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input 
+                    <input
                       list="items-list"
                       placeholder="Buscar Equipamento..."
                       className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-teal-500 focus:bg-white transition-all shadow-inner"
