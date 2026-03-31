@@ -357,7 +357,7 @@ const getRecentCommunicationDetails = async (clientId: string) => {
       .limit(1),
     supabase
       .from('whatsapp_tasks')
-      .select('id, created_at, started_at, completed_at, updated_at, status')
+      .select('id, created_at, started_at, completed_at, updated_at, status, skip_reason')
       .eq('client_id', clientId)
       .in('status', ['pending', 'started', 'completed', 'skipped'])
       .or(`created_at.gte.${cutoffIso},started_at.gte.${cutoffIso},completed_at.gte.${cutoffIso},updated_at.gte.${cutoffIso}`)
@@ -368,11 +368,12 @@ const getRecentCommunicationDetails = async (clientId: string) => {
   if (callsError) throw callsError;
   if (whatsAppError) throw whatsAppError;
 
+  const relevantRecentWhatsApp = (recentWhatsApp || []).find((task: any) => task?.skip_reason !== 'moved_to_voice');
   const lastCallAt = recentCalls?.[0]?.start_time;
-  const lastWhatsAppAt = recentWhatsApp?.[0]?.completed_at
-    || recentWhatsApp?.[0]?.started_at
-    || recentWhatsApp?.[0]?.updated_at
-    || recentWhatsApp?.[0]?.created_at;
+  const lastWhatsAppAt = relevantRecentWhatsApp?.completed_at
+    || relevantRecentWhatsApp?.started_at
+    || relevantRecentWhatsApp?.updated_at
+    || relevantRecentWhatsApp?.created_at;
   const lastCommunicationAt = [lastCallAt, lastWhatsAppAt]
     .filter(Boolean)
     .sort((left, right) => new Date(right as string).getTime() - new Date(left as string).getTime())[0];
@@ -419,7 +420,7 @@ const loadClientIdsWithRecentCommunication = async (clientIds: string[]): Promis
         .gte('start_time', cutoffIso),
       supabase
         .from('whatsapp_tasks')
-        .select('client_id')
+        .select('client_id, skip_reason')
         .in('client_id', chunk)
         .in('status', ['started', 'completed', 'skipped'])
         .or(`created_at.gte.${cutoffIso},started_at.gte.${cutoffIso},completed_at.gte.${cutoffIso},updated_at.gte.${cutoffIso}`)
@@ -431,12 +432,105 @@ const loadClientIdsWithRecentCommunication = async (clientIds: string[]): Promis
     (recentCalls || []).forEach((row: any) => {
       if (row?.client_id) recentClientIds.add(row.client_id);
     });
-    (recentWhatsApp || []).forEach((row: any) => {
-      if (row?.client_id) recentClientIds.add(row.client_id);
-    });
+    (recentWhatsApp || [])
+      .filter((row: any) => row?.skip_reason !== 'moved_to_voice')
+      .forEach((row: any) => {
+        if (row?.client_id) recentClientIds.add(row.client_id);
+      });
   }
 
   return recentClientIds;
+};
+
+const restoreVoiceTasksBlockedByWhatsAppTransfers = async (
+  options?: {
+    clientId?: string;
+    operatorId?: string;
+    taskType?: string;
+  }
+): Promise<number> => {
+  const blockDays = await getConfiguredCommunicationBlockDays();
+  if (blockDays <= 0) {
+    return 0;
+  }
+
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - blockDays);
+  const cutoffIso = cutoff.toISOString();
+
+  let transfersQuery = supabase
+    .from('whatsapp_tasks')
+    .select('client_id, assigned_to, type')
+    .eq('status', 'skipped')
+    .eq('skip_reason', 'moved_to_voice')
+    .or(`completed_at.gte.${cutoffIso},updated_at.gte.${cutoffIso}`);
+
+  if (options?.clientId) {
+    transfersQuery = transfersQuery.eq('client_id', options.clientId);
+  }
+
+  if (options?.operatorId) {
+    transfersQuery = transfersQuery.eq('assigned_to', options.operatorId);
+  }
+
+  const { data: transferMarkers, error: transferMarkersError } = await transfersQuery;
+  if (transferMarkersError) throw transferMarkersError;
+  if (!transferMarkers || transferMarkers.length === 0) {
+    return 0;
+  }
+
+  const transferableKeys = new Set(
+    transferMarkers.map((marker: any) => `${marker.client_id || ''}::${marker.assigned_to || ''}`)
+  );
+
+  let blockedTasksQuery = supabase
+    .from('tasks')
+    .select('id, client_id, assigned_to, status, skip_reason')
+    .eq('status', 'skipped')
+    .eq('skip_reason', 'recent_communication_block');
+
+  if (options?.clientId) {
+    blockedTasksQuery = blockedTasksQuery.eq('client_id', options.clientId);
+  }
+
+  if (options?.operatorId) {
+    blockedTasksQuery = blockedTasksQuery.eq('assigned_to', options.operatorId);
+  }
+
+  if (options?.taskType) {
+    blockedTasksQuery = blockedTasksQuery.eq('type', options.taskType);
+  }
+
+  const { data: blockedTasks, error: blockedTasksError } = await blockedTasksQuery;
+  if (blockedTasksError) throw blockedTasksError;
+  if (!blockedTasks || blockedTasks.length === 0) {
+    return 0;
+  }
+
+  const idsToRestore = blockedTasks
+    .filter((task: any) => transferableKeys.has(`${task.client_id || ''}::${task.assigned_to || ''}`))
+    .map((task: any) => task.id);
+
+  if (idsToRestore.length === 0) {
+    return 0;
+  }
+
+  const chunkSize = 50;
+  for (let index = 0; index < idsToRestore.length; index += chunkSize) {
+    const chunk = idsToRestore.slice(index, index + chunkSize);
+    const { error: restoreError } = await runUpdateWithUpdatedAtFallback(
+      'tasks',
+      {
+        status: 'pending',
+        skip_reason: null,
+        updated_at: new Date().toISOString()
+      },
+      async (safePayload) => await supabase.from('tasks').update(safePayload).in('id', chunk)
+    );
+    if (restoreError) throw restoreError;
+  }
+
+  return idsToRestore.length;
 };
 
 const cleanupStaleVoiceQueueEntries = async (
@@ -446,6 +540,8 @@ const cleanupStaleVoiceQueueEntries = async (
     taskType?: string;
   }
 ): Promise<number> => {
+  await restoreVoiceTasksBlockedByWhatsAppTransfers(options);
+
   let query = supabase
     .from('tasks')
     .select('id, client_id')
@@ -2482,7 +2578,10 @@ export const dataService = {
   },
 
 
-  createTask: async (task: Partial<Task>): Promise<{ created: boolean; existingTaskId?: string }> => {
+  createTask: async (
+    task: Partial<Task>,
+    options?: { skipRecentCommunicationCheck?: boolean }
+  ): Promise<{ created: boolean; existingTaskId?: string }> => {
     if (!task.clientId) throw new Error('Cliente obrigatorio para criar atendimento.');
 
     const dbType = mapTaskTypeToDb(task.type);
@@ -2496,9 +2595,11 @@ export const dataService = {
         taskType: dbType
       });
 
-      const recentCommunication = await getRecentCommunicationDetails(task.clientId);
-      if (recentCommunication.blocked) {
-        return { created: false };
+      if (!options?.skipRecentCommunicationCheck) {
+        const recentCommunication = await getRecentCommunicationDetails(task.clientId);
+        if (recentCommunication.blocked) {
+          return { created: false };
+        }
       }
 
       const existingTask = await findOpenVoiceTask(task.clientId, dbType);
@@ -4718,8 +4819,7 @@ export const dataService = {
       type: task.type,
       status: task.status || 'pending',
       source: task.source || 'manual',
-      source_id: normalizedSourceId,
-      proposito: task.proposito
+      source_id: normalizedSourceId
     });
     if (error && isUniqueViolationError(error)) {
       const existingAfterConflict = await findOpenWhatsAppTask(task.clientId, task.type);
@@ -4775,8 +4875,7 @@ export const dataService = {
           createdAt: t.created_at,
           updatedAt: t.updated_at,
           clientName: clientObj?.name || 'Cliente Desconhecido',
-          clientPhone: clientObj?.phone || '',
-          proposito: t.proposito
+          clientPhone: clientObj?.phone || ''
         };
       });
   },
@@ -4818,31 +4917,81 @@ export const dataService = {
   },
 
   moveCallToWhatsApp: async (taskId: string, operatorId: string): Promise<void> => {
-    // 1. Get original task to copy details
-    const { data: task, error: getError } = await supabase.from('tasks').select('*').eq('id', taskId).single();
-    if (getError) throw getError;
+    const { data: legacyTask, error: legacyTaskError } = await supabase
+      .from('tasks')
+      .select('id, client_id, assigned_to, type, proposito')
+      .eq('id', taskId)
+      .maybeSingle();
+    if (legacyTaskError) throw legacyTaskError;
 
-    // 2. Create WhatsApp Task
+    let sourceTask = legacyTask;
+
+    if (!sourceTask) {
+      const { data: approvedSchedule, error: approvedScheduleError } = await supabase
+        .from('call_schedules')
+        .select('id, customer_id, assigned_operator_id, call_type, schedule_reason')
+        .eq('id', taskId)
+        .maybeSingle();
+      if (approvedScheduleError) throw approvedScheduleError;
+
+      if (!approvedSchedule) {
+        throw new Error('Tarefa de ligacao nao encontrada.');
+      }
+
+      sourceTask = {
+        id: approvedSchedule.id,
+        client_id: approvedSchedule.customer_id,
+        assigned_to: approvedSchedule.assigned_operator_id,
+        type: approvedSchedule.call_type,
+        proposito: approvedSchedule.schedule_reason
+      };
+    }
+
+    const responsibleOperatorId = sourceTask.assigned_to || operatorId;
+
     await dataService.createWhatsAppTask({
-      clientId: task.client_id,
-      assignedTo: operatorId,
+      clientId: sourceTask.client_id,
+      assignedTo: responsibleOperatorId,
       status: 'pending',
-      type: task.type,
+      type: sourceTask.type,
       source: 'call_skip_whatsapp',
-      sourceId: taskId,
-      proposito: task.proposito
+      sourceId: taskId
     }, { skipRecentCommunicationCheck: true });
 
-    // 3. Skip original Task
-    // We use a specific skip reason to indicate it moved to WhatsApp, this helps in Reports to not count as "Lost"
-    const { error: skipError } = await supabase.from('tasks').update({
+    await dataService.updateTask(taskId, {
       status: 'skipped',
-      skip_reason: 'moved_to_whatsapp'
-    }).eq('id', taskId);
-    if (skipError) throw skipError;
+      skipReason: 'moved_to_whatsapp'
+    });
 
-    // Log event
     await dataService.logOperatorEvent(operatorId, OperatorEventType.PULAR_ATENDIMENTO, taskId, 'Movido para WhatsApp');
+  },
+
+  moveWhatsAppToCall: async (taskId: string, operatorId: string): Promise<void> => {
+    const { data: task, error: getError } = await supabase
+      .from('whatsapp_tasks')
+      .select('id, client_id, assigned_to, type')
+      .eq('id', taskId)
+      .maybeSingle();
+    if (getError) throw getError;
+    if (!task) throw new Error('Tarefa de WhatsApp nao encontrada.');
+
+    const responsibleOperatorId = task.assigned_to || operatorId;
+
+    await dataService.createTask({
+      clientId: task.client_id,
+      assignedTo: responsibleOperatorId,
+      status: 'pending',
+      type: task.type
+    }, { skipRecentCommunicationCheck: true });
+
+    await dataService.updateWhatsAppTask(taskId, {
+      status: 'skipped',
+      skip_reason: 'moved_to_voice',
+      completed_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    });
+
+    await dataService.logOperatorEvent(operatorId, OperatorEventType.ADMIN_REAGENDAR, undefined, `Movido para Ligacao a partir da tarefa WhatsApp ${taskId}`);
   },
 
   deleteWhatsAppTask: async (taskId: string): Promise<void> => {

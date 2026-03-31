@@ -72,9 +72,20 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   const [userData, setUserData] = React.useState({ name: '', username: '', password: '', role: UserRole.OPERATOR });
   const [questionData, setQuestionData] = React.useState<Partial<Question>>({ text: '', options: [], type: 'ALL' as any, stageId: '' });
 
-  const [selectedOperatorId, setSelectedOperatorId] = React.useState<string>('');
+  const [taskOperatorFilterId, setTaskOperatorFilterId] = React.useState<string>('');
+  const [importOperatorId, setImportOperatorId] = React.useState<string>('');
+  const [typeEditOperatorId, setTypeEditOperatorId] = React.useState<string>('');
   const [selectedCallType, setSelectedCallType] = React.useState<CallType>(CallType.POS_VENDA);
   const assignableUsers = React.useMemo(() => getTaskAssignableUsers(users), [users]);
+  const visiblePendingTasks = React.useMemo(() => {
+    const currentQueue = taskFilterChannel === 'VOICE' ? pendingTasks : pendingWhatsAppTasks;
+
+    if (!taskOperatorFilterId) {
+      return currentQueue;
+    }
+
+    return currentQueue.filter((task: Task | WhatsAppTask) => (task.assignedTo || '') === taskOperatorFilterId);
+  }, [pendingTasks, pendingWhatsAppTasks, taskFilterChannel, taskOperatorFilterId]);
 
   const refreshData = async () => {
     setIsProcessing(true);
@@ -124,10 +135,18 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
       setPendingWhatsAppTasks(pendingWa);
 
       const assignableUserList = getTaskAssignableUsers(userList);
-      if (assignableUserList.length > 0 && !selectedOperatorId) {
-        setSelectedOperatorId(
+      if (assignableUserList.length > 0 && !importOperatorId) {
+        setImportOperatorId(
           assignableUserList.find(assignableUser => assignableUser.id === user?.id)?.id || assignableUserList[0].id
         );
+      }
+
+      if (taskOperatorFilterId && !assignableUserList.some(assignableUser => assignableUser.id === taskOperatorFilterId)) {
+        setTaskOperatorFilterId('');
+      }
+
+      if (typeEditOperatorId && !assignableUserList.some(assignableUser => assignableUser.id === typeEditOperatorId)) {
+        setTypeEditOperatorId('');
       }
 
       // Load Metrics if on analytics tab (or initial load?)
@@ -146,6 +165,10 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   };
 
 
+
+  React.useEffect(() => {
+    setSelectedTaskIds([]);
+  }, [taskOperatorFilterId, activeTab]);
 
   React.useEffect(() => { refreshData(); }, []);
 
@@ -219,14 +242,14 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   };
 
   const handleClearOperatorTasks = async () => {
-    if (!selectedOperatorId) return alert("Selecione um operador no menu suspenso primeiro.");
+    if (!taskOperatorFilterId) return alert("Selecione um operador no menu suspenso primeiro.");
 
-    const operatorName = users.find(u => u.id === selectedOperatorId)?.name || 'selecionado';
+    const operatorName = users.find(u => u.id === taskOperatorFilterId)?.name || 'selecionado';
     if (!confirm(`ATENÇÃO: Deseja apagar TODAS as pendências da fila de ${operatorName}? (As tarefas "puladas" serão preservadas). É irreversível.`)) return;
 
     setIsProcessing(true);
     // Limpeza imediata local para evitar lag visual
-    const targetOpId = selectedOperatorId;
+    const targetOpId = taskOperatorFilterId;
 
     try {
       if (taskFilterChannel === 'WHATSAPP') {
@@ -242,6 +265,42 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
     } catch (e: any) {
       alert(`Erro ao limpar fila no banco de dados: ${e.message}`);
       await refreshData(); // Restaura caso falhe
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleTransferSelectedTasks = async () => {
+    if (selectedTaskIds.length === 0) return alert("Selecione pelo menos uma tarefa para transferir.");
+
+    const selectedTasks = visiblePendingTasks.filter((task: Task | WhatsAppTask) => selectedTaskIds.includes(task.id));
+    if (selectedTasks.length === 0) {
+      setSelectedTaskIds([]);
+      return alert("Nenhuma tarefa valida encontrada na selecao atual.");
+    }
+
+    const destinationLabel = taskFilterChannel === 'VOICE' ? 'WhatsApp' : 'Ligacao';
+    if (!confirm(`Deseja mover ${selectedTasks.length} tarefa(s) selecionada(s) para ${destinationLabel}?`)) return;
+
+    setIsProcessing(true);
+    try {
+      for (const task of selectedTasks) {
+        const actionOperatorId = user?.id || task.assignedTo || '';
+
+        if (taskFilterChannel === 'VOICE') {
+          await dataService.moveCallToWhatsApp(task.id, actionOperatorId);
+        } else {
+          await dataService.moveWhatsAppToCall(task.id, actionOperatorId);
+        }
+      }
+
+      setSelectedTaskIds([]);
+      await refreshData();
+      alert(`${selectedTasks.length} tarefa(s) movida(s) para ${destinationLabel} com sucesso!`);
+    } catch (e: any) {
+      console.error(e);
+      await refreshData();
+      alert(`Erro ao mover tarefas: ${e.message || 'Falha desconhecida.'}`);
     } finally {
       setIsProcessing(false);
     }
@@ -310,14 +369,14 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
     try {
       if (taskFilterChannel === 'WHATSAPP') {
         const updates: any = { type: selectedCallType };
-        if (selectedOperatorId) {
-          updates.assigned_to = selectedOperatorId;
+        if (typeEditOperatorId) {
+          updates.assigned_to = typeEditOperatorId;
         }
         await dataService.updateWhatsAppTask(taskToEditType.id, updates);
       } else {
         // Voice tasks update
-        if (selectedOperatorId) {
-          await dataService.updateTask(taskToEditType.id, { type: selectedCallType, assignedTo: selectedOperatorId });
+        if (typeEditOperatorId) {
+          await dataService.updateTask(taskToEditType.id, { type: selectedCallType, assignedTo: typeEditOperatorId });
         } else {
           await dataService.updateTask(taskToEditType.id, { type: selectedCallType });
         }
@@ -454,7 +513,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
 
   const runImport = async () => {
     if (csvPreview.length === 0 || isProcessing) return;
-    if (!selectedOperatorId) {
+    if (!importOperatorId) {
       alert("Selecione um operador.");
       return;
     }
@@ -471,7 +530,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
         // Note: getWhatsAppTasks filters by assignedTo if provided
         // But we might want 'pending' only? getWhatsAppTasks returns everything?
         // It returns everything for the operator.
-        const waTasks = await dataService.getWhatsAppTasks(selectedOperatorId);
+        const waTasks = await dataService.getWhatsAppTasks(importOperatorId);
         pendingByOpAndType = waTasks.filter(t => t.status === 'pending' && t.type === selectedCallType);
       }
 
@@ -513,13 +572,13 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
           await dataService.createTask({
             clientId: client.id,
             type: selectedCallType,
-            assignedTo: selectedOperatorId
+            assignedTo: importOperatorId
           });
         } else {
           await dataService.createWhatsAppTask({
             clientId: client.id,
             type: selectedCallType,
-            assignedTo: selectedOperatorId,
+            assignedTo: importOperatorId,
             status: 'pending',
             source: 'manual'
           });
@@ -676,11 +735,11 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                 <Sparkles size={16} /> Limpar Todos os Duplicados
               </button>
               <select
-                value={selectedOperatorId}
-                onChange={e => setSelectedOperatorId(e.target.value)}
+                value={taskOperatorFilterId}
+                onChange={e => setTaskOperatorFilterId(e.target.value)}
                 className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-black text-[10px] uppercase outline-none"
               >
-                <option value="">Operador alvo...</option>
+                <option value="">Todos os operadores</option>
                 {assignableUsers.map(u => (
                   <option key={u.id} value={u.id}>{u.name}</option>
                 ))}
@@ -696,7 +755,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
 
               <button
                 onClick={handleClearOperatorTasks}
-                disabled={isProcessing || !selectedOperatorId}
+                disabled={isProcessing || !taskOperatorFilterId}
                 className="flex items-center gap-2 px-6 py-3 bg-red-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg shadow-red-500/20 active:scale-95 transition-all disabled:opacity-30"
               >
                 {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <Eraser size={16} />} Limpar Tudo do Operador
@@ -728,11 +787,11 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                     <input
                       type="checkbox"
                       onChange={(e) => {
-                        const tasks = taskFilterChannel === 'VOICE' ? pendingTasks : pendingWhatsAppTasks;
+                        const tasks = visiblePendingTasks;
                         if (e.target.checked) setSelectedTaskIds(tasks.map((t: Task | WhatsAppTask) => t.id));
                         else setSelectedTaskIds([]);
                       }}
-                      checked={(taskFilterChannel === 'VOICE' ? pendingTasks : pendingWhatsAppTasks).length > 0 && selectedTaskIds.length === (taskFilterChannel === 'VOICE' ? pendingTasks : pendingWhatsAppTasks).length}
+                      checked={visiblePendingTasks.length > 0 && selectedTaskIds.length === visiblePendingTasks.length}
                       className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                     />
                   </th>
@@ -744,7 +803,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
-                {(taskFilterChannel === 'VOICE' ? pendingTasks : pendingWhatsAppTasks).map((task: any) => (
+                {visiblePendingTasks.map((task: any) => (
                   <tr key={task.id} className={`transition-all group ${selectedTaskIds.includes(task.id) ? 'bg-blue-50' : 'hover:bg-slate-50'}`}>
                     <td className="py-5 px-4">
                       <input
@@ -771,7 +830,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                           onClick={() => {
                             setTaskToEditType(task);
                             setSelectedCallType(task.type as CallType);
-                            setSelectedOperatorId(''); // Reset selector to "Keep current"
+                            setTypeEditOperatorId(''); // Reset selector to "Keep current"
                             setIsTypeModalOpen(true);
                           }}
                           className="p-1 text-slate-300 hover:text-blue-600 transition-colors"
@@ -801,7 +860,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                     </td>
                   </tr>
                 ))}
-                {(taskFilterChannel === 'VOICE' ? pendingTasks : pendingWhatsAppTasks).length === 0 && (
+                {visiblePendingTasks.length === 0 && (
                   <tr>
                     <td colSpan={4} className="py-20 text-center text-slate-300 font-black uppercase text-xs tracking-widest">A fila de trabalho está vazia.</td>
                   </tr>
@@ -931,8 +990,8 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
               <div className="space-y-4">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">1. Selecione o Operador Destinatário</label>
                 <select
-                  value={selectedOperatorId}
-                  onChange={e => setSelectedOperatorId(e.target.value)}
+                  value={importOperatorId}
+                  onChange={e => setImportOperatorId(e.target.value)}
                   className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-[11px] uppercase outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
                 >
                   <option value="">Selecione um operador...</option>
@@ -1530,6 +1589,16 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
               <span className="font-bold text-sm">Selecionados</span>
             </div>
             <div className="flex items-center gap-3">
+              {activeTab === 'tasks' && (
+                <button
+                  onClick={handleTransferSelectedTasks}
+                  disabled={isProcessing}
+                  className="flex items-center gap-2 hover:text-emerald-200 transition-colors font-bold text-sm uppercase tracking-wider disabled:opacity-50"
+                >
+                  {taskFilterChannel === 'VOICE' ? <MessageCircle size={18} /> : <Phone size={18} />}
+                  {taskFilterChannel === 'VOICE' ? 'Mover para WhatsApp' : 'Mover para Ligacao'}
+                </button>
+              )}
               <button
                 onClick={() => setIsRepiqueModalOpen(true)}
                 className="flex items-center gap-2 hover:text-blue-200 transition-colors font-bold text-sm uppercase tracking-wider"
@@ -1634,8 +1703,8 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
               <div className="space-y-4">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">2. Reatribuir Operador (Opcional)</label>
                 <select
-                  value={selectedOperatorId}
-                  onChange={e => setSelectedOperatorId(e.target.value)}
+                  value={typeEditOperatorId}
+                  onChange={e => setTypeEditOperatorId(e.target.value)}
                   className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-[11px] uppercase outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
                 >
                   <option value="">Manter atual...</option>
