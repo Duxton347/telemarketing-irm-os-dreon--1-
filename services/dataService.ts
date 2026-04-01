@@ -2150,34 +2150,46 @@ const mapTaskListRecord = (list: any): TaskList => ({
   updatedAt: list.updated_at
 });
 
-const mapTaskInstanceRecord = (task: any): TaskInstance => ({
-  id: task.id,
-  templateId: task.template_id,
-  sourceType: task.source_type,
-  sourceId: task.source_id,
-  title: task.title,
-  description: task.description,
-  category: task.category,
-  assignedTo: task.assigned_to,
-  assignedBy: task.assigned_by,
-  visibilityScope: task.visibility_scope || 'PRIVATE',
-  priority: task.priority || 'MEDIUM',
-  dueAt: task.due_at,
-  startsAt: task.starts_at,
-  completedAt: task.completed_at,
-  status: normalizeTaskInstanceStatus(task.status, task.due_at),
-  isRecurringInstance: task.is_recurring_instance ?? false,
-  isAccumulated: task.is_accumulated ?? false,
-  carryoverFrom: task.carryover_from,
-  completionNote: task.completion_note,
-  metadata: parseJsonValue(task.metadata),
-  recurrenceKey: task.recurrence_key,
-  createdAt: task.created_at,
-  updatedAt: task.updated_at,
-  assignedUser: task.assigned_profile ? mapProfileToUser(task.assigned_profile) : null,
-  assignedByUser: task.assigned_by_profile ? mapProfileToUser(task.assigned_by_profile) : null,
-  template: task.task_templates ? mapTaskTemplateRecord(Array.isArray(task.task_templates) ? task.task_templates[0] : task.task_templates) : null
-});
+const mapTaskInstanceRecord = (task: any): TaskInstance => {
+  const metadata = parseJsonValue(task.metadata) || {};
+  const listId = getSafeText(metadata.taskListId || metadata.list_id) || null;
+  const listName = getSafeText(metadata.taskListName || metadata.list_name) || null;
+  const reminderAt = getSafeText(metadata.reminderAt || metadata.reminder_date) || null;
+
+  return {
+    id: task.id,
+    templateId: task.template_id,
+    sourceType: task.source_type,
+    sourceId: task.source_id,
+    title: task.title,
+    description: task.description,
+    category: task.category,
+    assignedTo: task.assigned_to,
+    assignedBy: task.assigned_by,
+    visibilityScope: task.visibility_scope || 'PRIVATE',
+    priority: task.priority || 'MEDIUM',
+    dueAt: task.due_at,
+    startsAt: task.starts_at,
+    completedAt: task.completed_at,
+    status: normalizeTaskInstanceStatus(task.status, task.due_at),
+    isRecurringInstance: task.is_recurring_instance ?? false,
+    isAccumulated: task.is_accumulated ?? false,
+    carryoverFrom: task.carryover_from,
+    completionNote: task.completion_note,
+    metadata,
+    listId,
+    listName,
+    reminderAt,
+    isImportant: Boolean(metadata.isImportant),
+    inMyDay: Boolean(metadata.inMyDay),
+    recurrenceKey: task.recurrence_key,
+    createdAt: task.created_at,
+    updatedAt: task.updated_at,
+    assignedUser: task.assigned_profile ? mapProfileToUser(task.assigned_profile) : null,
+    assignedByUser: task.assigned_by_profile ? mapProfileToUser(task.assigned_by_profile) : null,
+    template: task.task_templates ? mapTaskTemplateRecord(Array.isArray(task.task_templates) ? task.task_templates[0] : task.task_templates) : null
+  };
+};
 
 const mapTaskActivityLogRecord = (row: any): TaskActivityLog => ({
   id: row.id,
@@ -6222,6 +6234,15 @@ export const dataService = {
     if (updates.status !== undefined) payload.status = updates.status;
     if (updates.completionNote !== undefined) payload.completion_note = updates.completionNote;
     if (updates.metadata !== undefined) payload.metadata = updates.metadata;
+
+    if (updates.dueAt !== undefined && updates.status === undefined) {
+      const baseStatus = normalizeTaskInstanceStatus(existing.status, existing.due_at);
+      if (baseStatus === 'PENDENTE' || baseStatus === 'ATRASADO') {
+        payload.status = updates.dueAt && new Date(updates.dueAt).getTime() < Date.now()
+          ? 'ATRASADO'
+          : 'PENDENTE';
+      }
+    }
 
     const { data, error } = await supabase
       .from('task_instances')

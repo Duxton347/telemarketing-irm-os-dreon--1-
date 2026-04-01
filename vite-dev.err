@@ -472,3 +472,152 @@ C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/services/campaign
       at TypeScriptParserMixin.parseStatementListItem (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12747:17)
       at TypeScriptParserMixin.parseBlockOrModuleBlockBody (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:13316:61)
       at TypeScriptParserMixin.parseBlockBody (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:13309:10)
+[2m15:44:58[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: Failed to load url /views/Calendar.tsx (resolved id: C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/views/Calendar.tsx) in C:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/App.tsx. Does the file exist?
+[2m15:47:01[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\views\Calendar.tsx: Unexpected token (553:0)
+
+[0m [90m 551 |[39m     publishAgendaRefresh({ source[33m:[39m [32m'tasks-manager'[39m[33m,[39m entity[33m:[39m [32m'task_instance'[39m[33m,[39m entityId[33m:[39m preserveTaskId [33m||[39m undefined })[33m;[39m
+ [90m 552 |[39m   }[33m;[39m
+[31m[1m>[22m[39m[90m 553 |[39m
+ [90m     |[39m [31m[1m^[22m[39m[0m
+  Plugin: [35mvite:react-babel[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/views/Calendar.tsx[39m:553:0
+[33m  551|      publishAgendaRefresh({ source: 'tasks-manager', entity: 'task_instance', entityId: preserveTaskId || undefined });
+  552|    };
+  553|  
+     |  ^[39m
+[2m15:47:01[22m [31m[1m[vite][22m[39m [31mInternal server error: C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\views\Calendar.tsx: Unexpected token (553:0)
+
+[0m [90m 551 |[31m     publishAgendaRefresh({ source[33m:[31m [32m'tasks-manager'[31m[33m,[31m entity[33m:[31m [32m'task_instance'[31m[33m,[31m entityId[33m:[31m preserveTaskId [33m||[31m undefined })[33m;[31m
+ [90m 552 |[31m   }[33m;[31m
+[31m[1m>[22m[31m[90m 553 |[31m
+ [90m     |[31m [31m[1m^[22m[31m[0m[39m
+  Plugin: [35mvite:react-babel[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/views/Calendar.tsx[39m:553:0
+[33m  551|      publishAgendaRefresh({ source: 'tasks-manager', entity: 'task_instance', entityId: preserveTaskId || undefined });
+  552|    };
+  553|  
+     |  ^[39m
+      at constructor (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:365:19)
+      at TypeScriptParserMixin.raise (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:6599:19)
+      at TypeScriptParserMixin.unexpected (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:6619:16)
+      at TypeScriptParserMixin.parseExprAtom (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11442:22)
+      at TypeScriptParserMixin.parseExprAtom (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:4764:20)
+      at TypeScriptParserMixin.parseExprSubscripts (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11081:23)
+      at TypeScriptParserMixin.parseUpdate (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11066:21)
+      at TypeScriptParserMixin.parseMaybeUnary (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11046:23)
+      at TypeScriptParserMixin.parseMaybeUnary (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:9837:18)
+      at TypeScriptParserMixin.parseMaybeUnaryOrPrivate (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10899:61)
+      at TypeScriptParserMixin.parseExprOps (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10904:23)
+      at TypeScriptParserMixin.parseMaybeConditional (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10881:23)
+      at TypeScriptParserMixin.parseMaybeAssign (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10831:21)
+      at TypeScriptParserMixin.parseMaybeAssign (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:9786:20)
+      at TypeScriptParserMixin.parseExpressionBase (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10784:23)
+      at C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10780:39
+      at TypeScriptParserMixin.allowInAnd (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12421:16)
+      at TypeScriptParserMixin.parseExpression (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10780:17)
+      at TypeScriptParserMixin.parseStatementContent (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12895:23)
+      at TypeScriptParserMixin.parseStatementContent (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:9508:18)
+      at TypeScriptParserMixin.parseStatementLike (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12767:17)
+      at TypeScriptParserMixin.parseStatementListItem (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12747:17)
+      at TypeScriptParserMixin.parseBlockOrModuleBlockBody (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:13316:61)
+      at TypeScriptParserMixin.parseBlockBody (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:13309:10)
+      at TypeScriptParserMixin.parseBlock (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:13297:10)
+      at TypeScriptParserMixin.parseFunctionBody (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12100:24)
+      at TypeScriptParserMixin.parseArrowExpression (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12075:10)
+      at TypeScriptParserMixin.parseParenAndDistinguishExpression (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11687:12)
+      at TypeScriptParserMixin.parseExprAtom (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11331:23)
+      at TypeScriptParserMixin.parseExprAtom (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:4764:20)
+      at TypeScriptParserMixin.parseExprSubscripts (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11081:23)
+      at TypeScriptParserMixin.parseUpdate (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11066:21)
+      at TypeScriptParserMixin.parseMaybeUnary (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11046:23)
+      at TypeScriptParserMixin.parseMaybeUnary (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:9837:18)
+      at TypeScriptParserMixin.parseMaybeUnaryOrPrivate (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10899:61)
+      at TypeScriptParserMixin.parseExprOps (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10904:23)
+      at TypeScriptParserMixin.parseMaybeConditional (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10881:23)
+      at TypeScriptParserMixin.parseMaybeAssign (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10831:21)
+      at TypeScriptParserMixin.parseMaybeAssign (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:9786:20)
+      at C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10800:39
+      at TypeScriptParserMixin.allowInAnd (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12421:16)
+      at TypeScriptParserMixin.parseMaybeAssignAllowIn (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10800:17)
+      at TypeScriptParserMixin.parseVar (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:13384:91)
+      at TypeScriptParserMixin.parseVarStatement (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:13230:10)
+      at TypeScriptParserMixin.parseVarStatement (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:9408:31)
+      at TypeScriptParserMixin.parseStatementContent (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12851:23)
+      at TypeScriptParserMixin.parseStatementContent (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:9508:18)
+      at TypeScriptParserMixin.parseStatementLike (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12767:17)
+      at TypeScriptParserMixin.parseModuleItem (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12744:17)
+      at TypeScriptParserMixin.parseBlockOrModuleBlockBody (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:13316:36)
+[2m15:47:02[22m [31m[1m[vite][22m[39m [31m[2m(client)[22m[39m Pre-transform error: C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\views\Calendar.tsx: Unexpected token (784:0)
+
+[0m [90m 782 |[39m     }
+ [90m 783 |[39m   }[33m;[39m
+[31m[1m>[22m[39m[90m 784 |[39m
+ [90m     |[39m [31m[1m^[22m[39m[0m
+  Plugin: [35mvite:react-babel[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/views/Calendar.tsx[39m:784:0
+[33m  782|      }
+  783|    };
+  784|  
+     |  ^[39m
+[2m15:47:02[22m [31m[1m[vite][22m[39m [31mInternal server error: C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\views\Calendar.tsx: Unexpected token (784:0)
+
+[0m [90m 782 |[31m     }
+ [90m 783 |[31m   }[33m;[31m
+[31m[1m>[22m[31m[90m 784 |[31m
+ [90m     |[31m [31m[1m^[22m[31m[0m[39m
+  Plugin: [35mvite:react-babel[39m
+  File: [36mC:/Users/ecomm/Documents/GitHub/telemarketing-irm-os-dreon--1-/views/Calendar.tsx[39m:784:0
+[33m  782|      }
+  783|    };
+  784|  
+     |  ^[39m
+      at constructor (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:365:19)
+      at TypeScriptParserMixin.raise (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:6599:19)
+      at TypeScriptParserMixin.unexpected (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:6619:16)
+      at TypeScriptParserMixin.parseExprAtom (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11442:22)
+      at TypeScriptParserMixin.parseExprAtom (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:4764:20)
+      at TypeScriptParserMixin.parseExprSubscripts (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11081:23)
+      at TypeScriptParserMixin.parseUpdate (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11066:21)
+      at TypeScriptParserMixin.parseMaybeUnary (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11046:23)
+      at TypeScriptParserMixin.parseMaybeUnary (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:9837:18)
+      at TypeScriptParserMixin.parseMaybeUnaryOrPrivate (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10899:61)
+      at TypeScriptParserMixin.parseExprOps (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10904:23)
+      at TypeScriptParserMixin.parseMaybeConditional (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10881:23)
+      at TypeScriptParserMixin.parseMaybeAssign (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10831:21)
+      at TypeScriptParserMixin.parseMaybeAssign (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:9786:20)
+      at TypeScriptParserMixin.parseExpressionBase (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10784:23)
+      at C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10780:39
+      at TypeScriptParserMixin.allowInAnd (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12421:16)
+      at TypeScriptParserMixin.parseExpression (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10780:17)
+      at TypeScriptParserMixin.parseStatementContent (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12895:23)
+      at TypeScriptParserMixin.parseStatementContent (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:9508:18)
+      at TypeScriptParserMixin.parseStatementLike (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12767:17)
+      at TypeScriptParserMixin.parseStatementListItem (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12747:17)
+      at TypeScriptParserMixin.parseBlockOrModuleBlockBody (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:13316:61)
+      at TypeScriptParserMixin.parseBlockBody (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:13309:10)
+      at TypeScriptParserMixin.parseBlock (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:13297:10)
+      at TypeScriptParserMixin.parseFunctionBody (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12100:24)
+      at TypeScriptParserMixin.parseArrowExpression (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12075:10)
+      at TypeScriptParserMixin.parseParenAndDistinguishExpression (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11687:12)
+      at TypeScriptParserMixin.parseExprAtom (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11331:23)
+      at TypeScriptParserMixin.parseExprAtom (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:4764:20)
+      at TypeScriptParserMixin.parseExprSubscripts (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11081:23)
+      at TypeScriptParserMixin.parseUpdate (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11066:21)
+      at TypeScriptParserMixin.parseMaybeUnary (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:11046:23)
+      at TypeScriptParserMixin.parseMaybeUnary (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:9837:18)
+      at TypeScriptParserMixin.parseMaybeUnaryOrPrivate (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10899:61)
+      at TypeScriptParserMixin.parseExprOps (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10904:23)
+      at TypeScriptParserMixin.parseMaybeConditional (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10881:23)
+      at TypeScriptParserMixin.parseMaybeAssign (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10831:21)
+      at TypeScriptParserMixin.parseMaybeAssign (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:9786:20)
+      at C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10800:39
+      at TypeScriptParserMixin.allowInAnd (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12421:16)
+      at TypeScriptParserMixin.parseMaybeAssignAllowIn (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:10800:17)
+      at TypeScriptParserMixin.parseVar (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:13384:91)
+      at TypeScriptParserMixin.parseVarStatement (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:13230:10)
+      at TypeScriptParserMixin.parseVarStatement (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:9408:31)
+      at TypeScriptParserMixin.parseStatementContent (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12851:23)
+      at TypeScriptParserMixin.parseStatementContent (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:9508:18)
+      at TypeScriptParserMixin.parseStatementLike (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12767:17)
+      at TypeScriptParserMixin.parseModuleItem (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:12744:17)
+      at TypeScriptParserMixin.parseBlockOrModuleBlockBody (C:\Users\ecomm\Documents\GitHub\telemarketing-irm-os-dreon--1-\node_modules\@babel\parser\lib\index.js:13316:36)

@@ -96,6 +96,11 @@ export interface TaskInstance {
   carryoverFrom?: string | null;
   completionNote?: string | null;
   metadata?: Record<string, any> | null;
+  listId?: string | null;
+  listName?: string | null;
+  reminderAt?: string | null;
+  isImportant?: boolean;
+  inMyDay?: boolean;
   recurrenceKey?: string | null;
   createdAt: string;
   updatedAt: string;
