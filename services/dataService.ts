@@ -2293,7 +2293,26 @@ const createUserNotifications = async (notifications: Array<Partial<UserNotifica
       related_entity_type: notification.relatedEntityType || null,
       related_entity_id: notification.relatedEntityId || null,
       is_read: notification.isRead ?? false
-    }));
+    }))
+    .filter((notification, index, currentPayload) => {
+      const notificationKey = [
+        notification.user_id,
+        notification.type,
+        notification.related_entity_type,
+        notification.related_entity_id,
+        notification.title,
+        notification.body
+      ].join('::');
+
+      return currentPayload.findIndex(candidate => [
+        candidate.user_id,
+        candidate.type,
+        candidate.related_entity_type,
+        candidate.related_entity_id,
+        candidate.title,
+        candidate.body
+      ].join('::') === notificationKey) === index;
+    });
 
   if (payload.length === 0) return;
 
@@ -6120,11 +6139,13 @@ export const dataService = {
       note: 'Tarefa interna criada.'
     })));
 
-    const managerIds = await getActiveManagerIds();
     const notifications: Array<Partial<UserNotification>> = [];
+    const creatorId = params.assignedBy;
+    const createdForOtherUsers = createdTasks.some(task => task.assignedTo && task.assignedTo !== creatorId);
+    const createdForMultipleRecipients = new Set(createdTasks.map(task => task.assignedTo).filter(Boolean)).size > 1;
 
     createdTasks.forEach(task => {
-      if (task.assignedTo) {
+      if (task.assignedTo && task.assignedTo !== creatorId) {
         notifications.push({
           userId: task.assignedTo,
           type: 'TASK_ASSIGNED',
@@ -6134,20 +6155,18 @@ export const dataService = {
           relatedEntityId: task.id
         });
       }
-
-      managerIds
-        .filter(managerId => managerId !== task.assignedTo)
-        .forEach(managerId => {
-          notifications.push({
-            userId: managerId,
-            type: 'TASK_CREATED',
-            title: 'Nova demanda interna criada',
-            body: task.title,
-            relatedEntityType: 'task_instance',
-            relatedEntityId: task.id
-          });
-        });
     });
+
+    if (creatorId && (createdForOtherUsers || createdForMultipleRecipients)) {
+      notifications.push({
+        userId: creatorId,
+        type: 'TASK_CREATED',
+        title: 'Tarefa criada e enviada',
+        body: params.title,
+        relatedEntityType: 'task_instance',
+        relatedEntityId: createdTasks[0]?.id
+      });
+    }
 
     await createUserNotifications(notifications);
 

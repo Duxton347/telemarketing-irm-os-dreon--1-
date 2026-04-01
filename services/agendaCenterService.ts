@@ -118,7 +118,10 @@ const canSeeInternalTask = (task: TaskInstance, user: User) => {
 
 const buildInternalTaskItem = (task: TaskInstance, user: User): AgendaCentralItem => {
   const taskScope = (task.metadata?.taskScope || task.template?.taskScope || (task.visibilityScope === 'PRIVATE' ? 'PESSOAL' : 'SETOR')) as 'PESSOAL' | 'SETOR';
-  const sourceType = taskScope === 'PESSOAL' ? 'TAREFA_PESSOAL' : 'DEMANDA_SETOR';
+  const assignedByAnotherUser = Boolean(task.assignedTo && task.assignedBy && task.assignedBy !== task.assignedTo);
+  const sourceType = assignedByAnotherUser
+    ? 'DEMANDA_SETOR'
+    : (taskScope === 'PESSOAL' ? 'TAREFA_PESSOAL' : 'DEMANDA_SETOR');
   const overdue = isOverdue(task.dueAt, task.status);
   const mine = task.assignedTo === user.id;
   const isAwaitingApproval = task.status === 'AGUARDANDO';
@@ -334,7 +337,10 @@ export const agendaCenterService = {
       dataService.getSchedules(),
       dataService.getProtocols(),
       dataService.getVisits(),
-      dataService.getTaskInstances({ includeArchived: false }),
+      dataService.getTaskInstances({
+        includeArchived: false,
+        assignedTo: isManager(user) ? undefined : user.id
+      }),
       dataService.getUsers(),
       dataService.getClients(true),
       dataService.getOperationalQueueEntries()
