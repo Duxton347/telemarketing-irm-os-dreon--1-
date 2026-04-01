@@ -97,6 +97,7 @@ export const CampaignPlanner: React.FC = () => {
   // Data state
   const [clients, setClients] = useState<ClientWithLastCall[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [resultSearch, setResultSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [dispatching, setDispatching] = useState(false);
   const [dispatchPreview, setDispatchPreview] = useState<CampaignDispatchPreview | null>(null);
@@ -285,6 +286,7 @@ export const CampaignPlanner: React.FC = () => {
       const res = await CampaignPlannerService.fetchClientsByFilters(searchFilters);
       setClients(res);
       setSelectedIds(new Set()); // reset selection on new search
+      setResultSearch('');
     } catch (err) {
       console.error(err);
       alert('Erro ao buscar clientes');
@@ -293,12 +295,54 @@ export const CampaignPlanner: React.FC = () => {
     }
   };
 
+  const filteredClients = React.useMemo(() => {
+    const normalizedSearch = resultSearch.trim().toLowerCase();
+    if (!normalizedSearch) return clients;
+
+    return clients.filter(client => {
+      const searchableText = [
+        client.name,
+        client.phone,
+        client.city,
+        client.neighborhood,
+        client.email,
+        client.origin_detail,
+        client.interest_product,
+        ...(client.customer_profiles || []),
+        ...(client.product_categories || []),
+        ...(client.tags || []),
+        ...(client.equipment_models || [])
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+      return searchableText.includes(normalizedSearch);
+    });
+  }, [clients, resultSearch]);
+
+  const filteredClientIds = React.useMemo(
+    () => filteredClients.map(client => client.id),
+    [filteredClients]
+  );
+
+  const filteredSelectedCount = React.useMemo(
+    () => filteredClientIds.filter(id => selectedIds.has(id)).length,
+    [filteredClientIds, selectedIds]
+  );
+
+  const allFilteredSelected = filteredClients.length > 0 && filteredSelectedCount === filteredClients.length;
+
   const handleToggleSelectAll = () => {
-    if (selectedIds.size === clients.length) {
-      setSelectedIds(new Set());
+    const nextSet = new Set(selectedIds);
+
+    if (allFilteredSelected) {
+      filteredClientIds.forEach(id => nextSet.delete(id));
     } else {
-      setSelectedIds(new Set(clients.map(c => c.id)));
+      filteredClientIds.forEach(id => nextSet.add(id));
     }
+
+    setSelectedIds(nextSet);
   };
 
   const handleToggleSelect = (id: string) => {
@@ -324,7 +368,8 @@ export const CampaignPlanner: React.FC = () => {
     setDispatchPreviewLoading(true);
     CampaignPlannerService.previewDispatchCampaign({
       canal: campCanal,
-      clientIds: Array.from(selectedIds)
+      clientIds: Array.from(selectedIds),
+      operatorId: campOperador.trim() || null
     })
       .then(preview => {
         if (!cancelled) {
@@ -346,7 +391,7 @@ export const CampaignPlanner: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [campCanal, selectedIds]);
+  }, [campCanal, campOperador, selectedIds]);
 
   const handleDispatch = async () => {
     const normalizedOperatorId = campOperador.trim();
@@ -1025,6 +1070,20 @@ export const CampaignPlanner: React.FC = () => {
                   Público Alvo Encontrado ({clients.length})
                 </h3>
                 <div className="flex items-center gap-4">
+                  <div className="relative w-[320px] max-w-full">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      value={resultSearch}
+                      onChange={event => setResultSearch(event.target.value)}
+                      placeholder="Pesquisar cliente, telefone, bairro, cidade..."
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-4 text-sm font-semibold text-slate-700 outline-none transition-colors focus:border-blue-400 focus:bg-white"
+                    />
+                  </div>
+                  {resultSearch.trim() && (
+                    <div className="text-xs font-black text-slate-500 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200 uppercase tracking-widest">
+                      {filteredClients.length} filtrados
+                    </div>
+                  )}
                   <div className="text-xs font-black text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 uppercase tracking-widest">
                     {selectedIds.size} Selecionados
                   </div>
@@ -1039,7 +1098,7 @@ export const CampaignPlanner: React.FC = () => {
                         <input 
                           type="checkbox" 
                           className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4"
-                          checked={selectedIds.size === clients.length && clients.length > 0}
+                          checked={allFilteredSelected}
                           onChange={handleToggleSelectAll}
                         />
                       </th>
@@ -1050,7 +1109,7 @@ export const CampaignPlanner: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {clients.map(c => {
+                    {filteredClients.map(c => {
                       const satisfactionMeta = getSatisfactionMeta(c);
 
                       return (
@@ -1136,6 +1195,19 @@ export const CampaignPlanner: React.FC = () => {
                         </td>
                       </tr>
                     )})}
+                    {filteredClients.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-6 py-10 text-center">
+                          <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 py-8">
+                            <Search size={22} className="text-slate-300" />
+                            <p className="mt-3 text-sm font-black text-slate-700">Nenhum cliente encontrado nessa pesquisa</p>
+                            <p className="mt-1 text-xs font-semibold text-slate-400">
+                              Ajuste o nome, telefone, cidade, bairro ou limpe a busca para voltar aos {clients.length} resultados.
+                            </p>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>

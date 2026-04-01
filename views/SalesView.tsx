@@ -15,6 +15,7 @@ type SaleFormState = {
     clientName: string;
     clientId: string;
     address: string;
+    externalSalesperson: string;
     category: SaleCategory;
     channel: SaleChannel;
     value: number | string;
@@ -51,6 +52,7 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
         clientName: '',
         clientId: '', // New field
         address: '',
+        externalSalesperson: '',
         category: SaleCategory.QUIMICOS,
         channel: SaleChannel.WHATSAPP,
         value: ''
@@ -128,6 +130,7 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
             const saleData = {
                 ...newSale,
                 clientId: finalClientId,
+                externalSalesperson: newSale.externalSalesperson.trim(),
                 value: isNaN(saleValue) ? 0 : saleValue,
                 operatorId: editingSaleId ? undefined : user.id // Maintain original operator on edit
             };
@@ -147,6 +150,7 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
                 clientName: '',
                 clientId: '',
                 address: '',
+                externalSalesperson: '',
                 category: SaleCategory.QUIMICOS,
                 channel: SaleChannel.WHATSAPP,
                 value: ''
@@ -166,6 +170,7 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
             clientName: sale.clientName,
             clientId: sale.clientId || '',
             address: sale.address,
+            externalSalesperson: sale.externalSalesperson || '',
             category: sale.category,
             channel: sale.channel,
             value: String(sale.value)
@@ -274,10 +279,10 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
     };
 
     const getSaleResponsibleLabel = (sale: Sale) => {
+        if (sale.externalSalesperson?.trim()) return sale.externalSalesperson.trim();
         const operator = operators.find(o => o.id === sale.operatorId);
         if (operator?.username) return `@${operator.username}`;
         if (operator?.name) return operator.name;
-        if (sale.externalSalesperson) return sale.externalSalesperson;
         return 'Venda Externa';
     };
 
@@ -313,6 +318,7 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
                             clientName: '',
                             clientId: '',
                             address: '',
+                            externalSalesperson: '',
                             category: SaleCategory.QUIMICOS,
                             channel: SaleChannel.WHATSAPP,
                             value: ''
@@ -623,6 +629,17 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
                                             {Object.values(SaleChannel).map(c => <option key={c} value={c}>{c}</option>)}
                                         </select>
                                     </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Vendedor Responsável</label>
+                                    <input
+                                        type="text"
+                                        value={newSale.externalSalesperson}
+                                        onChange={e => setNewSale({ ...newSale, externalSalesperson: e.target.value })}
+                                        className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-bold outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
+                                        placeholder="Ex: Stefani, Jessica, Vendedor Externo..."
+                                    />
                                 </div>
 
                                 <div className="space-y-2 relative">

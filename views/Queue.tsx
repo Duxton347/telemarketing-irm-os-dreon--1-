@@ -15,6 +15,7 @@ import { HELP_TEXTS } from '../utils/helpTexts';
 import { buildQuestionnaireTextSummary, enrichQuestionnaireResponses } from '../utils/questionnaireInsights';
 import { buildScheduledForValue } from '../utils/scheduleDateTime';
 import { getTaskAssignableUsers } from '../utils/taskAssignment';
+import { supabase } from '../lib/supabase';
 import {
   buildPortfolioCategoryGroups,
   collectPortfolioMetadata,
@@ -170,6 +171,8 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
 
   // State for upcoming tasks
   const [upcomingTasks, setUpcomingTasks] = React.useState<Task[]>([]);
+  const [queueRefreshPending, setQueueRefreshPending] = React.useState(false);
+  const realtimeRefreshTimeoutRef = React.useRef<number | null>(null);
 
   const fetchQueue = React.useCallback(async () => {
     setIsLoading(true);
@@ -281,6 +284,66 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   }, [effectiveOperatorId, resetState]);
 
   React.useEffect(() => { fetchQueue(); }, [fetchQueue]);
+
+  const scheduleRealtimeQueueRefresh = React.useCallback(() => {
+    if (realtimeRefreshTimeoutRef.current) {
+      window.clearTimeout(realtimeRefreshTimeoutRef.current);
+    }
+
+    realtimeRefreshTimeoutRef.current = window.setTimeout(() => {
+      if (isCalling || isFillingReport || isProcessing) {
+        setQueueRefreshPending(true);
+        return;
+      }
+
+      fetchQueue();
+    }, 250);
+  }, [fetchQueue, isCalling, isFillingReport, isProcessing]);
+
+  React.useEffect(() => {
+    if (!queueRefreshPending || isCalling || isFillingReport || isProcessing) return;
+
+    setQueueRefreshPending(false);
+    fetchQueue();
+  }, [fetchQueue, isCalling, isFillingReport, isProcessing, queueRefreshPending]);
+
+  React.useEffect(() => {
+    const affectsOperator = (payload: any, assigneeKey: 'assigned_to' | 'assigned_operator_id') => {
+      const newAssignee = String(payload?.new?.[assigneeKey] || '').trim();
+      const oldAssignee = String(payload?.old?.[assigneeKey] || '').trim();
+      return newAssignee === effectiveOperatorId || oldAssignee === effectiveOperatorId;
+    };
+
+    const queueChannel = supabase
+      .channel(`queue-refresh:${effectiveOperatorId}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'tasks'
+      }, payload => {
+        if (affectsOperator(payload, 'assigned_to')) {
+          scheduleRealtimeQueueRefresh();
+        }
+      })
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'call_schedules'
+      }, payload => {
+        if (affectsOperator(payload, 'assigned_operator_id')) {
+          scheduleRealtimeQueueRefresh();
+        }
+      })
+      .subscribe();
+
+    return () => {
+      if (realtimeRefreshTimeoutRef.current) {
+        window.clearTimeout(realtimeRefreshTimeoutRef.current);
+        realtimeRefreshTimeoutRef.current = null;
+      }
+      supabase.removeChannel(queueChannel);
+    };
+  }, [effectiveOperatorId, scheduleRealtimeQueueRefresh]);
 
   React.useEffect(() => {
     let interval: any;

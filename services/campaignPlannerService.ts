@@ -387,12 +387,32 @@ const collectIdSet = async (
   return collected;
 };
 
+const collectAssignmentMap = async (
+  ids: string[],
+  loader: (chunk: string[]) => Promise<Array<{ clientId?: string | null; assignedTo?: string | null }>>
+) => {
+  const collected = new Map<string, Set<string>>();
+  for (const chunk of chunkValues(ids)) {
+    const values = await loader(chunk);
+    values.forEach(value => {
+      const clientId = String(value.clientId || '').trim();
+      if (!clientId) return;
+
+      const bucket = collected.get(clientId) || new Set<string>();
+      bucket.add(String(value.assignedTo || '').trim());
+      collected.set(clientId, bucket);
+    });
+  }
+  return collected;
+};
+
 const analyzeDispatchTargets = async (
-  dispatch: Pick<CampaignDispatch, 'canal' | 'clientIds'>
+  dispatch: Pick<CampaignDispatch, 'canal' | 'clientIds' | 'operatorId'>
 ) => {
   const uniqueClientIds = Array.from(new Set((dispatch.clientIds || []).filter(Boolean)));
   const wantsVoice = dispatch.canal === 'voz' || dispatch.canal === 'ambos';
   const wantsWhatsApp = dispatch.canal === 'whatsapp' || dispatch.canal === 'ambos';
+  const targetOperatorId = normalizeUuidReference(dispatch.operatorId);
 
   if (uniqueClientIds.length === 0) {
     return {
@@ -421,7 +441,7 @@ const analyzeDispatchTargets = async (
     await dataService.cleanupDuplicateWhatsAppQueueEntries();
   }
 
-  const [recentCallClients, recentWhatsAppClients, pendingVoiceClients, scheduledVoiceClients, pendingWhatsAppClients] = await Promise.all([
+  const [recentCallClients, recentWhatsAppClients, pendingVoiceAssignments, scheduledVoiceClients, pendingWhatsAppAssignments] = await Promise.all([
     collectIdSet(uniqueClientIds, async chunk => {
       const { data, error } = await supabase
         .from('call_logs')
@@ -442,16 +462,19 @@ const analyzeDispatchTargets = async (
       return (data || []).map((row: any) => row.client_id).filter(Boolean);
     }),
     wantsVoice
-      ? collectIdSet(uniqueClientIds, async chunk => {
+      ? collectAssignmentMap(uniqueClientIds, async chunk => {
           const { data, error } = await supabase
             .from('tasks')
-            .select('client_id')
+            .select('client_id, assigned_to')
             .in('client_id', chunk)
             .eq('status', 'pending');
           if (error) throw error;
-          return (data || []).map((row: any) => row.client_id).filter(Boolean);
+          return (data || []).map((row: any) => ({
+            clientId: row.client_id,
+            assignedTo: row.assigned_to
+          }));
         })
-      : Promise.resolve(new Set<string>()),
+      : Promise.resolve(new Map<string, Set<string>>()),
     wantsVoice
       ? collectIdSet(uniqueClientIds, async chunk => {
           const { data, error } = await supabase
@@ -464,16 +487,19 @@ const analyzeDispatchTargets = async (
         })
       : Promise.resolve(new Set<string>()),
     wantsWhatsApp
-      ? collectIdSet(uniqueClientIds, async chunk => {
+      ? collectAssignmentMap(uniqueClientIds, async chunk => {
           const { data, error } = await supabase
             .from('whatsapp_tasks')
-            .select('client_id')
+            .select('client_id, assigned_to')
             .in('client_id', chunk)
             .in('status', ['pending', 'started']);
           if (error) throw error;
-          return (data || []).map((row: any) => row.client_id).filter(Boolean);
+          return (data || []).map((row: any) => ({
+            clientId: row.client_id,
+            assignedTo: row.assigned_to
+          }));
         })
-      : Promise.resolve(new Set<string>())
+      : Promise.resolve(new Map<string, Set<string>>())
   ]);
 
   const creatableVoiceClientIds = new Set<string>();
@@ -486,14 +512,26 @@ const analyzeDispatchTargets = async (
   uniqueClientIds.forEach(clientId => {
     let canCreateAnything = false;
     const hasRecentCall = recentCallClients.has(clientId) || recentWhatsAppClients.has(clientId);
-    const hasPendingVoiceQueue = pendingVoiceClients.has(clientId) || scheduledVoiceClients.has(clientId);
-    const hasPendingWhatsAppQueue = pendingWhatsAppClients.has(clientId);
+    const voiceAssignments = pendingVoiceAssignments.get(clientId) || new Set<string>();
+    const whatsappAssignments = pendingWhatsAppAssignments.get(clientId) || new Set<string>();
+    const hasScheduledVoiceQueue = scheduledVoiceClients.has(clientId);
+    const hasPendingVoiceForTarget = targetOperatorId ? voiceAssignments.has(targetOperatorId) : voiceAssignments.size > 0;
+    const hasPendingVoiceForOtherOperator = targetOperatorId
+      ? Array.from(voiceAssignments).some(assignedTo => assignedTo !== targetOperatorId)
+      : false;
+    const hasPendingWhatsAppForTarget = targetOperatorId ? whatsappAssignments.has(targetOperatorId) : whatsappAssignments.size > 0;
+    const hasPendingWhatsAppForOtherOperator = targetOperatorId
+      ? Array.from(whatsappAssignments).some(assignedTo => assignedTo !== targetOperatorId)
+      : false;
 
     if (wantsVoice) {
       if (hasRecentCall) {
         blockedRecentCall.add(clientId);
-      } else if (hasPendingVoiceQueue) {
+      } else if (hasScheduledVoiceQueue || hasPendingVoiceForTarget) {
         blockedExistingVoiceQueue.add(clientId);
+      } else if (hasPendingVoiceForOtherOperator) {
+        creatableVoiceClientIds.add(clientId);
+        canCreateAnything = true;
       } else {
         creatableVoiceClientIds.add(clientId);
         canCreateAnything = true;
@@ -503,8 +541,11 @@ const analyzeDispatchTargets = async (
     if (wantsWhatsApp) {
       if (hasRecentCall) {
         blockedRecentCall.add(clientId);
-      } else if (hasPendingWhatsAppQueue) {
+      } else if (hasPendingWhatsAppForTarget) {
         blockedExistingWhatsAppQueue.add(clientId);
+      } else if (hasPendingWhatsAppForOtherOperator) {
+        creatableWhatsAppClientIds.add(clientId);
+        canCreateAnything = true;
       } else {
         creatableWhatsAppClientIds.add(clientId);
         canCreateAnything = true;
@@ -944,7 +985,7 @@ export const CampaignPlannerService = {
   },
 
   previewDispatchCampaign: async (
-    dispatch: Pick<CampaignDispatch, 'canal' | 'clientIds'>
+    dispatch: Pick<CampaignDispatch, 'canal' | 'clientIds' | 'operatorId'>
   ): Promise<CampaignDispatchPreview> => {
     const analysis = await analyzeDispatchTargets(dispatch);
     return analysis.preview;
@@ -1026,8 +1067,8 @@ export const CampaignPlannerService = {
                 proposito: dispatch.proposito,
                 status: 'pending',
                 campanha_id: campanha.id
-              });
-              if (taskResult.created) {
+              }, { reassignExistingTask: true });
+              if (taskResult.created || taskResult.reassigned) {
                 result.tasks_criadas++;
                 result.ligacoes_criadas++;
               }
@@ -1042,8 +1083,8 @@ export const CampaignPlannerService = {
                 source: 'manual',
                 sourceId: campanha.id,
                 proposito: dispatch.proposito
-              });
-              if (waResult.created) {
+              }, { reassignExistingTask: true });
+              if (waResult.created || waResult.reassigned) {
                 result.tasks_criadas++;
                 result.whatsapp_criados++;
               }

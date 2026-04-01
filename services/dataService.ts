@@ -2862,6 +2862,7 @@ export const dataService = {
     if (updates.address) payload.address = updates.address;
     if (updates.operatorId) payload.operator_id = updates.operatorId;
     if (updates.clientId !== undefined) payload.customer_id = updates.clientId || null;
+    if (updates.externalSalesperson !== undefined) payload.external_salesperson = updates.externalSalesperson?.trim() || null;
     if (updates.deliveryDelayReason !== undefined) payload.delivery_delay_reason = updates.deliveryDelayReason;
     if (updates.deliveryNote !== undefined) payload.delivery_note = updates.deliveryNote;
 
@@ -3133,14 +3134,45 @@ export const dataService = {
 
   createTask: async (
     task: Partial<Task>,
-    options?: { skipRecentCommunicationCheck?: boolean }
-  ): Promise<{ created: boolean; existingTaskId?: string }> => {
+    options?: { skipRecentCommunicationCheck?: boolean; reassignExistingTask?: boolean }
+  ): Promise<{ created: boolean; existingTaskId?: string; reassigned?: boolean }> => {
     if (!task.clientId) throw new Error('Cliente obrigatorio para criar atendimento.');
 
     const dbType = mapTaskTypeToDb(task.type);
     const status = task.status || 'pending';
     const normalizedAssignedTo = normalizeUuidReference(task.assignedTo);
     const normalizedCampaignId = normalizeUuidReference(task.campanha_id);
+
+    const syncExistingTask = async (existingTask: any) => {
+      const shouldSyncAssignment = normalizedAssignedTo && (
+        (options?.reassignExistingTask && existingTask.assigned_to !== normalizedAssignedTo) ||
+        (!options?.reassignExistingTask && !existingTask.assigned_to)
+      );
+      const payload: Record<string, any> = {};
+
+      if (shouldSyncAssignment) {
+        payload.assigned_to = normalizedAssignedTo;
+      }
+
+      if (normalizedCampaignId && existingTask.campanha_id !== normalizedCampaignId) {
+        payload.campanha_id = normalizedCampaignId;
+      }
+
+      if (task.proposito && existingTask.proposito !== task.proposito) {
+        payload.proposito = task.proposito;
+      }
+
+      if (Object.keys(payload).length > 0) {
+        const { error: updateError } = await runUpdateWithUpdatedAtFallback(
+          'tasks',
+          { ...payload, updated_at: new Date().toISOString() },
+          async (safePayload) => await supabase.from('tasks').update(safePayload).eq('id', existingTask.id)
+        );
+        if (updateError) throw updateError;
+      }
+
+      return { created: false, existingTaskId: existingTask.id, reassigned: Boolean(shouldSyncAssignment) };
+    };
 
     if (status === 'pending') {
       await cleanupStaleVoiceQueueEntries({
@@ -3157,32 +3189,7 @@ export const dataService = {
 
       const existingTask = await findOpenVoiceTask(task.clientId, dbType);
       if (existingTask) {
-        if ((!existingTask.assigned_to && normalizedAssignedTo) || (!existingTask.campanha_id && normalizedCampaignId) || (!existingTask.proposito && task.proposito)) {
-          const payload: Record<string, any> = {};
-
-          if (!existingTask.assigned_to && normalizedAssignedTo) {
-            payload.assigned_to = normalizedAssignedTo;
-          }
-
-          if (!existingTask.campanha_id && normalizedCampaignId) {
-            payload.campanha_id = normalizedCampaignId;
-          }
-
-          if (!existingTask.proposito && task.proposito) {
-            payload.proposito = task.proposito;
-          }
-
-          if (Object.keys(payload).length > 0) {
-            const { error: updateError } = await runUpdateWithUpdatedAtFallback(
-              'tasks',
-              { ...payload, updated_at: new Date().toISOString() },
-              async (safePayload) => await supabase.from('tasks').update(safePayload).eq('id', existingTask.id)
-            );
-            if (updateError) throw updateError;
-          }
-        }
-
-        return { created: false, existingTaskId: existingTask.id };
+        return await syncExistingTask(existingTask);
       }
     }
 
@@ -3202,7 +3209,7 @@ export const dataService = {
       if (status === 'pending' && isUniqueViolationError(error)) {
         const existingAfterConflict = await findOpenVoiceTask(task.clientId, dbType);
         if (existingAfterConflict) {
-          return { created: false, existingTaskId: existingAfterConflict.id };
+          return await syncExistingTask(existingAfterConflict);
         }
       }
 
@@ -5470,12 +5477,38 @@ export const dataService = {
   // --- WHATSAPP MODULE ---
   createWhatsAppTask: async (
     task: Partial<WhatsAppTask>,
-    options?: { skipRecentCommunicationCheck?: boolean }
-  ): Promise<{ created: boolean; existingTaskId?: string }> => {
+    options?: { skipRecentCommunicationCheck?: boolean; reassignExistingTask?: boolean }
+  ): Promise<{ created: boolean; existingTaskId?: string; reassigned?: boolean }> => {
     if (!task.clientId) throw new Error('Cliente obrigatório para criar tarefa de WhatsApp.');
 
     const normalizedAssignedTo = normalizeUuidReference(task.assignedTo);
     const normalizedSourceId = normalizeUuidReference(task.sourceId);
+    const syncExistingTask = async (existingQueueEntry: any) => {
+      const shouldSyncAssignment = normalizedAssignedTo && (
+        (options?.reassignExistingTask && existingQueueEntry.assigned_to !== normalizedAssignedTo) ||
+        (!options?.reassignExistingTask && !existingQueueEntry.assigned_to)
+      );
+      const payload: Record<string, any> = {};
+
+      if (shouldSyncAssignment) {
+        payload.assigned_to = normalizedAssignedTo;
+      }
+
+      if (normalizedSourceId && existingQueueEntry.source_id !== normalizedSourceId) {
+        payload.source_id = normalizedSourceId;
+      }
+
+      if (Object.keys(payload).length > 0) {
+        const { error: updateError } = await supabase
+          .from('whatsapp_tasks')
+          .update(payload)
+          .eq('id', existingQueueEntry.id);
+
+        if (updateError) throw updateError;
+      }
+
+      return { created: false, existingTaskId: existingQueueEntry.id, reassigned: Boolean(shouldSyncAssignment) };
+    };
 
     await cleanupDuplicateWhatsAppQueueEntries({
       clientId: task.clientId,
@@ -5491,19 +5524,7 @@ export const dataService = {
 
     const existingQueueEntry = await findOpenWhatsAppTask(task.clientId, task.type);
     if (existingQueueEntry) {
-      if (!existingQueueEntry.assigned_to && normalizedAssignedTo) {
-        const { error: updateError } = await supabase
-          .from('whatsapp_tasks')
-          .update({
-            assigned_to: normalizedAssignedTo,
-            source_id: existingQueueEntry.source_id || normalizedSourceId || null
-          })
-          .eq('id', existingQueueEntry.id);
-
-        if (updateError) throw updateError;
-      }
-
-      return { created: false, existingTaskId: existingQueueEntry.id };
+      return await syncExistingTask(existingQueueEntry);
     }
 
     const { error } = await insertWhatsAppTaskRecord({
@@ -5517,7 +5538,7 @@ export const dataService = {
     if (error && isUniqueViolationError(error)) {
       const existingAfterConflict = await findOpenWhatsAppTask(task.clientId, task.type);
       if (existingAfterConflict) {
-        return { created: false, existingTaskId: existingAfterConflict.id };
+        return await syncExistingTask(existingAfterConflict);
       }
     }
     if (error) throw error;
