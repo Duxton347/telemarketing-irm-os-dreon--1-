@@ -85,6 +85,7 @@ const WEEKDAY_OPTIONS = [
 ] as const;
 
 const getCalendarSectionOrderStorageKey = (userId: string) => `dreon:calendar:section-order:${userId}`;
+const getCalendarCenterCollapsedStorageKey = (userId: string) => `dreon:calendar:center-collapsed:${userId}`;
 
 const readStoredSectionOrder = (userId: string) => {
   if (typeof window === 'undefined') return [] as string[];
@@ -110,6 +111,26 @@ const writeStoredSectionOrder = (userId: string, sectionKeys: string[]) => {
     );
   } catch {
     // Ignora falhas de persistencia local para nao interromper a Agenda.
+  }
+};
+
+const readStoredCenterCollapsed = (userId: string) => {
+  if (typeof window === 'undefined') return true;
+
+  try {
+    return window.localStorage.getItem(getCalendarCenterCollapsedStorageKey(userId)) !== 'false';
+  } catch {
+    return true;
+  }
+};
+
+const writeStoredCenterCollapsed = (userId: string, collapsed: boolean) => {
+  if (typeof window === 'undefined') return;
+
+  try {
+    window.localStorage.setItem(getCalendarCenterCollapsedStorageKey(userId), String(collapsed));
+  } catch {
+    // Ignora erro local de persistencia.
   }
 };
 
@@ -398,6 +419,7 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
   const [selectedDate, setSelectedDate] = React.useState(() => getTodayDateKey());
   const [lastRefreshAt, setLastRefreshAt] = React.useState<string | null>(null);
   const [sectionOrder, setSectionOrder] = React.useState<string[]>(() => readStoredSectionOrder(user.id));
+  const [isCenterPanelCollapsed, setIsCenterPanelCollapsed] = React.useState(() => readStoredCenterCollapsed(user.id));
   const [activeSectionKey, setActiveSectionKey] = React.useState<string>(
     isManager(user) ? 'demandas' : 'atribuidas'
   );
@@ -661,6 +683,10 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
   }, [user.id]);
 
   React.useEffect(() => {
+    setIsCenterPanelCollapsed(readStoredCenterCollapsed(user.id));
+  }, [user.id]);
+
+  React.useEffect(() => {
     const visibleSectionKeys = sections.map(section => section.key);
 
     setSectionOrder(currentOrder => {
@@ -794,6 +820,14 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
   const persistSectionOrder = React.useCallback((nextOrder: string[]) => {
     setSectionOrder(nextOrder);
     writeStoredSectionOrder(user.id, nextOrder);
+  }, [user.id]);
+
+  const toggleCenterPanel = React.useCallback(() => {
+    setIsCenterPanelCollapsed(current => {
+      const nextValue = !current;
+      writeStoredCenterCollapsed(user.id, nextValue);
+      return nextValue;
+    });
   }, [user.id]);
 
   const handleSectionDragStart = React.useCallback((event: React.DragEvent<HTMLDivElement>, sectionKey: string) => {
@@ -2210,9 +2244,9 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
             </div>
           )}
 
-          {!isManager(user) && quickTaskForm.listKey !== 'MINHAS' && (
+          {!isManager(user) && quickTaskForm.listKey === 'CUSTOM' && (
             <div className="rounded-2xl bg-white px-4 py-3 text-xs font-semibold text-slate-500">
-              Esse espaco recebe o que foi atribuido pelo gestor. Operadores criam tarefas rapidas apenas na lista pessoal.
+              Essa tarefa vai entrar apenas na sua lista personalizada.
             </div>
           )}
         </div>
@@ -2253,17 +2287,29 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
 
   return (
     <div className="pb-10">
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[330px_minmax(0,1fr)]">
-        <aside className="xl:sticky xl:top-6 xl:self-start">
+      <div className={`grid grid-cols-1 gap-6 ${isCenterPanelCollapsed ? '' : 'xl:grid-cols-[330px_minmax(0,1fr)]'}`}>
+        {!isCenterPanelCollapsed && (
+          <aside className="xl:sticky xl:top-6 xl:self-start">
           <div className="overflow-hidden rounded-[32px] border border-slate-100 bg-white shadow-sm">
             <div className="bg-slate-900 px-6 py-6 text-white">
-              <p className="text-[10px] font-black uppercase tracking-[0.28em] text-slate-400">Agenda</p>
-              <h1 className="mt-2 text-2xl font-black tracking-tight">Central do dia</h1>
-              <p className="mt-2 text-sm text-slate-300">
-                {isManager(user)
-                  ? 'Selecione a data e acompanhe tarefas, repiques e visitas no painel ao lado.'
-                  : 'Selecione a data e acompanhe tarefas e visitas no painel ao lado.'}
-              </p>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.28em] text-slate-400">Agenda</p>
+                  <h1 className="mt-2 text-2xl font-black tracking-tight">Central do dia</h1>
+                  <p className="mt-2 text-sm text-slate-300">
+                    {isManager(user)
+                      ? 'Selecione a data e acompanhe tarefas, repiques e visitas no painel ao lado.'
+                      : 'Selecione a data e acompanhe tarefas e visitas no painel ao lado.'}
+                  </p>
+                </div>
+                <button
+                  onClick={toggleCenterPanel}
+                  className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/10 px-3 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-white transition-colors hover:bg-white/15"
+                >
+                  <ChevronLeft size={14} />
+                  Ocultar
+                </button>
+              </div>
             </div>
 
             <div className="space-y-6 p-6">
@@ -2434,9 +2480,21 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
               </div>
             </div>
           </div>
-        </aside>
+          </aside>
+        )}
 
         <div className="min-w-0">
+          {isCenterPanelCollapsed && (
+            <div className="mb-4 flex justify-start">
+              <button
+                onClick={toggleCenterPanel}
+                className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[10px] font-black uppercase tracking-[0.18em] text-slate-600 transition-colors hover:bg-slate-50"
+              >
+                <ChevronRight size={14} />
+                Abrir central do dia
+              </button>
+            </div>
+          )}
           <div className="overflow-hidden rounded-[32px] border border-slate-100 bg-white shadow-sm">
             <div className="grid grid-cols-1 2xl:grid-cols-[290px_minmax(0,1fr)]">
               <aside className="border-b border-slate-100 bg-slate-50/80 p-5 2xl:border-b-0 2xl:border-r">
@@ -2574,7 +2632,7 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
                   )) : null}
                 </div>
 
-                {activeSection && isTaskSection(activeSection) && (isManager(user) || activeSection.key === 'minhas' || activeSection.taskListId) && (
+                {activeSection && isTaskSection(activeSection) && (
                   <div className="mt-5">
                     {renderQuickTaskComposer()}
                   </div>
@@ -2582,7 +2640,7 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
 
                 {activeSection && isTaskSection(activeSection) && !isManager(user) && activeSection.key !== 'minhas' && !activeSection.taskListId && (
                   <div className="mt-5 rounded-[28px] border border-slate-200 bg-slate-50 px-5 py-4 text-sm font-semibold text-slate-500">
-                    Essa lista mostra o que foi direcionado para voce. Para criar algo rapido seu, use a lista <span className="font-black text-slate-700">Minhas tarefas</span>.
+                    Essa lista mostra o que foi direcionado para voce. O atalho rapido acima continua disponivel, mas as tarefas criadas por operador entram apenas em <span className="font-black text-slate-700">Minhas tarefas</span> ou em uma lista personalizada sua.
                   </div>
                 )}
 
