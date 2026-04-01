@@ -74,6 +74,7 @@ const DEFAULT_TASK_FILTERS: TaskSectionFilterState = {
   responsibleId: 'ALL'
 };
 const DEFAULT_TASK_TIME = '09:00';
+const OPTIONAL_TASK_TIME_FALLBACK = '23:59';
 const WEEKDAY_OPTIONS = [
   { key: 'MON', label: 'Seg' },
   { key: 'TUE', label: 'Ter' },
@@ -234,6 +235,14 @@ const formatDateTime = (value?: string) => {
   }).format(new Date(value));
 };
 
+const formatDateOnly = (value?: string) => {
+  if (!value) return 'Sem prazo definido';
+  return new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: '2-digit'
+  }).format(new Date(value));
+};
+
 const formatOpenDuration = (value?: string) => {
   if (!value) return '-';
   const diff = Date.now() - new Date(value).getTime();
@@ -343,6 +352,11 @@ const getAgendaItemDateKey = (item: AgendaCentralItem) => {
   );
 };
 
+const hasExplicitInternalTaskTime = (item: AgendaCentralItem) => {
+  if (!isInternalTaskItem(item)) return true;
+  return item.metadata?.original?.metadata?.explicitTime !== false;
+};
+
 const formatSelectedDateLabel = (dateKey: string) => {
   if (!dateKey) return 'Sem data';
 
@@ -448,7 +462,7 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
     title: '',
     listKey: (isManager(user) ? 'ATRIBUIDAS' : 'MINHAS') as QuickTaskListKey,
     dueDate: getTodayDateKey(),
-    dueTime: DEFAULT_TASK_TIME,
+    dueTime: '',
     recurrenceType: 'NONE' as TaskRecurrenceType,
     weeklyDays: [getWeekdayCodeFromDateKey(getTodayDateKey())],
     assignedUserId: user.id,
@@ -1546,13 +1560,14 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
     const isRepickItem = item.sourceType === 'REPIQUE';
     const completedAt = isCompletedInternalTask(item) ? getInternalTaskCompletedAt(item) : undefined;
     const displayDate = completedAt || item.dueAt || item.startsAt;
+    const showTaskTime = hasExplicitInternalTaskTime(item);
     const displayDateLabel = completedAt
       ? 'Concluida em'
       : item.isOverdue
         ? 'Atrasado'
         : item.isDueToday
           ? 'Hoje'
-          : 'Horario';
+          : (isInternalTaskItem(item) && !showTaskTime ? 'Prazo' : 'Horario');
 
     if (isInternalTaskItem(item)) {
       const canComplete = item.status !== 'CONCLUIDO' && item.status !== 'CANCELADO' && item.actionContext?.canComplete;
@@ -1611,7 +1626,7 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
                   <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs font-semibold text-slate-500">
                     <span>Lista: <span className="font-black text-slate-700">{getTaskListLabelFromItem(item, taskLists)}</span></span>
                     <span>Prioridade: <span className="font-black text-slate-700">{getPriorityLabel(item.priority)}</span></span>
-                    <span>{displayDateLabel}: <span className="font-black text-slate-700">{formatDateTime(displayDate)}</span></span>
+                    <span>{displayDateLabel}: <span className="font-black text-slate-700">{showTaskTime ? formatDateTime(displayDate) : formatDateOnly(displayDate)}</span></span>
                     {item.responsibleName && (
                       <span>Responsavel: <span className="font-black text-slate-700">{item.responsibleName}</span></span>
                     )}
@@ -1858,7 +1873,7 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
           ? (targetSection?.taskListId ? 'CUSTOM' : 'MINHAS')
           : mapSectionToQuickTaskList(sectionKey),
         dueDate: selectedDate,
-        dueTime: DEFAULT_TASK_TIME,
+        dueTime: '',
         weeklyDays: [getWeekdayCodeFromDateKey(selectedDate)],
         taskListId: targetSection?.taskListId || ''
       }));
@@ -1893,8 +1908,9 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
     setProcessing(true);
     try {
       const selectedTaskList = taskLists.find(list => list.id === quickTaskForm.taskListId) || null;
+      const hasExplicitTime = Boolean(quickTaskForm.dueTime?.trim());
       const dueAt = quickTaskForm.dueDate
-        ? new Date(buildScheduledForValue(quickTaskForm.dueDate, quickTaskForm.dueTime || DEFAULT_TASK_TIME)).toISOString()
+        ? new Date(buildScheduledForValue(quickTaskForm.dueDate, hasExplicitTime ? quickTaskForm.dueTime : OPTIONAL_TASK_TIME_FALLBACK)).toISOString()
         : null;
 
       const listMeta = quickTaskForm.listKey === 'MINHAS'
@@ -1941,7 +1957,7 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
             day_of_month: quickTaskForm.recurrenceType === 'MONTHLY' ? Number(quickTaskForm.dueDate.slice(-2)) : undefined
           },
           defaultPriority: 'MEDIUM',
-          defaultDueTime: quickTaskForm.dueTime,
+          defaultDueTime: hasExplicitTime ? quickTaskForm.dueTime : OPTIONAL_TASK_TIME_FALLBACK,
           createdBy: user.id,
           isActive: true,
           assignMode: listMeta.assignMode,
@@ -1959,7 +1975,10 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
           taskScope: listMeta.taskScope,
           assignMode: listMeta.assignMode,
           assignConfig: listMeta.assignConfig,
-          assignedToIds: listMeta.assignedToIds
+          assignedToIds: listMeta.assignedToIds,
+          metadata: {
+            explicitTime: hasExplicitTime
+          }
         });
       }
 
@@ -1968,11 +1987,20 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
         entity: 'task_instance'
       });
       await loadData();
+      setActiveSectionKey(
+        quickTaskForm.listKey === 'CUSTOM'
+          ? `custom-list:${quickTaskForm.taskListId}`
+          : quickTaskForm.listKey === 'MINHAS'
+            ? 'minhas'
+            : quickTaskForm.listKey === 'ATRIBUIDAS'
+              ? 'atribuidas'
+              : 'demandas'
+      );
       setQuickTaskForm(current => ({
         ...current,
         title: '',
         dueDate: selectedDate,
-        dueTime: DEFAULT_TASK_TIME,
+        dueTime: '',
         recurrenceType: 'NONE',
         weeklyDays: [getWeekdayCodeFromDateKey(selectedDate)],
         assignedUserId: user.id,
@@ -2114,6 +2142,7 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
                 value={quickTaskForm.dueTime}
                 onChange={event => setQuickTaskForm(current => ({ ...current, dueTime: event.target.value }))}
                 className="w-full bg-transparent font-semibold text-slate-700 outline-none"
+                aria-label="Hora opcional"
               />
             </label>
 
@@ -2247,6 +2276,12 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
           {!isManager(user) && quickTaskForm.listKey === 'CUSTOM' && (
             <div className="rounded-2xl bg-white px-4 py-3 text-xs font-semibold text-slate-500">
               Essa tarefa vai entrar apenas na sua lista personalizada.
+            </div>
+          )}
+
+          {!quickTaskForm.dueTime && (
+            <div className="rounded-2xl bg-white px-4 py-3 text-xs font-semibold text-slate-500">
+              Sem hora definida, a tarefa fica programada para o dia inteiro e so entra em atraso no fim do dia.
             </div>
           )}
         </div>

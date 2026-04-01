@@ -6065,7 +6065,9 @@ export const dataService = {
     const visibilityScope = params.visibilityScope
       || (params.taskScope === 'PESSOAL'
         ? 'PRIVATE'
-        : (params.assignMode === 'TEAM' ? 'TEAM' : 'SECTOR'));
+        : (params.assignMode === 'SPECIFIC'
+          ? 'PRIVATE'
+          : (params.assignMode === 'TEAM' ? 'TEAM' : 'SECTOR')));
 
     const rows = (resolvedAssignedIds.length > 0 ? resolvedAssignedIds : [null]).map(assignedTo => ({
       template_id: params.templateId || null,

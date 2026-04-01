@@ -110,13 +110,15 @@ const cleanRepickReason = (...candidates: Array<string | null | undefined>) => {
 const canSeeInternalTask = (task: TaskInstance, user: User) => {
   if (isManager(user)) return true;
   if (task.assignedTo === user.id) return true;
+  if (task.assignedTo) return false;
   if (task.visibilityScope === 'TEAM' && user.teamId && task.assignedUser?.teamId === user.teamId) return true;
   if (task.visibilityScope === 'SECTOR' && user.sectorCode && task.assignedUser?.sectorCode === user.sectorCode) return true;
   return false;
 };
 
 const buildInternalTaskItem = (task: TaskInstance, user: User): AgendaCentralItem => {
-  const sourceType = task.visibilityScope === 'PRIVATE' ? 'TAREFA_PESSOAL' : 'DEMANDA_SETOR';
+  const taskScope = (task.metadata?.taskScope || task.template?.taskScope || (task.visibilityScope === 'PRIVATE' ? 'PESSOAL' : 'SETOR')) as 'PESSOAL' | 'SETOR';
+  const sourceType = taskScope === 'PESSOAL' ? 'TAREFA_PESSOAL' : 'DEMANDA_SETOR';
   const overdue = isOverdue(task.dueAt, task.status);
   const mine = task.assignedTo === user.id;
   const isAwaitingApproval = task.status === 'AGUARDANDO';
