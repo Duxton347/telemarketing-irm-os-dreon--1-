@@ -1,53 +1,113 @@
 import React, { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
 import { 
   CampaignPlannerService, 
   CampaignPlannerFilters, 
-  ClientWithLastCall 
+  CampaignDispatchPreview,
+  ClientWithLastCall,
+  PortfolioFilterOptions
 } from '../services/campaignPlannerService';
+import { PortfolioCatalogService } from '../services/portfolioCatalogService';
 import { CallType } from '../types';
 import { dataService } from '../services/dataService';
 import { Calendar, Filter, Users, Send, Search, Save, X, Settings2, MapPin, Phone, Tag as TagIcon, LayoutGrid, Clock, Mail } from 'lucide-react';
+import { PortfolioCatalogManager } from '../components/PortfolioCatalogManager';
 import { HelpTooltip } from '../components/HelpTooltip';
 import { HELP_TEXTS } from '../utils/helpTexts';
+import { normalizeComparableText } from '../utils/clientPortfolio';
+import { resolveKnownCity } from '../utils/addressParser';
+import { normalizeInterestProduct } from '../utils/interestCatalog';
+import {
+  PortfolioCatalogConfig,
+  getCatalogProductsByCategory
+} from '../utils/portfolioCatalog';
 
 export const CampaignPlanner: React.FC = () => {
+  const findMatchingListOption = React.useCallback((rawValue: string, options: string[], mode: 'city' | 'neighborhood') => {
+    const trimmed = rawValue.trim();
+    if (!trimmed) return undefined;
+
+    const normalizedTarget = mode === 'city'
+      ? normalizeComparableText(resolveKnownCity(trimmed) || trimmed)
+      : normalizeComparableText(trimmed);
+
+    return options.find(option => {
+      const normalizedOption = mode === 'city'
+        ? normalizeComparableText(resolveKnownCity(option) || option)
+        : normalizeComparableText(option);
+
+      return Boolean(normalizedOption) && normalizedOption === normalizedTarget;
+    });
+  }, []);
+
+  const findMatchingInterestOption = React.useCallback((rawValue: string, options: string[]) => {
+    const trimmed = rawValue.trim();
+    if (!trimmed) return undefined;
+
+    const normalizedTarget = normalizeComparableText(normalizeInterestProduct(trimmed) || trimmed);
+
+    return options.find(option =>
+      normalizeComparableText(normalizeInterestProduct(option) || option) === normalizedTarget
+    );
+  }, []);
+
   // Dynamic filter lists from DB
   const [citiesList, setCitiesList] = useState<string[]>([]);
   const [neighborhoodsList, setNeighborhoodsList] = useState<string[]>([]);
   const [itemsList, setItemsList] = useState<string[]>([]);
+  const [profilesList, setProfilesList] = useState<string[]>([]);
+  const [productCategoriesList, setProductCategoriesList] = useState<string[]>([]);
   const [callTypesList, setCallTypesList] = useState<string[]>([]);
   const [tagCategoriesList, setTagCategoriesList] = useState<string[]>([]);
   const [operadoresList, setOperadoresList] = useState<any[]>([]);
   const [interestProductsList, setInterestProductsList] = useState<string[]>([]);
+  const [searchCampaignsList, setSearchCampaignsList] = useState<string[]>([]);
+  const [catalogConfig, setCatalogConfig] = useState<PortfolioCatalogConfig | null>(null);
+  const [portfolioFilterOptions, setPortfolioFilterOptions] = useState<PortfolioFilterOptions>({
+    profiles: [],
+    categories: [],
+    equipments: [],
+    equipmentByCategory: {}
+  });
+  const [isCatalogManagerOpen, setIsCatalogManagerOpen] = useState(false);
 
   // Selected filters
   const [filters, setFilters] = useState<CampaignPlannerFilters>({
     periodos: [],
     diasAvulsos: [],
     callTypes: [],
+    withoutSelectedCallTypes: false,
     resultados: [],
     operadores: [],
+    niveisSatisfacao: [],
     statusCliente: ['CLIENT', 'INATIVO', 'LEAD'],
     tags: [],
     interesses: [],
+    perfisCliente: [],
+    categoriasProduto: [],
     equipamentos: [],
     bairros: [],
     cidades: [],
-    temEmail: undefined
+    campanhasBusca: [],
+    temEmail: undefined,
+    produtoAlvo: '',
+    ofertaAlvo: '',
+    escopoLinha: ''
   });
 
   // Data state
   const [clients, setClients] = useState<ClientWithLastCall[]>([]);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [resultSearch, setResultSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [dispatching, setDispatching] = useState(false);
+  const [dispatchPreview, setDispatchPreview] = useState<CampaignDispatchPreview | null>(null);
+  const [dispatchPreviewLoading, setDispatchPreviewLoading] = useState(false);
 
   // Dispatch state
   const [campNome, setCampNome] = useState('');
   const [campProposito, setCampProposito] = useState('');
   const [campCallType, setCampCallType] = useState<CallType>(CallType.PROSPECCAO);
-  const [campCanal, setCampCanal] = useState<'voz'|'whatsapp'|'ambos'>('ambos');
+  const [campCanal, setCampCanal] = useState<'voz'|'whatsapp'|'ambos'>('voz');
   const [campOperador, setCampOperador] = useState('');
 
   // UI state for date range picker
@@ -55,18 +115,44 @@ export const CampaignPlanner: React.FC = () => {
   const [dateTo, setDateTo] = useState('');
 
   // Initial Load options
-  useEffect(() => {
-    dataService.getUsers().then(users => {
-      const activeOperators = users.filter(u => u.active);
-      setOperadoresList(activeOperators.map(u => ({ id: u.id, username_display: u.name })));
-    });
+  const loadReferenceData = React.useCallback(async () => {
+    const [
+      users,
+      cities,
+      catalog,
+      portfolioOptions,
+      callTypes,
+      tagCategories,
+      interestProducts,
+      searchCampaigns
+    ] = await Promise.all([
+      dataService.getUsers(),
+      CampaignPlannerService.getDistinctCities(),
+      PortfolioCatalogService.getCatalogConfig(),
+      CampaignPlannerService.getPortfolioFilterOptions(),
+      CampaignPlannerService.getDistinctCallTypes(),
+      CampaignPlannerService.getDistinctTagCategories(),
+      CampaignPlannerService.getDistinctInterestProducts(),
+      CampaignPlannerService.getDistinctSearchCampaigns()
+    ]);
 
-    CampaignPlannerService.getDistinctCities().then(setCitiesList);
-    CampaignPlannerService.getDistinctItems().then(setItemsList);
-    CampaignPlannerService.getDistinctCallTypes().then(setCallTypesList);
-    CampaignPlannerService.getDistinctTagCategories().then(setTagCategoriesList);
-    CampaignPlannerService.getDistinctInterestProducts().then(setInterestProductsList);
+    const activeOperators = users.filter(u => u.active && u.id && String(u.id).trim().toLowerCase() !== 'undefined');
+    setOperadoresList(activeOperators.map(u => ({ id: u.id, username_display: u.name })));
+    setCitiesList(cities);
+    setCatalogConfig(catalog);
+    setPortfolioFilterOptions(portfolioOptions);
+    setItemsList(portfolioOptions.equipments);
+    setProductCategoriesList(portfolioOptions.categories);
+    setProfilesList(portfolioOptions.profiles);
+    setCallTypesList(callTypes);
+    setTagCategoriesList(tagCategories);
+    setInterestProductsList(interestProducts);
+    setSearchCampaignsList(searchCampaigns);
   }, []);
+
+  useEffect(() => {
+    loadReferenceData();
+  }, [loadReferenceData]);
 
   // Update neighborhoods when city filter changes
   useEffect(() => {
@@ -78,6 +164,110 @@ export const CampaignPlanner: React.FC = () => {
       CampaignPlannerService.getDistinctNeighborhoods().then(setNeighborhoodsList);
     }
   }, [filters.cidades]);
+
+  const filteredEquipmentOptions = React.useMemo(() => {
+    if (!filters.categoriasProduto?.length) {
+      return itemsList;
+    }
+
+    const fromPortfolio = filters.categoriasProduto.flatMap(category => {
+      const normalizedCategory = category
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim();
+
+      return portfolioFilterOptions.equipmentByCategory[normalizedCategory] || [];
+    });
+
+    const fromCatalog = catalogConfig
+      ? getCatalogProductsByCategory(catalogConfig, filters.categoriasProduto).map(product => product.name)
+      : [];
+
+    const merged = Array.from(new Set([...fromPortfolio, ...fromCatalog, ...itemsList]))
+      .filter(item => {
+        if (!filters.categoriasProduto?.length) return true;
+
+        const normalizedItem = item
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .trim();
+
+        return filters.categoriasProduto.some(category => {
+          const normalizedCategory = category
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .trim();
+
+          const fromMap = portfolioFilterOptions.equipmentByCategory[normalizedCategory] || [];
+          return fromMap.some(mapped => {
+            const normalizedMapped = mapped
+              .toLowerCase()
+              .normalize('NFD')
+              .replace(/[\u0300-\u036f]/g, '')
+              .trim();
+            return normalizedMapped === normalizedItem;
+          });
+        });
+      });
+
+    return merged.sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [catalogConfig, filters.categoriasProduto, itemsList, portfolioFilterOptions.equipmentByCategory]);
+
+  const campaignTargetOptions = React.useMemo(() =>
+    Array.from(new Set([...productCategoriesList, ...itemsList, ...interestProductsList]
+      .map(item => item?.trim())
+      .filter(Boolean) as string[]))
+      .sort((a, b) => a.localeCompare(b, 'pt-BR'))
+  , [interestProductsList, itemsList, productCategoriesList]);
+
+  const campaignOfferOptions = React.useMemo(() =>
+    Array.from(new Set([...productCategoriesList, ...interestProductsList]
+      .map(item => item?.trim())
+      .filter(Boolean) as string[]))
+      .sort((a, b) => a.localeCompare(b, 'pt-BR'))
+  , [interestProductsList, productCategoriesList]);
+
+  const isRelationshipSalesCampaign =
+    campCallType === CallType.VENDA &&
+    !String(filters.produtoAlvo || '').trim() &&
+    !String(filters.ofertaAlvo || '').trim();
+
+  const getSatisfactionMeta = (client: ClientWithLastCall) => {
+    const scoreLabel =
+      typeof client.ultima_satisfacao_score === 'number'
+        ? `${Math.round(client.ultima_satisfacao_score)}%`
+        : null;
+
+    switch (client.ultima_satisfacao_nivel) {
+      case 'ALTA':
+        return {
+          label: 'Satisfacao alta',
+          scoreLabel,
+          className: 'bg-emerald-50 text-emerald-700 border-emerald-200'
+        };
+      case 'MEDIA':
+        return {
+          label: 'Satisfacao media',
+          scoreLabel,
+          className: 'bg-amber-50 text-amber-700 border-amber-200'
+        };
+      case 'BAIXA':
+        return {
+          label: 'Satisfacao baixa',
+          scoreLabel,
+          className: 'bg-rose-50 text-rose-700 border-rose-200'
+        };
+      default:
+        return {
+          label: 'Sem leitura',
+          scoreLabel: null,
+          className: 'bg-slate-100 text-slate-600 border-slate-200'
+        };
+    }
+  };
 
   // Main search action
   const handleSearch = async () => {
@@ -96,6 +286,7 @@ export const CampaignPlanner: React.FC = () => {
       const res = await CampaignPlannerService.fetchClientsByFilters(searchFilters);
       setClients(res);
       setSelectedIds(new Set()); // reset selection on new search
+      setResultSearch('');
     } catch (err) {
       console.error(err);
       alert('Erro ao buscar clientes');
@@ -104,12 +295,54 @@ export const CampaignPlanner: React.FC = () => {
     }
   };
 
+  const filteredClients = React.useMemo(() => {
+    const normalizedSearch = resultSearch.trim().toLowerCase();
+    if (!normalizedSearch) return clients;
+
+    return clients.filter(client => {
+      const searchableText = [
+        client.name,
+        client.phone,
+        client.city,
+        client.neighborhood,
+        client.email,
+        client.origin_detail,
+        client.interest_product,
+        ...(client.customer_profiles || []),
+        ...(client.product_categories || []),
+        ...(client.tags || []),
+        ...(client.equipment_models || [])
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+      return searchableText.includes(normalizedSearch);
+    });
+  }, [clients, resultSearch]);
+
+  const filteredClientIds = React.useMemo(
+    () => filteredClients.map(client => client.id),
+    [filteredClients]
+  );
+
+  const filteredSelectedCount = React.useMemo(
+    () => filteredClientIds.filter(id => selectedIds.has(id)).length,
+    [filteredClientIds, selectedIds]
+  );
+
+  const allFilteredSelected = filteredClients.length > 0 && filteredSelectedCount === filteredClients.length;
+
   const handleToggleSelectAll = () => {
-    if (selectedIds.size === clients.length) {
-      setSelectedIds(new Set());
+    const nextSet = new Set(selectedIds);
+
+    if (allFilteredSelected) {
+      filteredClientIds.forEach(id => nextSet.delete(id));
     } else {
-      setSelectedIds(new Set(clients.map(c => c.id)));
+      filteredClientIds.forEach(id => nextSet.add(id));
     }
+
+    setSelectedIds(nextSet);
   };
 
   const handleToggleSelect = (id: string) => {
@@ -119,8 +352,50 @@ export const CampaignPlanner: React.FC = () => {
     setSelectedIds(newSet);
   };
 
+  const selectedClients = clients.filter(client => selectedIds.has(client.id));
+  const selectedLeadCount = selectedClients.filter(client => client.status === 'LEAD').length;
+  const estimatedQueueEntries = dispatchPreview?.queue_entries_expected ?? (selectedIds.size * (campCanal === 'ambos' ? 2 : 1));
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (selectedIds.size === 0) {
+      setDispatchPreview(null);
+      setDispatchPreviewLoading(false);
+      return;
+    }
+
+    setDispatchPreviewLoading(true);
+    CampaignPlannerService.previewDispatchCampaign({
+      canal: campCanal,
+      clientIds: Array.from(selectedIds),
+      operatorId: campOperador.trim() || null
+    })
+      .then(preview => {
+        if (!cancelled) {
+          setDispatchPreview(preview);
+        }
+      })
+      .catch(error => {
+        console.error(error);
+        if (!cancelled) {
+          setDispatchPreview(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setDispatchPreviewLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [campCanal, campOperador, selectedIds]);
+
   const handleDispatch = async () => {
-    if (!campNome || !campOperador) {
+    const normalizedOperatorId = campOperador.trim();
+    if (!campNome.trim() || !normalizedOperatorId || normalizedOperatorId.toLowerCase() === 'undefined') {
       alert("Preencha o nome da campanha e o operador destino.");
       return;
     }
@@ -128,20 +403,35 @@ export const CampaignPlanner: React.FC = () => {
       alert("Selecione pelo menos um cliente para criar a campanha.");
       return;
     }
+    if (dispatchPreview && dispatchPreview.queue_entries_expected === 0) {
+      alert("Nenhum cliente elegivel para entrar na fila com o canal escolhido.");
+      return;
+    }
 
     setDispatching(true);
     try {
       const result = await CampaignPlannerService.dispatchCampaign({
-        nomeCampanha: campNome,
-        proposito: campProposito,
+        nomeCampanha: campNome.trim(),
+        proposito: campProposito.trim(),
         callType: campCallType,
         canal: campCanal,
-        operatorId: campOperador || null, // Ensure empty string becomes null for database integrity
+        operatorId: normalizedOperatorId || null, // Ensure empty string becomes null for database integrity
         clientIds: Array.from(selectedIds),
         filters
       });
 
-      alert(`Disparo Concluído!\nTasks Criadas: ${result.tasks_criadas}\nIgnorados (contato recente): ${result.ignorados}\nErros de criação: ${result.erros.length}`);
+      alert(
+        `Disparo Concluído!\n` +
+        `Clientes selecionados: ${result.clients_selected}\n` +
+        `Itens de fila criados: ${result.tasks_criadas}\n` +
+        `- Ligações: ${result.ligacoes_criadas}\n` +
+        `- WhatsApp: ${result.whatsapp_criados}\n` +
+        `Bloqueados por contato recente: ${result.bloqueados_contato_recente}\n` +
+        `Bloqueados por fila de ligacao: ${result.bloqueados_fila_voz}\n` +
+        `Bloqueados por fila de WhatsApp: ${result.bloqueados_fila_whatsapp}\n` +
+        `Clientes sem abertura possivel: ${result.ignorados}\n` +
+        `Erros de criação: ${result.erros.length}`
+      );
       setCampNome('');
       setSelectedIds(new Set());
     } catch (err: any) {
@@ -178,6 +468,13 @@ export const CampaignPlanner: React.FC = () => {
             Segmente sua base com busca inteligente e envie cargas de trabalho
           </p>
         </div>
+        <button
+          type="button"
+          onClick={() => setIsCatalogManagerOpen(true)}
+          className="px-5 py-3 rounded-2xl border border-slate-200 bg-white text-slate-700 font-black uppercase tracking-widest text-[10px] flex items-center gap-2 shadow-sm hover:border-blue-300 hover:text-blue-700 transition-all"
+        >
+          <Settings2 size={16} /> Gerenciar catalogo tecnico
+        </button>
       </div>
 
       <div className="flex flex-col xl:flex-row gap-8">
@@ -190,11 +487,19 @@ export const CampaignPlanner: React.FC = () => {
             <h2 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2 mb-6">
               <Settings2 size={16} className="text-blue-600" /> Filtros de Segmentação
             </h2>
-            
-            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+            <div className="mb-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+              <p className="text-xs font-bold text-slate-500">
+                O catalogo tecnico reduz o excesso de opcoes. Ao escolher uma categoria, a lista de produtos fica mais enxuta.
+              </p>
+              <div className="inline-flex items-center gap-2 rounded-2xl bg-blue-50 px-4 py-3 text-[10px] font-black uppercase tracking-widest text-blue-700 border border-blue-100">
+                {filters.categoriasProduto?.length || 0} categoria(s) e {filters.equipamentos?.length || 0} produto(s) filtrados
+              </div>
+            </div>
+             
+            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-5">
               
               {/* BLOCK 1: Profile & Status */}
-              <div className="space-y-4">
+              <div className="rounded-[24px] border border-slate-200 bg-slate-50/80 p-5 space-y-4">
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
                     <Users size={12} /> Gênero de Cliente
@@ -235,10 +540,58 @@ export const CampaignPlanner: React.FC = () => {
                     >Ambos</button>
                   </div>
                 </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                    <Search size={12} /> Campanha de Busca
+                  </label>
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      list="search-campaigns-list"
+                      placeholder="Buscar nome da busca do Google..."
+                      className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-blue-500 focus:bg-white transition-all shadow-inner"
+                      onChange={(e) => {
+                        const matchedCampaign = findMatchingListOption(e.target.value, searchCampaignsList, 'neighborhood');
+                        if (matchedCampaign) {
+                          if (!filters.campanhasBusca?.includes(matchedCampaign)) {
+                            setFilters({ ...filters, campanhasBusca: [...(filters.campanhasBusca || []), matchedCampaign] });
+                          }
+                          e.target.value = '';
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const matchedCampaign = findMatchingListOption(e.currentTarget.value, searchCampaignsList, 'neighborhood');
+                          if (matchedCampaign && !filters.campanhasBusca?.includes(matchedCampaign)) {
+                            setFilters({ ...filters, campanhasBusca: [...(filters.campanhasBusca || []), matchedCampaign] });
+                            e.currentTarget.value = '';
+                          }
+                        }
+                      }}
+                    />
+                    <datalist id="search-campaigns-list">
+                      {searchCampaignsList.map(campaign => <option key={campaign} value={campaign} />)}
+                    </datalist>
+                  </div>
+                  {filters.campanhasBusca && filters.campanhasBusca.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {filters.campanhasBusca.map(campaign => (
+                        <span key={campaign} className="inline-flex items-center gap-1 bg-gradient-to-r from-blue-500 to-sky-500 text-white shadow-sm px-2.5 py-1 rounded-lg text-xs font-bold animate-in zoom-in duration-200">
+                          {campaign} <X size={12} className="cursor-pointer hover:text-blue-100 transition-colors" onClick={() => toggleFilterArray('campanhasBusca', campaign)} />
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <p className="text-[11px] font-bold text-slate-500">
+                    Usa o nome da busca/processo que gerou o lead aprovado no Google Maps.
+                  </p>
+                </div>
               </div>
 
               {/* BLOCK 2: Geography & Equipment */}
-              <div className="space-y-4">
+              <div className="rounded-[24px] border border-slate-200 bg-slate-50/80 p-5 space-y-4">
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
                     <LayoutGrid size={12} /> Produto de Interesse (Orçamentos / Leads)
@@ -250,18 +603,18 @@ export const CampaignPlanner: React.FC = () => {
                       placeholder="Buscar Produto de Interesse..."
                       className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-purple-500 focus:bg-white transition-all shadow-inner"
                       onChange={(e) => {
-                        const val = e.target.value.trim();
-                        if (interestProductsList.includes(val)) {
-                          if (!filters.interesses?.includes(val)) setFilters({ ...filters, interesses: [...(filters.interesses || []), val] });
+                        const matchedInterest = findMatchingInterestOption(e.target.value, interestProductsList);
+                        if (matchedInterest) {
+                          if (!filters.interesses?.includes(matchedInterest)) setFilters({ ...filters, interesses: [...(filters.interesses || []), matchedInterest] });
                           e.target.value = '';
                         }
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          const val = e.currentTarget.value.trim();
-                          if (val && !filters.interesses?.includes(val)) {
-                            setFilters({ ...filters, interesses: [...(filters.interesses || []), val] });
+                          const matchedInterest = findMatchingInterestOption(e.currentTarget.value, interestProductsList);
+                          if (matchedInterest && !filters.interesses?.includes(matchedInterest)) {
+                            setFilters({ ...filters, interesses: [...(filters.interesses || []), matchedInterest] });
                             e.currentTarget.value = '';
                           }
                         }
@@ -282,6 +635,99 @@ export const CampaignPlanner: React.FC = () => {
                   )}
                 </div>
 
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                    <Users size={12} /> Perfil do Cliente
+                  </label>
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      list="profiles-list"
+                      placeholder="Buscar Perfil..."
+                      className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-amber-500 focus:bg-white transition-all shadow-inner"
+                      onChange={(e) => {
+                        const val = e.target.value.trim();
+                        if (profilesList.includes(val)) {
+                          if (!filters.perfisCliente?.includes(val)) setFilters({ ...filters, perfisCliente: [...(filters.perfisCliente || []), val] });
+                          e.target.value = '';
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const val = e.currentTarget.value.trim();
+                          if (val && !filters.perfisCliente?.includes(val)) {
+                            setFilters({ ...filters, perfisCliente: [...(filters.perfisCliente || []), val] });
+                            e.currentTarget.value = '';
+                          }
+                        }
+                      }}
+                    />
+                    <datalist id="profiles-list">
+                      {profilesList.map((profile, profileIndex) => (
+                        <option key={`planner-profile-option-${profile}-${profileIndex}`} value={profile} />
+                      ))}
+                    </datalist>
+                  </div>
+                  {filters.perfisCliente && filters.perfisCliente.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {filters.perfisCliente.map((profile, profileIndex) => (
+                        <span key={`planner-profile-tag-${profile}-${profileIndex}`} className="inline-flex items-center gap-1 bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-sm px-2.5 py-1 rounded-lg text-xs font-bold animate-in zoom-in duration-200">
+                          {profile} <X size={12} className="cursor-pointer hover:text-amber-200 transition-colors" onClick={() => toggleFilterArray('perfisCliente', profile)} />
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                    <TagIcon size={12} /> Categoria do Produto
+                  </label>
+                  <p className="text-[11px] font-bold text-slate-500">
+                    Lista controlada pelo catalogo tecnico. Ajustes globais ficam em "Gerenciar catalogo tecnico".
+                  </p>
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      list="product-categories-list"
+                      placeholder="Buscar Categoria..."
+                      className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-cyan-500 focus:bg-white transition-all shadow-inner"
+                      onChange={(e) => {
+                        const val = e.target.value.trim();
+                        if (productCategoriesList.includes(val)) {
+                          if (!filters.categoriasProduto?.includes(val)) setFilters({ ...filters, categoriasProduto: [...(filters.categoriasProduto || []), val] });
+                          e.target.value = '';
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const val = e.currentTarget.value.trim();
+                          if (val && !filters.categoriasProduto?.includes(val)) {
+                            setFilters({ ...filters, categoriasProduto: [...(filters.categoriasProduto || []), val] });
+                            e.currentTarget.value = '';
+                          }
+                        }
+                      }}
+                    />
+                    <datalist id="product-categories-list">
+                      {productCategoriesList.map((category, categoryIndex) => (
+                        <option key={`planner-category-option-${category}-${categoryIndex}`} value={category} />
+                      ))}
+                    </datalist>
+                  </div>
+                  {filters.categoriasProduto && filters.categoriasProduto.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-2">
+                      {filters.categoriasProduto.map((category, categoryIndex) => (
+                        <span key={`planner-category-tag-${category}-${categoryIndex}`} className="inline-flex items-center gap-1 bg-gradient-to-r from-cyan-500 to-sky-500 text-white shadow-sm px-2.5 py-1 rounded-lg text-xs font-bold animate-in zoom-in duration-200">
+                          {category} <X size={12} className="cursor-pointer hover:text-cyan-200 transition-colors" onClick={() => toggleFilterArray('categoriasProduto', category)} />
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
                 <div className="space-y-2 relative">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
                     <MapPin size={12} /> Cidade / Região (Pesquisável)
@@ -293,18 +739,18 @@ export const CampaignPlanner: React.FC = () => {
                       placeholder="Buscar Cidade..."
                       className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-blue-500 focus:bg-white transition-all shadow-inner"
                       onChange={(e) => {
-                        const val = e.target.value.trim();
-                        if (citiesList.includes(val)) {
-                          if (!filters.cidades?.includes(val)) setFilters({ ...filters, cidades: [...(filters.cidades || []), val] });
+                        const matchedCity = findMatchingListOption(e.target.value, citiesList, 'city');
+                        if (matchedCity) {
+                          if (!filters.cidades?.includes(matchedCity)) setFilters({ ...filters, cidades: [...(filters.cidades || []), matchedCity] });
                           e.target.value = '';
                         }
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          const val = e.currentTarget.value.trim();
-                          if (val && !filters.cidades?.includes(val)) {
-                            setFilters({ ...filters, cidades: [...(filters.cidades || []), val] });
+                          const matchedCity = findMatchingListOption(e.currentTarget.value, citiesList, 'city');
+                          if (matchedCity && !filters.cidades?.includes(matchedCity)) {
+                            setFilters({ ...filters, cidades: [...(filters.cidades || []), matchedCity] });
                             e.currentTarget.value = '';
                           }
                         }
@@ -331,18 +777,18 @@ export const CampaignPlanner: React.FC = () => {
                       placeholder="Buscar Bairro..."
                       className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-blue-500 focus:bg-white transition-all shadow-inner"
                       onChange={(e) => {
-                        const val = e.target.value.trim();
-                        if (neighborhoodsList.includes(val)) {
-                          if (!filters.bairros?.includes(val)) setFilters({ ...filters, bairros: [...(filters.bairros || []), val] });
+                        const matchedNeighborhood = findMatchingListOption(e.target.value, neighborhoodsList, 'neighborhood');
+                        if (matchedNeighborhood) {
+                          if (!filters.bairros?.includes(matchedNeighborhood)) setFilters({ ...filters, bairros: [...(filters.bairros || []), matchedNeighborhood] });
                           e.target.value = '';
                         }
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           e.preventDefault();
-                          const val = e.currentTarget.value.trim();
-                          if (val && !filters.bairros?.includes(val)) {
-                            setFilters({ ...filters, bairros: [...(filters.bairros || []), val] });
+                          const matchedNeighborhood = findMatchingListOption(e.currentTarget.value, neighborhoodsList, 'neighborhood');
+                          if (matchedNeighborhood && !filters.bairros?.includes(matchedNeighborhood)) {
+                            setFilters({ ...filters, bairros: [...(filters.bairros || []), matchedNeighborhood] });
                             e.currentTarget.value = '';
                           }
                         }
@@ -375,7 +821,7 @@ export const CampaignPlanner: React.FC = () => {
                       className="w-full pl-9 text-sm font-semibold rounded-xl border-slate-200 bg-slate-50 focus:ring-teal-500 focus:bg-white transition-all shadow-inner"
                       onChange={(e) => {
                         const val = e.target.value.trim();
-                        if (itemsList.includes(val)) {
+                        if (filteredEquipmentOptions.includes(val)) {
                           if (!filters.equipamentos?.includes(val)) setFilters({ ...filters, equipamentos: [...(filters.equipamentos || []), val] });
                           e.target.value = '';
                         }
@@ -392,7 +838,7 @@ export const CampaignPlanner: React.FC = () => {
                       }}
                     />
                     <datalist id="items-list">
-                      {itemsList.map(i => <option key={i} value={i} />)}
+                      {filteredEquipmentOptions.map(i => <option key={i} value={i} />)}
                     </datalist>
                   </div>
                   {filters.equipamentos && filters.equipamentos.length > 0 && (
@@ -408,16 +854,16 @@ export const CampaignPlanner: React.FC = () => {
               </div>
 
               {/* BLOCK 3: History & Interactions */}
-              <div className="space-y-4">
+              <div className="rounded-[24px] border border-slate-200 bg-slate-50/80 p-5 space-y-4">
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
                     <Phone size={12} /> Filtros por tipo de Contato Prévio
                   </label>
                   <div className="flex flex-wrap gap-2">
                     {callTypesList.length === 0 ? <span className="text-xs text-slate-400">Nenhum histórico</span> : null}
-                    {callTypesList.map(ct => (
+                    {callTypesList.map((ct, callTypeIndex) => (
                       <button
-                        key={ct}
+                        key={`planner-call-type-${ct}-${callTypeIndex}`}
                         onClick={() => toggleFilterArray('callTypes', ct)}
                         className={`px-3 py-1.5 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-all duration-300 border shadow-sm ${
                           filters.callTypes?.includes(ct) 
@@ -429,11 +875,59 @@ export const CampaignPlanner: React.FC = () => {
                       </button>
                     ))}
                   </div>
+                  <div className="rounded-2xl border border-slate-200 bg-white/80 p-3">
+                    <button
+                      type="button"
+                      disabled={!filters.callTypes?.length}
+                      onClick={() => setFilters(prev => ({
+                        ...prev,
+                        withoutSelectedCallTypes: !prev.withoutSelectedCallTypes
+                      }))}
+                      className={`w-full px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                        !filters.callTypes?.length
+                          ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                          : filters.withoutSelectedCallTypes
+                            ? 'bg-rose-600 text-white shadow-lg shadow-rose-200'
+                            : 'bg-slate-900 text-white'
+                      }`}
+                    >
+                      {filters.withoutSelectedCallTypes ? 'Trazer sem esses contatos' : 'Trazer com esses contatos'}
+                    </button>
+                    <p className="text-[11px] font-bold text-slate-500 mt-2">
+                      Ative para localizar clientes que ainda nao receberam os tipos selecionados no periodo filtrado.
+                    </p>
+                  </div>
                 </div>
 
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
-                    <Clock size={12} /> Período do Último Contato
+                    <TagIcon size={12} /> Nivel de Satisfacao da Ultima Ligacao
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { key: 'ALTA', label: 'Alta', active: 'bg-emerald-500 text-white border-transparent shadow-emerald-500/30' },
+                      { key: 'MEDIA', label: 'Media', active: 'bg-amber-500 text-white border-transparent shadow-amber-500/30' },
+                      { key: 'BAIXA', label: 'Baixa', active: 'bg-rose-500 text-white border-transparent shadow-rose-500/30' },
+                      { key: 'SEM_LEITURA', label: 'Sem leitura', active: 'bg-slate-700 text-white border-transparent shadow-slate-500/20' }
+                    ].map(level => (
+                      <button
+                        key={level.key}
+                        onClick={() => toggleFilterArray('niveisSatisfacao', level.key)}
+                        className={`px-3 py-1.5 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-all duration-300 border shadow-sm ${
+                          filters.niveisSatisfacao?.includes(level.key)
+                            ? level.active
+                            : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                        }`}
+                      >
+                        {level.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                    <Clock size={12} /> Periodo do Ultimo Contato
                   </label>
                   <div className="grid grid-cols-2 gap-3">
                     <input 
@@ -451,25 +945,98 @@ export const CampaignPlanner: React.FC = () => {
                   </div>
                 </div>
 
+                <div className="hidden">
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                    <Clock size={12} /> Período do Último Contato
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { key: 'ALTA', label: 'Alta', active: 'bg-emerald-500 text-white border-transparent shadow-emerald-500/30' },
+                      { key: 'MEDIA', label: 'Média', active: 'bg-amber-500 text-white border-transparent shadow-amber-500/30' },
+                      { key: 'BAIXA', label: 'Baixa', active: 'bg-rose-500 text-white border-transparent shadow-rose-500/30' },
+                      { key: 'SEM_LEITURA', label: 'Sem leitura', active: 'bg-slate-700 text-white border-transparent shadow-slate-500/20' }
+                    ].map(level => (
+                      <button
+                        key={level.key}
+                        onClick={() => toggleFilterArray('niveisSatisfacao', level.key)}
+                        className={`px-3 py-1.5 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-all duration-300 border shadow-sm ${
+                          filters.niveisSatisfacao?.includes(level.key)
+                            ? level.active
+                            : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                        }`}
+                      >
+                        {level.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                    <TagIcon size={12} /> Nivel de Satisfacao da Ultima Ligacao
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <input 
+                      type="date" 
+                      value={dateFrom}
+                      onChange={e => setDateFrom(e.target.value)}
+                      className="w-full text-xs font-bold rounded-xl border-slate-200 bg-slate-50 focus:ring-blue-500 focus:bg-white transition-all shadow-inner" 
+                    />
+                    <input 
+                      type="date" 
+                      value={dateTo}
+                      onChange={e => setDateTo(e.target.value)}
+                      className="w-full text-xs font-bold rounded-xl border-slate-200 bg-slate-50 focus:ring-blue-500 focus:bg-white transition-all shadow-inner" 
+                    />
+                  </div>
+                </div>
+
+                </div>
+
                 <div className="space-y-2">
                   <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
                     <TagIcon size={12} /> Categorias / Tags de Resposta
                   </label>
-                  <div className="flex flex-wrap gap-2">
-                    {tagCategoriesList.length === 0 ? <span className="text-xs text-slate-400">Sem tags mapeadas</span> : null}
-                    {tagCategoriesList.map(cat => (
-                      <button
-                        key={cat}
-                        onClick={() => toggleFilterArray('tags', cat)}
-                        className={`px-3 py-1.5 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-all duration-300 border shadow-sm ${
-                          filters.tags?.includes(cat) 
-                            ? 'bg-gradient-to-r from-rose-500 to-pink-500 text-white border-transparent shadow-rose-500/30' 
-                            : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
-                        }`}
-                      >
-                        {cat}
-                      </button>
-                    ))}
+                  <div className="rounded-[20px] border border-slate-200 bg-white/80 p-3">
+                    <div className="max-h-56 overflow-y-auto pr-1 custom-scrollbar">
+                      <div className="flex flex-wrap gap-2 content-start">
+                        {tagCategoriesList.length === 0 ? <span className="text-xs text-slate-400">Sem tags mapeadas</span> : null}
+                        {tagCategoriesList.map(cat => (
+                          <button
+                            key={cat}
+                            onClick={() => toggleFilterArray('tags', cat)}
+                            className={`px-3 py-1.5 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-all duration-300 border shadow-sm ${
+                              filters.tags?.includes(cat) 
+                                ? 'bg-gradient-to-r from-rose-500 to-pink-500 text-white border-transparent shadow-rose-500/30' 
+                                : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                            }`}
+                          >
+                            {cat}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {filters.tags && filters.tags.length > 0 && (
+                      <div className="mt-3 border-t border-slate-100 pt-3">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">
+                          Tags Selecionadas ({filters.tags.length})
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          {filters.tags.map((tag, tagIndex) => (
+                            <span
+                              key={`planner-tag-${tag}-${tagIndex}`}
+                              className="inline-flex items-center gap-1 bg-gradient-to-r from-rose-500 to-pink-500 text-white shadow-sm px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase"
+                            >
+                              {tag}
+                              <X size={12} className="cursor-pointer hover:text-rose-100 transition-colors" onClick={() => toggleFilterArray('tags', tag)} />
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -503,6 +1070,20 @@ export const CampaignPlanner: React.FC = () => {
                   Público Alvo Encontrado ({clients.length})
                 </h3>
                 <div className="flex items-center gap-4">
+                  <div className="relative w-[320px] max-w-full">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      value={resultSearch}
+                      onChange={event => setResultSearch(event.target.value)}
+                      placeholder="Pesquisar cliente, telefone, bairro, cidade..."
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pl-9 pr-4 text-sm font-semibold text-slate-700 outline-none transition-colors focus:border-blue-400 focus:bg-white"
+                    />
+                  </div>
+                  {resultSearch.trim() && (
+                    <div className="text-xs font-black text-slate-500 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200 uppercase tracking-widest">
+                      {filteredClients.length} filtrados
+                    </div>
+                  )}
                   <div className="text-xs font-black text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 uppercase tracking-widest">
                     {selectedIds.size} Selecionados
                   </div>
@@ -517,18 +1098,21 @@ export const CampaignPlanner: React.FC = () => {
                         <input 
                           type="checkbox" 
                           className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4"
-                          checked={selectedIds.size === clients.length && clients.length > 0}
+                          checked={allFilteredSelected}
                           onChange={handleToggleSelectAll}
                         />
                       </th>
                       <th className="px-4 py-4">Status / Cliente</th>
                       <th className="px-4 py-4">Localização & Info</th>
-                      <th className="px-4 py-4 min-w-[150px]">Equipamentos & Tags</th>
+                      <th className="px-4 py-4 min-w-[180px]">Perfil, Categoria & Equipamentos</th>
                       <th className="px-4 py-4 text-right">Último Contato / Ação</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {clients.map(c => (
+                    {filteredClients.map(c => {
+                      const satisfactionMeta = getSatisfactionMeta(c);
+
+                      return (
                       <tr key={c.id} className="hover:bg-blue-50/50 transition-colors group cursor-pointer" onClick={(e) => {
                         // Avoid toggling if clicking directly on the checkbox or links
                         if ((e.target as HTMLElement).tagName !== 'INPUT' && (e.target as HTMLElement).tagName !== 'A') {
@@ -560,23 +1144,34 @@ export const CampaignPlanner: React.FC = () => {
                         <td className="px-4 py-4">
                           <div className="text-xs text-slate-700 font-semibold">{c.city || 'Cidade N/D'}</div>
                           <div className="text-xs text-slate-500">{c.neighborhood || 'Bairro N/D'}</div>
+                          {c.origin === 'GOOGLE_SEARCH' && c.origin_detail && (
+                            <div className="text-[10px] text-sky-600 mt-1 font-black uppercase tracking-wider">
+                              Busca: {c.origin_detail}
+                            </div>
+                          )}
                           {c.email && <div className="text-[10px] text-blue-500 mt-1 flex items-center gap-1"><Mail size={10}/> {c.email}</div>}
                         </td>
                         <td className="px-4 py-4">
-                          <div className="flex flex-wrap gap-1 max-w-[200px]">
+                          <div className="flex flex-wrap gap-1 max-w-[240px]">
                             {/* Tags / Categs array on client object if they exist */}
+                            {c.customer_profiles?.slice(0, 2).map((profile, idx) => (
+                              <span key={`profile-${idx}`} className="bg-amber-50 text-amber-700 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase">{profile}</span>
+                            ))}
+                            {c.product_categories?.slice(0, 2).map((category, idx) => (
+                              <span key={`category-${idx}`} className="bg-cyan-50 text-cyan-700 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase">{category}</span>
+                            ))}
                             {c.tags?.slice(0, 3).map((t, idx) => (
                               <span key={idx} className="bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase">{t}</span>
                             ))}
                             {/* Equipamentos from items array */}
-                            {c.items?.slice(0, 2).map((item, idx) => (
+                            {c.equipment_models?.slice(0, 2).map((item, idx) => (
                               <span key={idx} className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase">{item}</span>
                             ))}
                             {c.interest_product && (
                               <span className="bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase" title="Produto de Interesse (Lead/Orçamento)">{c.interest_product}</span>
                             )}
-                            {((c.tags?.length || 0) + (c.items?.length || 0) + (c.interest_product ? 1 : 0) > 5) && (
-                              <span className="text-[9px] text-slate-400 font-bold bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">+{((c.tags?.length || 0) + (c.items?.length || 0) + (c.interest_product ? 1 : 0) - 5)} mais</span>
+                            {((c.customer_profiles?.length || 0) + (c.product_categories?.length || 0) + (c.tags?.length || 0) + (c.equipment_models?.length || 0) + (c.interest_product ? 1 : 0) > 7) && (
+                              <span className="text-[9px] text-slate-400 font-bold bg-slate-50 px-1.5 py-0.5 rounded border border-slate-100">+{((c.customer_profiles?.length || 0) + (c.product_categories?.length || 0) + (c.tags?.length || 0) + (c.equipment_models?.length || 0) + (c.interest_product ? 1 : 0) - 7)} mais</span>
                             )}
                           </div>
                         </td>
@@ -589,13 +1184,30 @@ export const CampaignPlanner: React.FC = () => {
                                <div className="text-[10px] font-black uppercase text-slate-400 tracking-wider">
                                  {c.ultima_ligacao_filtrada.type}
                                </div>
+                               <div className={`px-2 py-1 rounded-full border text-[10px] font-black uppercase tracking-wider ${satisfactionMeta.className}`}>
+                                 {satisfactionMeta.label}
+                                 {satisfactionMeta.scoreLabel ? ` ${satisfactionMeta.scoreLabel}` : ''}
+                               </div>
                              </div>
                           ) : (
                              <span className="text-xs italic text-slate-400">Nenhum histórico</span>
                           )}
                         </td>
                       </tr>
-                    ))}
+                    )})}
+                    {filteredClients.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-6 py-10 text-center">
+                          <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-6 py-8">
+                            <Search size={22} className="text-slate-300" />
+                            <p className="mt-3 text-sm font-black text-slate-700">Nenhum cliente encontrado nessa pesquisa</p>
+                            <p className="mt-1 text-xs font-semibold text-slate-400">
+                              Ajuste o nome, telefone, cidade, bairro ou limpe a busca para voltar aos {clients.length} resultados.
+                            </p>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -641,6 +1253,48 @@ export const CampaignPlanner: React.FC = () => {
                     className="w-full bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-blue-500 focus:bg-slate-800 transition-all placeholder:text-slate-600 shadow-inner" 
                   />
                 </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Linha / Produto Alvo (Opcional)</label>
+                  <input
+                    list="campaign-target-products"
+                    value={filters.produtoAlvo || ''}
+                    onChange={e => setFilters({ ...filters, produtoAlvo: e.target.value })}
+                    placeholder="Ex: Gerador de Cloro"
+                    className="w-full bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-cyan-500 focus:bg-slate-800 transition-all placeholder:text-slate-600 shadow-inner"
+                  />
+                  <datalist id="campaign-target-products">
+                    {campaignTargetOptions.map((item, itemIndex) => <option key={`campaign-target-option-${item}-${itemIndex}`} value={item} />)}
+                  </datalist>
+                  <p className="text-[11px] font-bold text-slate-500">
+                    Deixe vazio quando a campanha for de relacionamento/acompanhamento e não de uma linha específica.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Oferta / Produto Oferecido (Opcional)</label>
+                  <input
+                    list="campaign-offer-products"
+                    value={filters.ofertaAlvo || ''}
+                    onChange={e => setFilters({ ...filters, ofertaAlvo: e.target.value })}
+                    placeholder="Ex: Sal para Gerador de Cloro"
+                    className="w-full bg-slate-800/50 backdrop-blur-sm border border-slate-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-emerald-500 focus:bg-slate-800 transition-all placeholder:text-slate-600 shadow-inner"
+                  />
+                  <datalist id="campaign-offer-products">
+                    {campaignOfferOptions.map((item, itemIndex) => <option key={`campaign-offer-option-${item}-${itemIndex}`} value={item} />)}
+                  </datalist>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Escopo da Linha</label>
+                  <select
+                    value={filters.escopoLinha || ''}
+                    onChange={e => setFilters({ ...filters, escopoLinha: e.target.value })}
+                    className="w-full bg-slate-800/50 border border-slate-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-blue-500 focus:bg-slate-800 transition-colors cursor-pointer"
+                  >
+                    <option value="">Não especificado</option>
+                    <option value="somente_linha_alvo">Somente a linha alvo</option>
+                    <option value="mais_de_uma_linha">Mais de uma linha do cliente</option>
+                    <option value="todas_as_linhas">Todas as linhas</option>
+                  </select>
+                </div>
               </div>
 
               <div className="h-px w-full bg-gradient-to-r from-transparent via-slate-700 to-transparent my-6"></div>
@@ -654,8 +1308,13 @@ export const CampaignPlanner: React.FC = () => {
                     onChange={e => setCampCallType(e.target.value as CallType)} 
                     className="w-full bg-slate-800/50 border border-slate-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-blue-500 focus:bg-slate-800 transition-colors cursor-pointer"
                   >
-                    {Object.values(CallType).map(ct => <option key={ct} value={ct}>{ct}</option>)}
+                    {Object.values(CallType).map((ct, callTypeIndex) => <option key={`campaign-call-type-option-${ct}-${callTypeIndex}`} value={ct}>{ct}</option>)}
                   </select>
+                  {isRelationshipSalesCampaign && (
+                    <p className="text-[11px] font-bold text-cyan-300">
+                      Esta campanha será tratada como acompanhamento comercial geral, sem oferta específica.
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-2">
@@ -665,9 +1324,9 @@ export const CampaignPlanner: React.FC = () => {
                     onChange={e => setCampCanal(e.target.value as any)} 
                     className="w-full bg-slate-800/50 border border-slate-700 rounded-xl p-3 text-sm font-bold text-white outline-none focus:border-blue-500 focus:bg-slate-800 transition-colors cursor-pointer"
                   >
-                    <option value="ambos">Voz + WhatsApp (Livre escolha)</option>
                     <option value="voz">Apenas Voz (Bloquear WhatsApp)</option>
                     <option value="whatsapp">Apenas WhatsApp</option>
+                    <option value="ambos">Voz + WhatsApp (2 itens por cliente)</option>
                   </select>
                 </div>
 
@@ -682,12 +1341,40 @@ export const CampaignPlanner: React.FC = () => {
                     {operadoresList.map(op => <option key={op.id} value={op.id}>{op.username_display || op.id}</option>)}
                   </select>
                 </div>
+
+                <div className="rounded-2xl border border-slate-700 bg-slate-800/60 p-4 space-y-2">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Prévia da carga</p>
+                  <p className="text-sm font-black text-white">{selectedIds.size} clientes selecionados</p>
+                  <p className="text-xs font-bold text-slate-300">
+                    Previsão bruta de fila: {estimatedQueueEntries} item(ns)
+                    {campCanal === 'ambos' ? ' (voz + WhatsApp para cada cliente)' : campCanal === 'voz' ? ' (somente voz)' : ' (somente WhatsApp)'}
+                  </p>
+                  {dispatchPreviewLoading ? (
+                    <p className="text-xs font-bold text-slate-300">Conferindo fila existente e contato recente...</p>
+                  ) : (
+                    <>
+                      <p className="text-xs font-bold text-slate-400">
+                        Previsão validada: {dispatchPreview?.voice_entries_expected || 0} ligação(ões) elegíveis e {dispatchPreview?.whatsapp_entries_expected || 0} WhatsApp(s) elegíveis.
+                      </p>
+                      {(dispatchPreview?.blocked_recent_call || dispatchPreview?.blocked_existing_voice_queue || dispatchPreview?.blocked_existing_whatsapp_queue) ? (
+                        <p className="text-xs font-bold text-amber-300">
+                          Bloqueios atuais: {dispatchPreview?.blocked_recent_call || 0} por contato recente, {dispatchPreview?.blocked_existing_voice_queue || 0} por fila de ligação e {dispatchPreview?.blocked_existing_whatsapp_queue || 0} por fila de WhatsApp.
+                        </p>
+                      ) : null}
+                    </>
+                  )}
+                  {selectedLeadCount > 0 && (
+                    <p className="text-xs font-bold text-amber-300">
+                      {selectedLeadCount} prospecto(s) LEAD estão incluídos na seleção atual.
+                    </p>
+                  )}
+                </div>
               </div>
 
               {/* Summary & Submit */}
               <div className="bg-slate-800/30 backdrop-blur-md border border-slate-700 p-5 rounded-2xl mt-8">
                 <div className="flex items-center justify-between mb-4">
-                  <span className="text-xs font-bold text-slate-400">Total a Despachar:</span>
+                  <span className="text-xs font-bold text-slate-400">Clientes Selecionados:</span>
                   <span className="text-3xl font-black text-blue-400 drop-shadow-[0_0_8px_rgba(96,165,250,0.5)]">{selectedIds.size}</span>
                 </div>
                 
@@ -729,6 +1416,35 @@ export const CampaignPlanner: React.FC = () => {
             </div>
           </div>
         </div>
+
+        {isCatalogManagerOpen && (
+          <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-md">
+            <div className="w-full max-w-7xl max-h-[92vh] overflow-y-auto rounded-[36px] border border-slate-200 bg-slate-50 p-6 shadow-2xl">
+              <div className="mb-6 flex items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-xl font-black uppercase tracking-tighter text-slate-900">Catalogo Tecnico</h2>
+                  <p className="mt-1 text-sm font-bold text-slate-500">
+                    Gerencie categorias, produtos e aplique a classificacao na base inteira.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsCatalogManagerOpen(false)}
+                  className="rounded-2xl border border-slate-200 bg-white p-3 text-slate-500 hover:text-slate-900"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <PortfolioCatalogManager
+                onCatalogChange={(nextCatalog) => {
+                  setCatalogConfig(nextCatalog);
+                  void loadReferenceData();
+                }}
+              />
+            </div>
+          </div>
+        )}
 
       </div>
     </div>

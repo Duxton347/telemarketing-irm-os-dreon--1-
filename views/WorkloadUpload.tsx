@@ -3,6 +3,7 @@ import { Upload, Plus, ClipboardPaste, Save, Phone, User as UserIcon, AlertCircl
 import { dataService } from '../services/dataService';
 import { User, UserRole, CallType } from '../types';
 import { parseAddress } from '../utils/addressParser';
+import { getTaskAssignableUsers } from '../utils/taskAssignment';
 
 interface Props {
     user: any;
@@ -33,13 +34,17 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
         const fetchOps = async () => {
             try {
                 const ops = await dataService.getUsers();
-                setOperators(ops.filter(o => o.role !== UserRole.ADMIN));
+                const assignableUsers = getTaskAssignableUsers(ops);
+                setOperators(assignableUsers);
+                setSelectedOperator(current =>
+                    current || assignableUsers.find(operator => operator.id === user?.id)?.id || assignableUsers[0]?.id || ''
+                );
             } catch (e) {
                 console.error(e);
             }
         };
         fetchOps();
-    }, []);
+    }, [user?.id]);
 
     const normalizePhone = (p: string) => p.replace(/\D/g, '');
 
@@ -75,6 +80,10 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
     const handleManualSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!manualName || !manualPhone) return;
+        if (!selectedOperator) {
+            setMessage({ type: 'error', text: 'Selecione um operador antes de enviar para a fila.' });
+            return;
+        }
 
         setLoading(true);
         setMessage(null);
@@ -127,6 +136,10 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
     const handlePasteSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!pasteData.trim()) return;
+        if (!selectedOperator) {
+            setMessage({ type: 'error', text: 'Selecione um operador antes de enviar para a fila.' });
+            return;
+        }
 
         setLoading(true);
         setMessage(null);
@@ -258,7 +271,7 @@ const WorkloadUpload: React.FC<Props> = ({ user }) => {
                             onChange={e => setSelectedOperator(e.target.value)}
                             className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                         >
-                            <option value="">Fila Geral (Nenhum operador específico)</option>
+                            <option value="">Selecione um operador</option>
                             {operators.map(op => (
                                 <option key={op.id} value={op.id}>{op.name}</option>
                             ))}

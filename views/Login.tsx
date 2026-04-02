@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { Lock, User as UserIcon, ShieldAlert, Loader2, UserPlus, ArrowRight, ArrowLeft, Eye, EyeOff, Clock } from 'lucide-react';
 import { dataService } from '../services/dataService';
@@ -9,6 +8,7 @@ interface LoginProps {
 }
 
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
+  const allowPublicRegistration = import.meta.env.VITE_ALLOW_PUBLIC_REGISTRATION === 'true';
   const [isRegistering, setIsRegistering] = React.useState(false);
   const [showPassword, setShowPassword] = React.useState(false);
   const [username, setUsername] = React.useState('');
@@ -19,30 +19,34 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (loading) return; 
+    if (loading) return;
 
     setLoading(true);
     setError('');
-    
+
     const inputVal = username.trim();
     if (!inputVal) {
-      setError('Informe um nome de usuário ou e-mail.');
+      setError('Informe um nome de usuario ou e-mail.');
       setLoading(false);
       return;
     }
 
     try {
       if (isRegistering) {
+        if (!allowPublicRegistration) {
+          throw new Error('Cadastro publico desativado. Solicite a criacao de acesso a um administrador.');
+        }
+
         if (!name.trim()) throw new Error('Informe seu nome completo.');
-        if (password.length < 6) throw new Error('A senha deve ter no mínimo 6 caracteres.');
-        
+        if (password.length < 6) throw new Error('A senha deve ter no minimo 6 caracteres.');
+
         await dataService.createUser({
           name: name.trim(),
           username: inputVal,
           password,
-          role: UserRole.ADMIN 
+          role: UserRole.ADMIN
         });
-        
+
         setIsRegistering(false);
         setPassword('');
         setError('Conta administrativa criada! Entre agora.');
@@ -52,12 +56,12 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
       }
     } catch (err: any) {
       const msg = err.message || '';
-      console.error("[Login View Error]", err);
-      
+      console.error('[Login View Error]', err);
+
       if (msg.includes('limite') || msg.includes('rate limit')) {
-        setError('Bloqueio Temporário: O servidor detectou muitas tentativas. Aguarde 15 minutos.');
+        setError('Bloqueio temporario: o servidor detectou muitas tentativas. Aguarde 15 minutos.');
       } else if (msg.includes('incorretos') || msg.includes('credentials')) {
-        setError('Credenciais Inválidas: Verifique seu nome de usuário (ex: joao) e sua senha.');
+        setError('Credenciais invalidas: verifique seu nome de usuario e sua senha.');
       } else {
         setError(msg || 'Erro ao conectar. Tente novamente em instantes.');
       }
@@ -70,16 +74,16 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-blue-900 to-slate-900 p-4 font-sans">
       <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-500">
         <div className="bg-slate-900 p-10 text-center relative overflow-hidden">
-          <div className="absolute top-0 left-0 w-full h-1.5 bg-yellow-400"></div>
+          <div className="absolute top-0 left-0 w-full h-1.5 bg-yellow-400" />
           <div className="w-20 h-20 bg-yellow-400 rounded-3xl rotate-6 flex items-center justify-center mx-auto mb-6 border-4 border-white shadow-2xl transform hover:rotate-0 transition-transform duration-300">
             <span className="text-3xl font-black text-slate-900">ID</span>
           </div>
-          <h1 className="text-2xl font-black text-white tracking-tighter uppercase">Irmãos Dreon</h1>
+          <h1 className="text-2xl font-black text-white tracking-tighter uppercase">Irmaos Dreon</h1>
           <p className="text-blue-400 text-[9px] font-black uppercase tracking-[0.2em] mt-2">
-            {isRegistering ? 'Nova conta administrativa' : 'Plataforma de Performance'}
+            {isRegistering ? 'Cadastro autorizado' : 'Plataforma de Performance'}
           </p>
         </div>
-        
+
         <form onSubmit={handleSubmit} className="p-10 space-y-5">
           {error && (
             <div className={`p-4 rounded-2xl text-[11px] border font-bold flex items-center gap-3 animate-in shake ${error.includes('sucesso') || error.includes('criada') ? 'bg-green-50 text-green-700 border-green-100' : 'bg-red-50 text-red-700 border-red-100'}`}>
@@ -87,7 +91,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
               <span className="flex-1 leading-relaxed">{error}</span>
             </div>
           )}
-          
+
           {isRegistering && (
             <div className="space-y-1.5 animate-in slide-in-from-top-2">
               <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Nome Completo</label>
@@ -97,13 +101,13 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 className="w-full px-4 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-4 focus:ring-blue-500/10 outline-none transition-all font-bold text-slate-700"
-                placeholder="Ex: João Silva"
+                placeholder="Ex: Joao Silva"
               />
             </div>
           )}
 
           <div className="space-y-1.5">
-            <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Usuário ou E-mail</label>
+            <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest ml-1">Usuario ou E-mail</label>
             <div className="relative">
               <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
               <input
@@ -123,7 +127,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
             <div className="relative">
               <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300" size={18} />
               <input
-                type={showPassword ? "text" : "password"}
+                type={showPassword ? 'text' : 'password'}
                 disabled={loading}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -131,7 +135,7 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
                 placeholder="••••••••"
                 required
               />
-              <button 
+              <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
                 className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-300 hover:text-blue-500 transition-colors"
@@ -155,26 +159,33 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
             )}
           </button>
 
-          <button
-            type="button"
-            disabled={loading}
-            onClick={() => {
-              setIsRegistering(!isRegistering);
-              setError('');
-              setPassword('');
-            }}
-            className="w-full py-2 text-[9px] font-black text-slate-400 uppercase tracking-widest hover:text-blue-600 transition-colors flex items-center justify-center gap-2"
-          >
-            {isRegistering ? (
-              <><ArrowLeft size={12} /> Já tenho uma conta</>
-            ) : (
-              <>Novo projeto? Cadastre-se como Administrador</>
-            )}
-          </button>
+          {allowPublicRegistration ? (
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => {
+                setIsRegistering(!isRegistering);
+                setError('');
+                setPassword('');
+              }}
+              className="w-full py-2 text-[9px] font-black text-slate-400 uppercase tracking-widest hover:text-blue-600 transition-colors flex items-center justify-center gap-2"
+            >
+              {isRegistering ? (
+                <><ArrowLeft size={12} /> Ja tenho uma conta</>
+              ) : (
+                <>Cadastro inicial autorizado</>
+              )}
+            </button>
+          ) : (
+            <div className="w-full py-2 text-[9px] font-black text-slate-400 uppercase tracking-widest flex items-center justify-center gap-2">
+              <Clock size={12} />
+              Criacao de usuario somente pelo painel administrativo
+            </div>
+          )}
         </form>
-        
+
         <div className="p-6 bg-slate-50 text-center text-[9px] text-slate-400 font-black uppercase tracking-widest border-t border-slate-100">
-          &copy; Telemarketing Irmãos Dreon &bull; V.2.6.5
+          &copy; Telemarketing Irmaos Dreon
         </div>
       </div>
     </div>

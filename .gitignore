@@ -31,3 +31,4 @@ dist-ssr
 
 # SQL files (backup/schema)
 *.sql
+!supabase/migrations/*.sql

@@ -6,15 +6,41 @@ import {
   Loader2, Clock, MapPin, User, FileText, AlertCircle, Save, X, MessageCircle, Copy, Check, ChevronRight, AlertTriangle, ClipboardList, Zap, Calendar, Mail
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
-import { Task, Client, Question, CallType, OperatorEventType, ProtocolStatus, UserRole, ClientTag } from '../types';
+import { Task, Client, Question, CallType, OperatorEventType, ProtocolStatus, UserRole, ClientTag, ClientHistoryData } from '../types';
 import { SKIP_REASONS, PROTOCOL_SLA } from '../constants';
 import { TagApprovalCard } from '../components/TagApprovalCard';
 import { HelpTooltip } from '../components/HelpTooltip';
+import { PortfolioCategoryBrowser } from '../components/PortfolioCategoryBrowser';
 import { HELP_TEXTS } from '../utils/helpTexts';
+import { buildQuestionnaireTextSummary, enrichQuestionnaireResponses } from '../utils/questionnaireInsights';
+import { buildScheduledForValue } from '../utils/scheduleDateTime';
+import { getTaskAssignableUsers } from '../utils/taskAssignment';
+import { supabase } from '../lib/supabase';
+import {
+  buildPortfolioCategoryGroups,
+  collectPortfolioMetadata,
+  getClientPortfolioEntries,
+  getOperatorPriorityPortfolioEntries
+} from '../utils/clientPortfolio';
 
 interface QueueProps {
   user: any;
 }
+
+type SkipFlowMode = 'direct' | 'repique';
+
+const EMPTY_CLIENT_HISTORY: ClientHistoryData = {
+  calls: [],
+  protocols: [],
+  summary: {
+    totalCalls: 0,
+    totalProtocols: 0,
+    openProtocols: 0,
+    callCountsByType: [],
+    callCountsByPurpose: [],
+    callCountsByTargetProduct: []
+  }
+};
 
 const Queue: React.FC<QueueProps> = ({ user }) => {
   const [effectiveOperatorId, setEffectiveOperatorId] = React.useState<string>(user.id);
@@ -23,10 +49,12 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   React.useEffect(() => {
     if (user.role === UserRole.ADMIN) {
       dataService.getUsers().then(users => {
-        setOperators(users.filter(u => u.role === UserRole.OPERATOR || u.role === UserRole.SUPERVISOR));
+        setOperators(
+          getTaskAssignableUsers(users).filter(operator => operator.id !== user.id)
+        );
       }).catch(e => console.error("Error fetching operators:", e));
     }
-  }, [user.role]);
+  }, [user.id, user.role]);
 
   const [isLoading, setIsLoading] = React.useState(true);
   const [isProcessing, setIsProcessing] = React.useState(false);
@@ -47,9 +75,29 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   const [isCopied, setIsCopied] = React.useState(false);
   const [isCopiedSecondary, setIsCopiedSecondary] = React.useState(false);
   const [hasRecentCall, setHasRecentCall] = React.useState(false);
+  const [recentCallWindowDays, setRecentCallWindowDays] = React.useState(3);
+  const [expandedPortfolioCategory, setExpandedPortfolioCategory] = React.useState<string | null>(null);
 
-  const [clientHistory, setClientHistory] = React.useState<{ calls: any[], protocols: any[] }>({ calls: [], protocols: [] });
+  const [clientHistory, setClientHistory] = React.useState<ClientHistoryData>(EMPTY_CLIENT_HISTORY);
   const [historyLoading, setHistoryLoading] = React.useState(false);
+  const [campaignFeedback, setCampaignFeedback] = React.useState({
+    portfolioScope: '',
+    offerInterestLevel: '',
+    offerBlockerReason: ''
+  });
+  const clientPortfolioEntries = React.useMemo(() => getClientPortfolioEntries(client), [client]);
+  const operatorPriorityPortfolioEntries = React.useMemo(
+    () => getOperatorPriorityPortfolioEntries(clientPortfolioEntries),
+    [clientPortfolioEntries]
+  );
+  const clientPortfolioMetadata = React.useMemo(
+    () => collectPortfolioMetadata(operatorPriorityPortfolioEntries),
+    [operatorPriorityPortfolioEntries]
+  );
+  const operatorPortfolioCategoryGroups = React.useMemo(
+    () => buildPortfolioCategoryGroups(operatorPriorityPortfolioEntries),
+    [operatorPriorityPortfolioEntries]
+  );
 
   // Estados para abertura de protocolo no report
   const [needsProtocol, setNeedsProtocol] = React.useState(false);
@@ -76,8 +124,26 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   React.useEffect(() => {
     if (currentTask) {
       setScheduleData(prev => ({ ...prev, type: currentTask.type }));
+      setCampaignFeedback({
+        portfolioScope: currentTask.portfolioScope || (currentTask.targetProduct ? 'somente_linha_alvo' : ''),
+        offerInterestLevel: '',
+        offerBlockerReason: ''
+      });
     }
   }, [currentTask]);
+
+  React.useEffect(() => {
+    if (operatorPortfolioCategoryGroups.length === 0) {
+      setExpandedPortfolioCategory(null);
+      return;
+    }
+
+    setExpandedPortfolioCategory(current =>
+      current && operatorPortfolioCategoryGroups.some(group => group.category === current)
+        ? current
+        : null
+    );
+  }, [operatorPortfolioCategoryGroups, client?.id]);
 
   const config = dataService.getProtocolConfig();
 
@@ -91,6 +157,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setCallSummary('');
     setStartTime(null);
     setHasRecentCall(false);
+    setExpandedPortfolioCategory(null);
     setNeedsProtocol(false);
     setProtoData({ title: '', departmentId: 'atendimento', priority: 'Média' });
     setScheduleData({ isScheduling: false, date: '', time: '', reason: '', type: CallType.POS_VENDA });
@@ -98,31 +165,30 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setInterestProduct('');
     setSuggestedTags([]);
     setShowTagSuccess(false);
+    setClientHistory(EMPTY_CLIENT_HISTORY);
+    setCampaignFeedback({ portfolioScope: '', offerInterestLevel: '', offerBlockerReason: '' });
   }, []);
 
   // State for upcoming tasks
   const [upcomingTasks, setUpcomingTasks] = React.useState<Task[]>([]);
+  const [queueRefreshPending, setQueueRefreshPending] = React.useState(false);
+  const realtimeRefreshTimeoutRef = React.useRef<number | null>(null);
 
   const fetchQueue = React.useCallback(async () => {
     setIsLoading(true);
     try {
-      const [allTasks, allQuestionsRaw, allClients] = await Promise.all([
-        dataService.getTasks(),
+      const [allTasks, allQuestionsRaw, allClients, blockDays] = await Promise.all([
+        dataService.getTasks(effectiveOperatorId),
         dataService.getQuestions(), // We'll filter later or fetch specific
-        dataService.getClients(true) // Pass TRUE to include LEADS (Prospects)
+        dataService.getClients(true), // Pass TRUE to include LEADS (Prospects)
+        dataService.getCommunicationBlockDays()
       ]);
-      
-      // Load purpose-specific questions if we have a current task
-      let filteredQuestions = allQuestionsRaw;
-      if (currentTask) {
-        filteredQuestions = await dataService.getQuestions(currentTask.type as CallType, (currentTask as any).proposito);
-      }
-      setQuestions(filteredQuestions);
+      setRecentCallWindowDays(blockDays);
+      resetState();
 
       const now = new Date();
       // Filter out tasks that are waiting for approval
       const myPendingTasks = allTasks.filter(t =>
-        t.assignedTo === effectiveOperatorId &&
         t.status === 'pending' &&
         (t.approvalStatus === 'APPROVED' || !t.approvalStatus)
       );
@@ -139,6 +205,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       });
 
       const myTask = dueTasks[0];
+
       if (myTask) {
         // Try normal client lookup first, then use embedded task data as fallback
         let foundClient = allClients.find(c => c.id === myTask.clientId) || null;
@@ -163,9 +230,29 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
             buyer_name: embeddedClient?.buyer_name,
             interest_product: embeddedClient?.interest_product,
             preferred_channel: embeddedClient?.preferred_channel,
-            funnel_status: embeddedClient?.funnel_status
+            funnel_status: embeddedClient?.funnel_status,
+            customer_profiles: embeddedClient?.customer_profiles || [],
+            product_categories: embeddedClient?.product_categories || [],
+            equipment_models: embeddedClient?.equipment_models || embeddedClient?.items || [],
+            portfolio_entries: embeddedClient?.portfolio_entries || []
           } as Client;
         }
+
+        const filteredQuestions = await dataService.getQuestions(
+          myTask.type as CallType,
+          (myTask as any).proposito,
+          {
+            clientContext: foundClient || undefined,
+            campaignContext: {
+              campaignName: myTask.campaignName,
+              targetProduct: myTask.targetProduct,
+              offerProduct: myTask.offerProduct,
+              portfolioScope: myTask.portfolioScope,
+              campaignMode: myTask.campaignMode
+            }
+          }
+        );
+        setQuestions(filteredQuestions);
 
         setCurrentTask(myTask);
         setClient(foundClient);
@@ -185,10 +272,10 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
           setHistoryLoading(false);
         }
       } else {
+        setQuestions(allQuestionsRaw);
         setCurrentTask(null);
         setClient(null);
       }
-      resetState();
     } catch (e) {
       console.error(e);
     } finally {
@@ -197,6 +284,66 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   }, [effectiveOperatorId, resetState]);
 
   React.useEffect(() => { fetchQueue(); }, [fetchQueue]);
+
+  const scheduleRealtimeQueueRefresh = React.useCallback(() => {
+    if (realtimeRefreshTimeoutRef.current) {
+      window.clearTimeout(realtimeRefreshTimeoutRef.current);
+    }
+
+    realtimeRefreshTimeoutRef.current = window.setTimeout(() => {
+      if (isCalling || isFillingReport || isProcessing) {
+        setQueueRefreshPending(true);
+        return;
+      }
+
+      fetchQueue();
+    }, 250);
+  }, [fetchQueue, isCalling, isFillingReport, isProcessing]);
+
+  React.useEffect(() => {
+    if (!queueRefreshPending || isCalling || isFillingReport || isProcessing) return;
+
+    setQueueRefreshPending(false);
+    fetchQueue();
+  }, [fetchQueue, isCalling, isFillingReport, isProcessing, queueRefreshPending]);
+
+  React.useEffect(() => {
+    const affectsOperator = (payload: any, assigneeKey: 'assigned_to' | 'assigned_operator_id') => {
+      const newAssignee = String(payload?.new?.[assigneeKey] || '').trim();
+      const oldAssignee = String(payload?.old?.[assigneeKey] || '').trim();
+      return newAssignee === effectiveOperatorId || oldAssignee === effectiveOperatorId;
+    };
+
+    const queueChannel = supabase
+      .channel(`queue-refresh:${effectiveOperatorId}`)
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'tasks'
+      }, payload => {
+        if (affectsOperator(payload, 'assigned_to')) {
+          scheduleRealtimeQueueRefresh();
+        }
+      })
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'call_schedules'
+      }, payload => {
+        if (affectsOperator(payload, 'assigned_operator_id')) {
+          scheduleRealtimeQueueRefresh();
+        }
+      })
+      .subscribe();
+
+    return () => {
+      if (realtimeRefreshTimeoutRef.current) {
+        window.clearTimeout(realtimeRefreshTimeoutRef.current);
+        realtimeRefreshTimeoutRef.current = null;
+      }
+      supabase.removeChannel(queueChannel);
+    };
+  }, [effectiveOperatorId, scheduleRealtimeQueueRefresh]);
 
   React.useEffect(() => {
     let interval: any;
@@ -218,16 +365,71 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setIsFillingReport(true);
   };
 
-  const handleSkipDuringCall = () => {
-    setIsSkipModalOpen(true);
-  };
-
   // New state for Skip-Reschedule flow
   const [skipReasonSelected, setSkipReasonSelected] = React.useState<string | null>(null);
+  const [skipFlowMode, setSkipFlowMode] = React.useState<SkipFlowMode>('direct');
   const [whatsappCheck, setWhatsappCheck] = React.useState(false);
   const [isRescheduleModalOpen, setIsRescheduleModalOpen] = React.useState(false);
   const [manualRepDate, setManualRepDate] = React.useState('');
   const [manualRepTime, setManualRepTime] = React.useState('09:00');
+
+  const resetSkipFlowState = () => {
+    setIsSkipModalOpen(false);
+    setIsRescheduleModalOpen(false);
+    setSkipReasonSelected(null);
+    setSkipFlowMode('direct');
+    setWhatsappCheck(false);
+    setManualRepDate('');
+    setManualRepTime('09:00');
+  };
+
+  const openSkipFlow = (mode: SkipFlowMode = 'direct') => {
+    setSkipReasonSelected(null);
+    setSkipFlowMode(mode);
+    setWhatsappCheck(false);
+    setManualRepDate('');
+    setManualRepTime('09:00');
+    setIsRescheduleModalOpen(false);
+    setIsSkipModalOpen(true);
+  };
+
+  const buildFinalSkipReason = (reason: string) => {
+    const skipTimingStr = isCalling ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
+    return `${skipTimingStr}${reason}`;
+  };
+
+  const handleDirectSkip = async (reason?: string, reopenModal: 'skip' | 'repique' = 'skip') => {
+    if (!currentTask) return;
+
+    const selectedReason = reason || skipReasonSelected || 'Pulo Direto';
+    const finalSkipReason = buildFinalSkipReason(selectedReason);
+
+    if (!confirm("Tem certeza que deseja pular SEM agendar um retorno? O contato poderá ficar perdido.")) {
+      if (reopenModal === 'skip') {
+        setIsSkipModalOpen(true);
+      } else {
+        setIsRescheduleModalOpen(true);
+      }
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      await dataService.updateTask(currentTask.id, { status: 'skipped', skipReason: finalSkipReason });
+      await dataService.logOperatorEvent(user.id, OperatorEventType.PULAR_ATENDIMENTO, currentTask.id, `Pulo (Sem Repique) - Motivo: ${finalSkipReason}`);
+      await fetchQueue();
+      resetSkipFlowState();
+    } catch (e: any) {
+      console.error('Erro ao pular:', e);
+      alert(`Erro ao pular: ${e?.message || e}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleSkipDuringCall = () => {
+    openSkipFlow();
+  };
 
   const handleCopyPhone = () => {
     if (client) {
@@ -321,13 +523,14 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
             await dataService.updateClientFields(client.id, { invalid: true });
 
             const skipTimingStr = isCalling ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
-            const finalSkipReason = `${skipTimingStr}${reason}`;
+            const finalSkipReason = buildFinalSkipReason(reason);
 
             await dataService.updateTask(currentTask.id, { status: 'skipped', skipReason: finalSkipReason });
             await dataService.logOperatorEvent(user.id, OperatorEventType.PULAR_ATENDIMENTO, currentTask.id, `Marcado como Telefone Inválido: ${finalSkipReason}`);
 
             alert("Cliente marcado com telefone incorreto. Ele foi removido das filas e enviado para o relatório de revisão.");
             await fetchQueue();
+            resetSkipFlowState();
         } catch (e) {
             console.error(e);
             alert("Erro ao marcar cliente como inválido.");
@@ -335,6 +538,11 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
             setIsProcessing(false);
         }
         return; // Bypass reschedule modal
+    }
+
+    if (skipFlowMode === 'direct') {
+      await handleDirectSkip(reason);
+      return;
     }
 
     setIsRescheduleModalOpen(true);
@@ -348,11 +556,11 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
 
     try {
       const skipTimingStr = isCalling ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
-      const finalSkipReason = `${skipTimingStr}${skipReasonSelected}`;
+      const finalSkipReason = buildFinalSkipReason(skipReasonSelected);
 
       let date: Date;
       if (interval === 'manual' && manualDate) {
-        date = new Date(`${manualDate}T${manualTime || '09:00'}:00`);
+        date = new Date(buildScheduledForValue(manualDate, manualTime));
       } else {
         date = new Date();
         if (interval === '1d') date.setDate(date.getDate() + 1);
@@ -390,7 +598,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
         originCallId: null, // No call record exists when skipping
         scheduledFor: date.toISOString(),
         callType: currentTask.type,
-        scheduleReason: `Repique: ${finalSkipReason}`,
+        scheduleReason: currentTask.scheduleReason || finalSkipReason,
         status: 'PENDENTE_APROVACAO',
         skipReason: finalSkipReason,
         whatsappSent: whatsappCheck,
@@ -410,9 +618,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       alert(`Erro ao solicitar reagendamento: ${e?.message || e}`);
     } finally {
       setIsProcessing(false);
-      setIsRescheduleModalOpen(false);
-      setSkipReasonSelected(null);
-      setWhatsappCheck(false);
+      resetSkipFlowState();
     }
   };
 
@@ -428,7 +634,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setIsProcessing(true);
     try {
       const skipTimingStr = isCalling ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
-      const finalSkipReason = skipReasonSelected ? `${skipTimingStr}${skipReasonSelected}` : `${skipTimingStr}Pulo com WhatsApp`;
+      const finalSkipReason = buildFinalSkipReason(skipReasonSelected || 'Pulo com WhatsApp');
 
       // Log WhatsApp
       await dataService.saveCall({
@@ -457,7 +663,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       alert("Erro ao finalizar.");
     } finally {
       setIsProcessing(false);
-      setIsRescheduleModalOpen(false);
+      resetSkipFlowState();
     }
   };
 
@@ -513,6 +719,36 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       }
 
       // 2. Save Call Record
+      const baseResponses = enrichQuestionnaireResponses(
+        {
+          ...responses,
+          call_type: currentTask.type,
+          target_product: currentTask.targetProduct,
+          offer_product: currentTask.offerProduct,
+          portfolio_scope: campaignFeedback.portfolioScope || currentTask.portfolioScope,
+          offer_interest_level: campaignFeedback.offerInterestLevel,
+          offer_blocker_reason: campaignFeedback.offerBlockerReason,
+          campaign_name: currentTask.campaignName,
+          call_purpose: currentTask.proposito
+        },
+        questions,
+        currentTask.type,
+        currentTask.proposito,
+        { clientContext: client || undefined, responses }
+      );
+      const questionnaireTextSummary = buildQuestionnaireTextSummary(
+        baseResponses,
+        questions,
+        currentTask.type,
+        currentTask.proposito,
+        { clientContext: client || undefined, responses: baseResponses }
+      );
+      const finalWrittenReport = callSummary.trim() || questionnaireTextSummary || '';
+      const normalizedResponses = {
+        ...baseResponses,
+        written_report: finalWrittenReport,
+        questionnaire_text_summary: questionnaireTextSummary || undefined
+      };
       const callData = {
         id: '',
         taskId: currentTask.id,
@@ -522,8 +758,17 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
         endTime: new Date().toISOString(),
         duration: callDuration,
         reportTime: reportDuration,
-        responses: { ...responses, written_report: callSummary, call_type: currentTask.type },
+        responses: normalizedResponses,
         type: currentTask.type,
+        proposito: currentTask.proposito,
+        campanha_id: currentTask.campanha_id,
+        campaignName: currentTask.campaignName,
+        targetProduct: currentTask.targetProduct,
+        offerProduct: currentTask.offerProduct,
+        portfolioScope: campaignFeedback.portfolioScope || currentTask.portfolioScope,
+        campaignMode: currentTask.campaignMode,
+        offerInterestLevel: campaignFeedback.offerInterestLevel,
+        offerBlockerReason: campaignFeedback.offerBlockerReason
       };
       const result = await dataService.saveCall(callData);
 
@@ -551,7 +796,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
           <User size={24} />
         </div>
         <div className="flex-1">
-          <p className="text-[10px] uppercase tracking-widest font-black text-slate-400 mb-1">Visualizar Carga como Operador</p>
+          <p className="text-[10px] uppercase tracking-widest font-black text-slate-400 mb-1">Visualizar Carga por Usuário</p>
           <select
             value={effectiveOperatorId}
             onChange={(e) => setEffectiveOperatorId(e.target.value)}
@@ -613,7 +858,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
             {hasRecentCall && (
               <div className="absolute top-0 left-0 w-full bg-red-600 text-white py-2 px-4 text-center animate-pulse flex items-center justify-center gap-2">
                 <AlertTriangle size={14} />
-                <span className="text-[9px] font-black uppercase tracking-widest">Atenção: Ligado nos últimos 3 dias</span>
+                <span className="text-[9px] font-black uppercase tracking-widest">Atenção: comunicação registrada nos últimos {recentCallWindowDays} dia(s)</span>
               </div>
             )}
 
@@ -697,6 +942,22 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
               {(currentTask.type === 'PROSPECÇÃO' || client.status === 'LEAD') && client.email && (
                 <p className="font-bold text-amber-400 flex items-center gap-2 text-sm mt-1"><Mail size={16} className="shrink-0 text-amber-400" /> {client.email}</p>
               )}
+              {!historyLoading && clientHistory.protocols.length > 0 && (
+                <div className="space-y-2 mt-4">
+                  <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Protocolos no nome do cliente</p>
+                  <div className="space-y-2">
+                    {clientHistory.protocols.slice(0, 3).map(protocol => (
+                      <div key={protocol.id} className="rounded-xl border border-slate-700 bg-slate-800/40 p-3 space-y-1">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-[8px] font-black uppercase tracking-widest text-red-300">{protocol.status}</span>
+                          <span className="text-[8px] font-black uppercase tracking-widest text-slate-500">#{protocol.protocolNumber || protocol.id.substring(0, 8)}</span>
+                        </div>
+                        <p className="text-[10px] font-bold text-slate-200">{protocol.title}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {(currentTask.type === 'PROSPECÇÃO' || client.status === 'LEAD') && (
@@ -730,19 +991,87 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
             )}
 
             <div className="pt-6 border-t border-slate-800">
-              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-3">Portfólio de Equipamentos</p>
-              <div className="flex flex-wrap gap-2">
-                {client.items && client.items.length > 0 ? client.items.map((it, i) => (
-                  <span key={i} className="px-3 py-1 bg-slate-800 text-[10px] font-black uppercase text-slate-300 rounded-md border border-slate-700">{it}</span>
-                )) : (
-                  <span className="text-xs text-slate-600 italic">Nenhum equipamento cadastrado</span>
-                )}
+              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-3">Perfil e Base Técnica do Cliente</p>
+              <div className="space-y-4">
+                <div className="flex flex-wrap gap-2">
+                  {clientPortfolioMetadata.customer_profiles.map((profile, profileIndex) => (
+                    <span key={`queue-profile-${client.id}-${profile}-${profileIndex}`} className="px-3 py-1.5 bg-amber-900/30 text-[10px] font-black uppercase text-amber-300 rounded-xl border border-amber-800/70">{profile}</span>
+                  ))}
+                  {clientPortfolioMetadata.customer_profiles.length === 0 && (
+                    <span className="text-xs text-slate-600 italic">Nenhum perfil priorizado encontrado</span>
+                  )}
+                </div>
+
+                <PortfolioCategoryBrowser
+                  title="Categorias e Equipamentos Prioritarios"
+                  description="Os produtos ficam ocultos ate voce abrir a categoria desejada."
+                  groups={operatorPortfolioCategoryGroups}
+                  expandedCategory={expandedPortfolioCategory}
+                  onToggleCategory={(category) => setExpandedPortfolioCategory(current => current === category ? null : category)}
+                  emptyCategoryLabel="Nenhuma categoria prioritaria encontrada"
+                  emptySelectionLabel="Clique em uma categoria para ver os produtos relacionados."
+                  theme="dark"
+                />
               </div>
             </div>
 
             {/* HISTÓRICO DE INTERAÇÕES */}
             <div className="pt-6 border-t border-slate-800">
               <h5 className="text-[9px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2 mb-4"><FileText size={14} className="text-slate-400" /> Histórico de Contatos Recentes</h5>
+              {!historyLoading && (
+                <div className="space-y-4 mb-4">
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-3">
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Ligacoes</p>
+                      <p className="mt-1 text-lg font-black text-white">{clientHistory.summary.totalCalls}</p>
+                    </div>
+                    <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-3">
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Protocolos</p>
+                      <p className="mt-1 text-lg font-black text-white">{clientHistory.summary.totalProtocols}</p>
+                    </div>
+                    <div className="rounded-xl border border-slate-700 bg-slate-800/40 p-3">
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Abertos</p>
+                      <p className="mt-1 text-lg font-black text-white">{clientHistory.summary.openProtocols}</p>
+                    </div>
+                  </div>
+                  {clientHistory.summary.callCountsByType.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Contagem por tipo</p>
+                      <div className="flex flex-wrap gap-2">
+                        {clientHistory.summary.callCountsByType.map(item => (
+                          <span key={item.key} className="px-2 py-1 rounded-lg bg-slate-800 text-[8px] font-black uppercase text-slate-300 border border-slate-700">
+                            {item.label}: {item.total}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {clientHistory.summary.callCountsByPurpose.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Contagem por proposito</p>
+                      <div className="flex flex-wrap gap-2">
+                        {clientHistory.summary.callCountsByPurpose.map(item => (
+                          <span key={item.key} className="px-2 py-1 rounded-lg bg-blue-950/40 text-[8px] font-black uppercase text-blue-300 border border-blue-900/60">
+                            {item.label}: {item.total}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {clientHistory.summary.callCountsByTargetProduct.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Contagem por produto/oferta</p>
+                      <div className="flex flex-wrap gap-2">
+                        {clientHistory.summary.callCountsByTargetProduct.map(item => (
+                          <span key={item.key} className="px-2 py-1 rounded-lg bg-emerald-950/30 text-[8px] font-black uppercase text-emerald-300 border border-emerald-900/50">
+                            {item.label}: {item.total}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
               {historyLoading ? (
                 <div className="flex justify-center py-4"><Loader2 className="animate-spin text-slate-600" size={16} /></div>
               ) : clientHistory.calls.length > 0 ? (
@@ -753,7 +1082,20 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                         <span className="text-[8px] font-black uppercase tracking-widest px-2 py-0.5 bg-slate-700 text-slate-300 rounded">{call.type}</span>
                         <span className="text-[8px] font-black text-slate-400 uppercase">{new Date(call.startTime).toLocaleDateString("pt-BR", { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
-                      <p className="text-[10px] font-bold text-slate-300 italic">"{call.responses?.written_report || call.responses?.justificativa || call.responses?.note || 'Sem anotações.'}"</p>
+                      {(call.proposito || call.targetProduct || call.offerProduct) && (
+                        <div className="flex flex-wrap gap-2">
+                          {call.proposito && <span className="px-2 py-0.5 bg-blue-950/40 text-blue-300 rounded text-[8px] font-black uppercase border border-blue-900/60">{call.proposito}</span>}
+                          {call.targetProduct && <span className="px-2 py-0.5 bg-cyan-950/40 text-cyan-300 rounded text-[8px] font-black uppercase border border-cyan-900/60">{call.targetProduct}</span>}
+                          {call.offerProduct && <span className="px-2 py-0.5 bg-emerald-950/30 text-emerald-300 rounded text-[8px] font-black uppercase border border-emerald-900/50">{call.offerProduct}</span>}
+                        </div>
+                      )}
+                      <p className="text-[10px] font-bold text-slate-300 italic">"{call.responses?.written_report || call.responses?.questionnaire_text_summary || call.responses?.justificativa || call.responses?.note || 'Sem anotações.'}"</p>
+                      {call.responses?.questionnaire_text_summary && call.responses?.questionnaire_text_summary !== call.responses?.written_report && (
+                        <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-2">
+                          <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Respostas de escrita</p>
+                          <pre className="mt-1 whitespace-pre-wrap text-[10px] font-medium text-slate-300">{call.responses.questionnaire_text_summary}</pre>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -770,7 +1112,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
               <button onClick={handleStartCall} className="py-6 bg-blue-600 text-white rounded-[28px] font-black uppercase tracking-widest text-[11px] shadow-2xl flex items-center justify-center gap-3 active:scale-95 transition-all">
                 <Play size={20} /> Iniciar
               </button>
-              <button onClick={() => setIsSkipModalOpen(true)} disabled={isProcessing} className="py-6 bg-slate-200 text-slate-600 rounded-[28px] font-black uppercase tracking-widest text-[11px] shadow-sm flex items-center justify-center gap-3 hover:bg-slate-300 active:scale-95 transition-all">
+              <button onClick={() => openSkipFlow()} disabled={isProcessing} className="py-6 bg-slate-200 text-slate-600 rounded-[28px] font-black uppercase tracking-widest text-[11px] shadow-sm flex items-center justify-center gap-3 hover:bg-slate-300 active:scale-95 transition-all">
                 <SkipForward size={20} /> Pular
               </button>
             </div>
@@ -809,7 +1151,38 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   onResponseChange={(qId, val) => setResponses(prev => ({ ...prev, [qId]: val }))}
                   type={currentTask.type}
                   proposito={(currentTask as any).proposito}
+                  clientContext={client || undefined}
                 />
+
+                {(currentTask.proposito || currentTask.targetProduct || currentTask.offerProduct || currentTask.campaignMode === 'RELATIONSHIP') && (
+                  <section className="space-y-4 p-8 bg-slate-50 rounded-[40px] border border-slate-100">
+                    <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
+                      <Zap size={18} className="text-cyan-500" /> Contexto da Campanha
+                    </h5>
+                    <div className="flex flex-wrap gap-3">
+                      {currentTask.campaignMode === 'RELATIONSHIP' && (
+                        <span className="px-4 py-2 bg-violet-100 text-violet-700 rounded-2xl text-[10px] font-black uppercase border border-violet-200">
+                          Campanha relacional sem oferta específica
+                        </span>
+                      )}
+                      {currentTask.proposito && (
+                        <span className="px-4 py-2 bg-blue-100 text-blue-700 rounded-2xl text-[10px] font-black uppercase border border-blue-200">
+                          Propósito: {currentTask.proposito}
+                        </span>
+                      )}
+                      {currentTask.targetProduct && (
+                        <span className="px-4 py-2 bg-cyan-100 text-cyan-700 rounded-2xl text-[10px] font-black uppercase border border-cyan-200">
+                          Linha alvo: {currentTask.targetProduct}
+                        </span>
+                      )}
+                      {currentTask.offerProduct && (
+                        <span className="px-4 py-2 bg-emerald-100 text-emerald-700 rounded-2xl text-[10px] font-black uppercase border border-emerald-200">
+                          Oferta: {currentTask.offerProduct}
+                        </span>
+                      )}
+                    </div>
+                  </section>
+                )}
 
                 <section className="space-y-4">
                   <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
@@ -818,7 +1191,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   <textarea value={callSummary} onChange={e => setCallSummary(e.target.value)} className="w-full p-8 bg-slate-50 rounded-[40px] border border-slate-100 font-bold text-slate-800 h-48 outline-none resize-none focus:ring-8 focus:ring-blue-500/5 transition-all" placeholder="O que foi conversado? Anote detalhes importantes para o próximo contato." />
                 </section>
 
-                {/* PRODUTO DE INTERESSE E FUNIL (CRM) — Somente para ligações de prospecção */}
+                {/* PRODUTO DE INTERESSE E FUNIL (CRM) - Somente para ligações de prospecção */}
                 {isFillingReport && (currentTask.type === 'PROSPECÇÃO' || client.status === 'LEAD') && (
                   <section className="space-y-6 pt-6 border-t border-slate-100">
                     <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
@@ -860,6 +1233,55 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                           <option value="Manutenção">Manutenção</option>
                           <option value="Outros">Outros</option>
                         </select>
+                      </div>
+                    </div>
+                  </section>
+                )}
+
+                {isFillingReport && (currentTask.targetProduct || currentTask.offerProduct) && (
+                  <section className="space-y-6 pt-6 border-t border-slate-100">
+                    <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
+                      <ClipboardList size={18} className="text-cyan-500" /> Métricas da Oferta e da Linha
+                    </h5>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-cyan-50/40 p-8 rounded-[40px] border border-cyan-100/70">
+                      {currentTask.targetProduct && (
+                        <div className="space-y-2">
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Escopo do retorno no pós-venda</label>
+                          <select
+                            className="w-full p-4 bg-white rounded-2xl outline-none font-bold text-slate-700 text-sm border border-slate-200 focus:border-cyan-500 transition-all cursor-pointer"
+                            value={campaignFeedback.portfolioScope}
+                            onChange={e => setCampaignFeedback(prev => ({ ...prev, portfolioScope: e.target.value }))}
+                          >
+                            <option value="">Selecione...</option>
+                            <option value="somente_linha_alvo">Somente a linha da ligação</option>
+                            <option value="mais_de_uma_linha">Mais de uma linha do cliente</option>
+                            <option value="todas_as_linhas">Refere-se a todas as linhas</option>
+                          </select>
+                        </div>
+                      )}
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Nível de receptividade</label>
+                        <select
+                          className="w-full p-4 bg-white rounded-2xl outline-none font-bold text-slate-700 text-sm border border-slate-200 focus:border-cyan-500 transition-all cursor-pointer"
+                          value={campaignFeedback.offerInterestLevel}
+                          onChange={e => setCampaignFeedback(prev => ({ ...prev, offerInterestLevel: e.target.value }))}
+                        >
+                          <option value="">Selecione...</option>
+                          <option value="ALTO">Alto</option>
+                          <option value="MEDIO">Médio</option>
+                          <option value="BAIXO">Baixo</option>
+                          <option value="SEM_INTERESSE">Sem interesse</option>
+                        </select>
+                      </div>
+                      <div className="space-y-2 md:col-span-2">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Principal impeditivo para compra/adesão</label>
+                        <input
+                          type="text"
+                          value={campaignFeedback.offerBlockerReason}
+                          onChange={e => setCampaignFeedback(prev => ({ ...prev, offerBlockerReason: e.target.value }))}
+                          className="w-full p-4 bg-white rounded-2xl outline-none font-bold text-slate-700 text-sm border border-slate-200 focus:border-cyan-500 transition-all"
+                          placeholder="Ex: Preço, prazo, sem urgência, já possui estoque..."
+                        />
                       </div>
                     </div>
                   </section>
@@ -1041,9 +1463,30 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   <h3 className="text-xl font-black uppercase tracking-tighter">
                     {isCalling ? 'Pular Chamada em Curso' : 'Motivo do Pulo'}
                   </h3>
-                  <button onClick={() => setIsSkipModalOpen(false)}><X size={24} /></button>
+                  <button onClick={resetSkipFlowState}><X size={24} /></button>
                 </div>
                 <div className="p-8 space-y-3">
+                  <div className="grid grid-cols-2 gap-3 pb-2">
+                    <button
+                      onClick={() => setSkipFlowMode('direct')}
+                      className={`p-4 rounded-2xl border text-left transition-all ${skipFlowMode === 'direct' ? 'bg-red-50 border-red-400 text-red-700 shadow-sm' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'}`}
+                    >
+                      <span className="block text-[10px] font-black uppercase tracking-widest">Pular</span>
+                      <span className="block mt-1 text-[11px] font-bold">Sem retorno</span>
+                    </button>
+                    <button
+                      onClick={() => setSkipFlowMode('repique')}
+                      className={`p-4 rounded-2xl border text-left transition-all ${skipFlowMode === 'repique' ? 'bg-orange-50 border-orange-400 text-orange-700 shadow-sm' : 'bg-slate-50 border-slate-200 text-slate-500 hover:bg-slate-100'}`}
+                    >
+                      <span className="block text-[10px] font-black uppercase tracking-widest">Repique</span>
+                      <span className="block mt-1 text-[11px] font-bold">Abrir agendamento</span>
+                    </button>
+                  </div>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 pb-2">
+                    {skipFlowMode === 'direct'
+                      ? 'Ao escolher o motivo, o atendimento será pulado sem criar repique.'
+                      : 'Ao escolher o motivo, vamos abrir as opções de repique.'}
+                  </p>
                   {SKIP_REASONS.map(reason => (
                     <button
                       key={reason}
@@ -1133,7 +1576,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                 <button
                   onClick={() => {
                     if (!manualRepDate) { alert('Selecione uma data.'); return; }
-                    confirmRescheduleSkip('manual', manualRepDate, manualRepTime || '09:00');
+                    confirmRescheduleSkip('manual', manualRepDate, manualRepTime);
                   }}
                   disabled={!manualRepDate}
                   className="w-full py-4 bg-orange-500 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-lg hover:bg-orange-400 active:scale-95 transition-all disabled:opacity-50"

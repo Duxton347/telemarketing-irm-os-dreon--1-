@@ -1,4 +1,6 @@
 import { supabase } from '../lib/supabase';
+import { dataService } from './dataService';
+import { parseAddress } from '../utils/addressParser';
 
 export interface ScraperProcess {
     id?: string;
@@ -42,60 +44,55 @@ export interface ScraperResult {
     // ... other fields
 }
 
+type ScraperResultsFilters = {
+    status?: string;
+    runId?: string;
+};
+
+type ScraperResultsOptions = {
+    limit?: number;
+};
+
+const SCRAPER_RESULTS_PAGE_SIZE = 1000;
+const GOOGLE_NEARBY_MAX_RADIUS_METERS = 50000;
+const GOOGLE_NEARBY_MIN_RADIUS_METERS = 100;
+const GRID_RADIUS_OVERLAP_FACTOR = 1.1;
+
+const buildResultsQuery = (filters?: ScraperResultsFilters) => {
+    let query = supabase
+        .from('scraper_results')
+        .select('*, scraper_runs(scraper_processes(name))')
+        .order('created_at', { ascending: false });
+
+    if (filters?.status) query = query.eq('review_status', filters.status);
+    if (filters?.runId) query = query.eq('run_id', filters.runId);
+
+    return query;
+};
+
+const clampSearchRadiusMeters = (radiusMeters: number) =>
+    Math.max(
+        GOOGLE_NEARBY_MIN_RADIUS_METERS,
+        Math.min(GOOGLE_NEARBY_MAX_RADIUS_METERS, Math.round(radiusMeters))
+    );
+
+const getSearchRadiusMetersForGrid = (radiusKm: number, gridSize: number) => {
+    if (gridSize <= 1) {
+        return clampSearchRadiusMeters(radiusKm * 1000);
+    }
+
+    const cellSizeKm = (radiusKm * 2) / gridSize;
+    const cellCoverRadiusKm = (Math.sqrt(2) * cellSizeKm) / 2;
+    return clampSearchRadiusMeters(Math.min(radiusKm, cellCoverRadiusKm * GRID_RADIUS_OVERLAP_FACTOR) * 1000);
+};
+
 export const scraperService = {
     parseGoogleAddress: (fullAddress: string) => {
-        let neighborhood = null;
-        let city = null;
-        let state = null;
-
-        if (!fullAddress) return { neighborhood, city, state };
-
-        const cleanAddr = fullAddress.trim();
-        const stateMatch = cleanAddr.match(/\b([A-Z]{2})(?:,?\s*Brasil)?$/i);
-        if (stateMatch) state = stateMatch[1].toUpperCase();
-
-        let str = cleanAddr.replace(/(?:CEP:?\s*)?(\d{5}-?\d{3})/i, '').replace(/Brasil\s*$/i, '').trim();
-        str = str.replace(/[,-\s]+$/, '');
-
-        if (state && str.endsWith(state)) {
-            str = str.slice(0, -state.length).trim();
-            str = str.replace(/[,-\s]+$/, '');
-        }
-
-        const partsByComma = str.split(',').map(s => s.trim()).filter(Boolean);
-        
-        if (partsByComma.length > 1) {
-            let potentialCity = partsByComma[partsByComma.length - 1];
-            if (potentialCity.includes('-')) {
-                const subParts = potentialCity.split('-').map(s => s.trim());
-                city = subParts[subParts.length - 1];
-                neighborhood = subParts[subParts.length - 2];
-            } else {
-                city = potentialCity;
-                let beforeCity = partsByComma.slice(0, -1).join(',').trim();
-                if (beforeCity.includes('-')) {
-                    const subParts = beforeCity.split('-').map(s => s.trim());
-                    neighborhood = subParts[subParts.length - 1];
-                }
-            }
-        } else if (str.includes('-')) {
-            const parts = str.split('-').map(s => s.trim());
-            if (parts.length >= 3) {
-                city = parts[parts.length - 1];
-                neighborhood = parts[parts.length - 2];
-            } else if (parts.length === 2) {
-                city = parts[1];
-            }
-        }
-
-        if (city && city.length <= 2) city = null;
-        if (neighborhood && neighborhood.length <= 2) neighborhood = null;
-        if (city?.toUpperCase() === 'ILHABELA') city = 'ILHABELA';
-
-        return { 
-            neighborhood: neighborhood || null, 
-            city: city?.toUpperCase() || null, 
-            state: state || null 
+        const parsed = parseAddress(fullAddress);
+        return {
+            neighborhood: parsed.neighborhood || null,
+            city: parsed.city || null,
+            state: parsed.state || null
         };
     },
 
@@ -143,6 +140,7 @@ export const scraperService = {
 
         // 3. GENERATE GRID
         const gridSize = process.grid_size || 1;
+        const searchRadiusMeters = getSearchRadiusMetersForGrid(process.radius_km, gridSize);
 
         // Helpers for Grid Generation
         const kmToDegLat = (km: number) => km / 111.0;
@@ -153,13 +151,12 @@ export const scraperService = {
 
         const generateGridPoints = (centerLat: number, centerLng: number, radiusKm: number, gridSize: number) => {
             if (gridSize <= 1) return [{ lat: centerLat, lng: centerLng }];
-            const halfSpanKm = radiusKm;
-            const stepKm = (2 * halfSpanKm) / (gridSize - 1);
+            const cellSizeKm = (2 * radiusKm) / gridSize;
             const points = [];
             for (let i = 0; i < gridSize; i++) {
                 for (let j = 0; j < gridSize; j++) {
-                    const offsetLatKm = -halfSpanKm + i * stepKm;
-                    const offsetLngKm = -halfSpanKm + j * stepKm;
+                    const offsetLatKm = -radiusKm + (i + 0.5) * cellSizeKm;
+                    const offsetLngKm = -radiusKm + (j + 0.5) * cellSizeKm;
                     const dlat = kmToDegLat(offsetLatKm);
                     const dlng = kmToDegLng(offsetLngKm, centerLat);
                     points.push({ lat: centerLat + dlat, lng: centerLng + dlng });
@@ -174,6 +171,7 @@ export const scraperService = {
         let totalFound = 0;
         let totalNew = 0;
         let errors = [];
+        const seenPlaceIds = new Set<string>();
 
         try {
             for (const point of points) {
@@ -182,8 +180,8 @@ export const scraperService = {
                     let pages = 0;
 
                     do {
-                        const searchGoogleUrl = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${point.lat},${point.lng}&radius=${process.radius_km * 1000}&keyword=${encodeURIComponent(process.keyword)}&key=${GOOGLE_MAPS_KEY}${nextPageToken ? `&pagetoken=${nextPageToken}` : ''}`;
-                        const searchUrl = import.meta.env.PROD ? `https://corsproxy.io/?${encodeURIComponent(searchGoogleUrl)}` : `/google-proxy/maps/api/place/nearbysearch/json?location=${point.lat},${point.lng}&radius=${process.radius_km * 1000}&keyword=${encodeURIComponent(process.keyword)}&key=${GOOGLE_MAPS_KEY}${nextPageToken ? `&pagetoken=${nextPageToken}` : ''}`;
+                        const searchGoogleUrl = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${point.lat},${point.lng}&radius=${searchRadiusMeters}&keyword=${encodeURIComponent(process.keyword)}&key=${GOOGLE_MAPS_KEY}${nextPageToken ? `&pagetoken=${nextPageToken}` : ''}`;
+                        const searchUrl = import.meta.env.PROD ? `https://corsproxy.io/?${encodeURIComponent(searchGoogleUrl)}` : `/google-proxy/maps/api/place/nearbysearch/json?location=${point.lat},${point.lng}&radius=${searchRadiusMeters}&keyword=${encodeURIComponent(process.keyword)}&key=${GOOGLE_MAPS_KEY}${nextPageToken ? `&pagetoken=${nextPageToken}` : ''}`;
                         const searchRes = await fetch(searchUrl);
                         if (!searchRes.ok) throw new Error(`Network Error: ${searchRes.statusText}`);
                         const searchData = await searchRes.json();
@@ -192,9 +190,19 @@ export const scraperService = {
                             throw new Error(`Maps API Error: ${searchData.status}`);
                         }
 
-                        const places = searchData.results || [];
+                        const places = (searchData.results || []).filter((place: any) => {
+                            const placeId = place?.place_id;
+                            if (!placeId || seenPlaceIds.has(placeId)) {
+                                return false;
+                            }
+
+                            seenPlaceIds.add(placeId);
+                            return true;
+                        });
 
                         for (const place of places) {
+                            totalFound++;
+
                             // Check deduplication (Local Scraper DB + CRM DB)
                             const { count } = await supabase
                                 .from('scraper_results')
@@ -244,7 +252,6 @@ export const scraperService = {
                                     totalNew++;
                                 } // end if !isCrmDuplicate
                             }
-                            totalFound++;
                         }
 
                         nextPageToken = searchData.next_page_token;
@@ -331,18 +338,31 @@ export const scraperService = {
     },
 
     // --- DB OPERATIONS: RESULTS ---
-    getResults: async (filters?: { status?: string, runId?: string }) => {
-        let query = supabase
-            .from('scraper_results')
-            .select('*, scraper_runs(scraper_processes(name))')
-            .order('created_at', { ascending: false });
-
-        if (filters?.status) query = query.eq('review_status', filters.status);
-        if (filters?.runId) query = query.eq('run_id', filters.runId);
-
-        const { data, error } = await query.limit(100);
+    getResults: async (filters?: ScraperResultsFilters, options: ScraperResultsOptions = {}) => {
+        const limit = options.limit ?? 100;
+        const { data, error } = await buildResultsQuery(filters).limit(limit);
         if (error) throw error;
         return data as ScraperResult[];
+    },
+
+    getAllResults: async (filters?: ScraperResultsFilters) => {
+        const allResults: ScraperResult[] = [];
+        let from = 0;
+
+        while (true) {
+            const to = from + SCRAPER_RESULTS_PAGE_SIZE - 1;
+            const { data, error } = await buildResultsQuery(filters).range(from, to);
+
+            if (error) throw error;
+
+            const batch = (data || []) as ScraperResult[];
+            allResults.push(...batch);
+
+            if (batch.length < SCRAPER_RESULTS_PAGE_SIZE) break;
+            from += SCRAPER_RESULTS_PAGE_SIZE;
+        }
+
+        return allResults;
     },
 
     updateResultStatus: async (id: string, status: string, notes?: string, userId?: string) => {
@@ -355,18 +375,31 @@ export const scraperService = {
     },
 
     forceCompleteRun: async (runId: string) => {
-        // Conta os resultados encontrados no banco
-        const { count: foundCount } = await supabase
-            .from('scraper_results')
-            .select('*', { count: 'exact', head: true })
-            .eq('run_id', runId);
+        const [{ data: run, error: runError }, { count: foundCount, error: countError }] = await Promise.all([
+            supabase
+                .from('scraper_runs')
+                .select('total_found, total_new')
+                .eq('id', runId)
+                .maybeSingle(),
+            supabase
+                .from('scraper_results')
+                .select('*', { count: 'exact', head: true })
+                .eq('run_id', runId)
+        ]);
+
+        if (runError) throw new Error("Erro ao carregar execução: " + runError.message);
+        if (countError) throw new Error("Erro ao contar resultados da execução: " + countError.message);
+
+        const safeFoundCount = foundCount || 0;
+        const totalFound = Math.max(run?.total_found || 0, safeFoundCount);
+        const totalNew = Math.max(run?.total_new || 0, safeFoundCount);
 
         const { error } = await supabase
             .from('scraper_runs')
             .update({
                 status: 'COMPLETED',
-                total_found: foundCount || 0,
-                total_new: foundCount || 0, // Estimativa para execuções recuperadas
+                total_found: totalFound,
+                total_new: totalNew,
                 finished_at: new Date().toISOString()
             })
             .eq('id', runId);
@@ -394,27 +427,23 @@ export const scraperService = {
         }
 
         const phoneCleaner = result.phone.replace(/\D/g, '');
-        const originString = processName ? `GOOGLE_SEARCH (${processName})` : 'GOOGLE_SEARCH';
 
-        // Tentar preencher location parts
-        const parsed = scraperService.parseGoogleAddress(result.address);
-
-        // Tentamos fazer Upsert baseado no telefone
-        const { error: upsertError } = await supabase.from('clients').upsert({
+        await dataService.upsertClient({
             name: result.name,
             phone: phoneCleaner,
             address: result.address,
-            neighborhood: parsed.neighborhood,
-            city: parsed.city,
-            state: parsed.state,
-            website: result.website || null,
-            origin: originString,
+            website: result.website || undefined,
+            origin: 'GOOGLE_SEARCH',
+            origin_detail: processName || undefined,
             status: 'LEAD',
             funnel_status: 'NEW'
-        }, { onConflict: 'phone' });
+        });
 
-        if (upsertError) throw upsertError;
-
-        await scraperService.updateResultStatus(result.id, 'APPROVED', 'Salvo no CRM de Leads', userId);
+        await scraperService.updateResultStatus(
+            result.id,
+            'APPROVED',
+            processName ? `Salvo no CRM de Leads (${processName})` : 'Salvo no CRM de Leads',
+            userId
+        );
     }
 };

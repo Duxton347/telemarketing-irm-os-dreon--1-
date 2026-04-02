@@ -76,12 +76,11 @@ export const RepiqueModal: React.FC<RepiqueModalProps> = ({
                             </div>
                         </div>
                         <div className="space-y-2">
-                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Hora</label>
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Hora (opcional)</label>
                             <div className="relative">
                                 <Clock className="absolute left-3 top-3 text-slate-400" size={16} />
                                 <input
                                     type="time"
-                                    required
                                     className="w-full pl-10 pr-4 py-3 bg-slate-50 border-none rounded-xl font-bold text-slate-700 focus:ring-2 focus:ring-orange-200 outline-none transition-all"
                                     value={formData.time}
                                     onChange={e => setFormData({ ...formData, time: e.target.value })}

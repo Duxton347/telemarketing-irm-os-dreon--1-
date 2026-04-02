@@ -8,7 +8,7 @@ import {
   PhoneOff, RefreshCw, ListFilter, Plus, UserCheck, UserMinus, Phone, PlayCircle, ChevronRight, LayoutList, Eraser, Sparkles, BarChart3, MessageCircle, Settings, Search, AlertTriangle, Calendar
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
-import { User, UserRole, CallType, Question, Task, ScheduleStatus, ProductivityMetrics, WhatsAppTask, ClientTag, Campanha } from '../types';
+import { User, UserRole, CallType, Question, Task, ScheduleStatus, ProductivityMetrics, WhatsAppTask, ClientTag, Campanha, OperationTeam } from '../types';
 import { RepiqueModal, RepiqueData } from '../components/RepiqueModal';
 import { SmartImportModal } from '../components/SmartImportModal';
 import { CampaignPlannerModal } from '../components/CampaignPlannerModal';
@@ -17,6 +17,8 @@ import { HelpTooltip } from '../components/HelpTooltip';
 import { HELP_TEXTS } from '../utils/helpTexts';
 import { CampaignPlannerService } from '../services/campaignPlannerService';
 import { EmailService } from '../services/emailService';
+import { buildScheduledForValue } from '../utils/scheduleDateTime';
+import { getTaskAssignableUsers } from '../utils/taskAssignment';
 
 interface AdminProps {
   user?: User;
@@ -29,7 +31,9 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
     ['import', 'users', 'questions', 'skips', 'tasks', 'settings', 'tags'].includes(initialTab) ? initialTab : 'questions'
   );
   const [googleMapsKey, setGoogleMapsKey] = React.useState('');
+  const [communicationBlockDays, setCommunicationBlockDays] = React.useState('3');
   const [users, setUsers] = React.useState<User[]>([]);
+  const [teams, setTeams] = React.useState<OperationTeam[]>([]);
   const [questions, setQuestions] = React.useState<Question[]>([]);
   const [skippedTasks, setSkippedTasks] = React.useState<Task[]>([]);
   const [pendingTasks, setPendingTasks] = React.useState<Task[]>([]);
@@ -65,30 +69,59 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   const [emailCoverage, setEmailCoverage] = React.useState({ total: 0, withEmail: 0, coveragePercent: 0 });
 
   const [duplicateClients, setDuplicateClients] = React.useState<any[]>([]);
+  const [whatsAppRepairReport, setWhatsAppRepairReport] = React.useState<any | null>(null);
 
-  const [userData, setUserData] = React.useState({ name: '', username: '', password: '', role: UserRole.OPERATOR });
+  const [userData, setUserData] = React.useState({
+    name: '',
+    username: '',
+    password: '',
+    role: UserRole.OPERATOR,
+    teamId: '',
+    sectorCode: ''
+  });
+  const [newTeamData, setNewTeamData] = React.useState({
+    name: '',
+    sectorCode: '',
+    description: ''
+  });
   const [questionData, setQuestionData] = React.useState<Partial<Question>>({ text: '', options: [], type: 'ALL' as any, stageId: '' });
 
-  const [selectedOperatorId, setSelectedOperatorId] = React.useState<string>('');
+  const [taskOperatorFilterId, setTaskOperatorFilterId] = React.useState<string>('');
+  const [importOperatorId, setImportOperatorId] = React.useState<string>('');
+  const [typeEditOperatorId, setTypeEditOperatorId] = React.useState<string>('');
   const [selectedCallType, setSelectedCallType] = React.useState<CallType>(CallType.POS_VENDA);
+  const assignableUsers = React.useMemo(() => getTaskAssignableUsers(users), [users]);
+  const visiblePendingTasks = React.useMemo(() => {
+    const currentQueue = taskFilterChannel === 'VOICE' ? pendingTasks : pendingWhatsAppTasks;
+
+    if (!taskOperatorFilterId) {
+      return currentQueue;
+    }
+
+    return currentQueue.filter((task: Task | WhatsAppTask) => (task.assignedTo || '') === taskOperatorFilterId);
+  }, [pendingTasks, pendingWhatsAppTasks, taskFilterChannel, taskOperatorFilterId]);
 
   const refreshData = async () => {
     setIsProcessing(true);
     try {
-      const [userList, questionList, taskList, allClients, whatsappList, mapsKey, tagsList, campaignsList, coverage] = await Promise.all([
+      const [userList, teamList, questionList, taskList, allClients, whatsappList, mapsKey, blockDays, tagsList, campaignsList, coverage] = await Promise.all([
         dataService.getUsers(),
+        dataService.getOperationTeams(),
         dataService.getQuestions(),
         dataService.getTasks(),
         dataService.getClients(true), // Include LEADs (Prospects)
         dataService.getWhatsAppTasks(),
         dataService.getSystemSetting('GOOGLE_MAPS_KEY'),
+        dataService.getCommunicationBlockDays(),
         dataService.getClientTags(''), // Empty string for "all" if possible, or we need an Admin method
         CampaignPlannerService.getCampaigns(),
         EmailService.getCoverageStats()
       ]);
       setUsers(userList);
+      setTeams(teamList);
       setQuestions(questionList);
       setGoogleMapsKey(mapsKey);
+      setCommunicationBlockDays(String(blockDays));
 
       const skipped = taskList.filter(t => t.status === 'skipped').map(t => ({
         ...t,
@@ -117,9 +150,19 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
       }));
       setPendingWhatsAppTasks(pendingWa);
 
-      const operators = userList.filter(u => u.role === UserRole.OPERATOR || u.role === UserRole.SUPERVISOR);
-      if (operators.length > 0 && !selectedOperatorId) {
-        setSelectedOperatorId(operators[0].id);
+      const assignableUserList = getTaskAssignableUsers(userList);
+      if (assignableUserList.length > 0 && !importOperatorId) {
+        setImportOperatorId(
+          assignableUserList.find(assignableUser => assignableUser.id === user?.id)?.id || assignableUserList[0].id
+        );
+      }
+
+      if (taskOperatorFilterId && !assignableUserList.some(assignableUser => assignableUser.id === taskOperatorFilterId)) {
+        setTaskOperatorFilterId('');
+      }
+
+      if (typeEditOperatorId && !assignableUserList.some(assignableUser => assignableUser.id === typeEditOperatorId)) {
+        setTypeEditOperatorId('');
       }
 
       // Load Metrics if on analytics tab (or initial load?)
@@ -138,6 +181,10 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   };
 
 
+
+  React.useEffect(() => {
+    setSelectedTaskIds([]);
+  }, [taskOperatorFilterId, activeTab]);
 
   React.useEffect(() => { refreshData(); }, []);
 
@@ -211,14 +258,14 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   };
 
   const handleClearOperatorTasks = async () => {
-    if (!selectedOperatorId) return alert("Selecione um operador no menu suspenso primeiro.");
+    if (!taskOperatorFilterId) return alert("Selecione um operador no menu suspenso primeiro.");
 
-    const operatorName = users.find(u => u.id === selectedOperatorId)?.name || 'selecionado';
+    const operatorName = users.find(u => u.id === taskOperatorFilterId)?.name || 'selecionado';
     if (!confirm(`ATENÇÃO: Deseja apagar TODAS as pendências da fila de ${operatorName}? (As tarefas "puladas" serão preservadas). É irreversível.`)) return;
 
     setIsProcessing(true);
     // Limpeza imediata local para evitar lag visual
-    const targetOpId = selectedOperatorId;
+    const targetOpId = taskOperatorFilterId;
 
     try {
       if (taskFilterChannel === 'WHATSAPP') {
@@ -234,6 +281,42 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
     } catch (e: any) {
       alert(`Erro ao limpar fila no banco de dados: ${e.message}`);
       await refreshData(); // Restaura caso falhe
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleTransferSelectedTasks = async () => {
+    if (selectedTaskIds.length === 0) return alert("Selecione pelo menos uma tarefa para transferir.");
+
+    const selectedTasks = visiblePendingTasks.filter((task: Task | WhatsAppTask) => selectedTaskIds.includes(task.id));
+    if (selectedTasks.length === 0) {
+      setSelectedTaskIds([]);
+      return alert("Nenhuma tarefa valida encontrada na selecao atual.");
+    }
+
+    const destinationLabel = taskFilterChannel === 'VOICE' ? 'WhatsApp' : 'Ligacao';
+    if (!confirm(`Deseja mover ${selectedTasks.length} tarefa(s) selecionada(s) para ${destinationLabel}?`)) return;
+
+    setIsProcessing(true);
+    try {
+      for (const task of selectedTasks) {
+        const actionOperatorId = user?.id || task.assignedTo || '';
+
+        if (taskFilterChannel === 'VOICE') {
+          await dataService.moveCallToWhatsApp(task.id, actionOperatorId);
+        } else {
+          await dataService.moveWhatsAppToCall(task.id, actionOperatorId);
+        }
+      }
+
+      setSelectedTaskIds([]);
+      await refreshData();
+      alert(`${selectedTasks.length} tarefa(s) movida(s) para ${destinationLabel} com sucesso!`);
+    } catch (e: any) {
+      console.error(e);
+      await refreshData();
+      alert(`Erro ao mover tarefas: ${e.message || 'Falha desconhecida.'}`);
     } finally {
       setIsProcessing(false);
     }
@@ -270,11 +353,34 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
     try {
       await dataService.createUser(userData);
       setIsUserModalOpen(false);
-      setUserData({ name: '', username: '', password: '', role: UserRole.OPERATOR });
+      setUserData({ name: '', username: '', password: '', role: UserRole.OPERATOR, teamId: '', sectorCode: '' });
       await refreshData();
       alert("Usuário criado com sucesso!");
     } catch (e) {
       alert("Erro ao criar usuário.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleCreateTeam = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTeamData.name.trim()) return alert("Informe o nome do time.");
+
+    setIsProcessing(true);
+    try {
+      await dataService.saveOperationTeam({
+        name: newTeamData.name.trim(),
+        sectorCode: newTeamData.sectorCode.trim() || null,
+        description: newTeamData.description.trim() || null,
+        active: true
+      });
+      setNewTeamData({ name: '', sectorCode: '', description: '' });
+      await refreshData();
+      alert("Time criado com sucesso!");
+    } catch (e) {
+      console.error(e);
+      alert("Erro ao criar time.");
     } finally {
       setIsProcessing(false);
     }
@@ -302,14 +408,14 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
     try {
       if (taskFilterChannel === 'WHATSAPP') {
         const updates: any = { type: selectedCallType };
-        if (selectedOperatorId) {
-          updates.assigned_to = selectedOperatorId;
+        if (typeEditOperatorId) {
+          updates.assigned_to = typeEditOperatorId;
         }
         await dataService.updateWhatsAppTask(taskToEditType.id, updates);
       } else {
         // Voice tasks update
-        if (selectedOperatorId) {
-          await dataService.updateTask(taskToEditType.id, { type: selectedCallType, assignedTo: selectedOperatorId });
+        if (typeEditOperatorId) {
+          await dataService.updateTask(taskToEditType.id, { type: selectedCallType, assignedTo: typeEditOperatorId });
         } else {
           await dataService.updateTask(taskToEditType.id, { type: selectedCallType });
         }
@@ -327,7 +433,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
 
   const handleRescheduleTask = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingTaskId || !scheduleDate.date || !scheduleDate.time) return;
+    if (!editingTaskId || !scheduleDate.date) return;
 
     setIsProcessing(true);
     // ... existing logic ...
@@ -338,7 +444,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
 
     setIsProcessing(true);
     try {
-      const scheduledFor = `${scheduleDate.date}T${scheduleDate.time}:00`;
+      const scheduledFor = buildScheduledForValue(scheduleDate.date, scheduleDate.time);
       await dataService.updateTask(editingTaskId, { scheduledFor, status: 'pending' });
       setIsTaskModalOpen(false);
       setEditingTaskId(null);
@@ -446,7 +552,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
 
   const runImport = async () => {
     if (csvPreview.length === 0 || isProcessing) return;
-    if (!selectedOperatorId) {
+    if (!importOperatorId) {
       alert("Selecione um operador.");
       return;
     }
@@ -463,7 +569,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
         // Note: getWhatsAppTasks filters by assignedTo if provided
         // But we might want 'pending' only? getWhatsAppTasks returns everything?
         // It returns everything for the operator.
-        const waTasks = await dataService.getWhatsAppTasks(selectedOperatorId);
+        const waTasks = await dataService.getWhatsAppTasks(importOperatorId);
         pendingByOpAndType = waTasks.filter(t => t.status === 'pending' && t.type === selectedCallType);
       }
 
@@ -505,13 +611,13 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
           await dataService.createTask({
             clientId: client.id,
             type: selectedCallType,
-            assignedTo: selectedOperatorId
+            assignedTo: importOperatorId
           });
         } else {
           await dataService.createWhatsAppTask({
             clientId: client.id,
             type: selectedCallType,
-            assignedTo: selectedOperatorId,
+            assignedTo: importOperatorId,
             status: 'pending',
             source: 'manual'
           });
@@ -535,12 +641,32 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
+    const normalizedBlockDays = Math.max(0, Number.parseInt(communicationBlockDays || '0', 10) || 0);
     setIsProcessing(true);
     try {
       await dataService.updateSystemSetting('GOOGLE_MAPS_KEY', googleMapsKey, 'Chave da API do Google Maps para o Scraper');
+      await dataService.updateSystemSetting('COMMUNICATION_BLOCK_DAYS', String(normalizedBlockDays), 'Janela em dias para bloquear novas comunicaÃ§Ãµes com o mesmo cliente');
+      setCommunicationBlockDays(String(normalizedBlockDays));
       alert("Configurações salvas com sucesso!");
     } catch (e: any) {
       alert("Erro ao salvar configurações: " + e.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleCleanupDuplicateSchedules = async () => {
+    setIsProcessing(true);
+    try {
+      const removed = await dataService.deleteDuplicateSchedules();
+      alert(
+        removed > 0
+          ? `${removed} agendamento(s) duplicado(s) foram removidos com sucesso!`
+          : 'Nenhum agendamento duplicado foi encontrado.'
+      );
+      await refreshData();
+    } catch (e: any) {
+      alert(`Erro ao limpar agendamentos duplicados: ${e.message}`);
     } finally {
       setIsProcessing(false);
     }
@@ -559,6 +685,25 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
     }
   };
 
+  const handleRepairWhatsAppDuplicates = async () => {
+    if (!confirm('Deseja rastrear e corrigir cadastros duplicados com telefones concatenados? O sistema vai consolidar os clientes automaticamente, remapear filas relacionadas e invalidar o cadastro ruim quando o Supabase nao permitir o delete fisico.')) return;
+    setIsProcessing(true);
+    try {
+      const result = await dataService.repairWhatsAppPhoneDuplicates();
+      setWhatsAppRepairReport(result);
+      alert(
+        result.repairedClients > 0
+          ? `Correção concluída!\n- Suspeitos analisados: ${result.suspectClients}\n- Cadastros consolidados: ${result.repairedClients}\n- Tasks de WhatsApp remapeadas: ${result.remappedWhatsAppTasks}`
+          : `Nenhum caso elegível foi corrigido.\n- Suspeitos analisados: ${result.suspectClients}`
+      );
+      await refreshData();
+    } catch (e: any) {
+      alert(`Erro ao corrigir cadastros com telefone concatenado: ${e.message}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleBackfillSkips = async () => {
     setIsProcessing(true);
     try {
@@ -567,6 +712,19 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
       await refreshData();
     } catch (e: any) {
       alert("Erro ao processar histórico: " + e.message);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleRebuildClientTags = async () => {
+    setIsProcessing(true);
+    try {
+      const updated = await dataService.rebuildDerivedClientTags();
+      alert(`Reprocessamento concluído! ${updated} clientes tiveram as tags derivadas atualizadas.`);
+      await refreshData();
+    } catch (e: any) {
+      alert("Erro ao reprocessar tags derivadas: " + e.message);
     } finally {
       setIsProcessing(false);
     }
@@ -616,12 +774,12 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                 <Sparkles size={16} /> Limpar Todos os Duplicados
               </button>
               <select
-                value={selectedOperatorId}
-                onChange={e => setSelectedOperatorId(e.target.value)}
+                value={taskOperatorFilterId}
+                onChange={e => setTaskOperatorFilterId(e.target.value)}
                 className="p-3 bg-slate-50 border border-slate-200 rounded-xl font-black text-[10px] uppercase outline-none"
               >
-                <option value="">Operador alvo...</option>
-                {users.filter(u => u.role !== UserRole.ADMIN).map(u => (
+                <option value="">Todos os operadores</option>
+                {assignableUsers.map(u => (
                   <option key={u.id} value={u.id}>{u.name}</option>
                 ))}
               </select>
@@ -636,7 +794,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
 
               <button
                 onClick={handleClearOperatorTasks}
-                disabled={isProcessing || !selectedOperatorId}
+                disabled={isProcessing || !taskOperatorFilterId}
                 className="flex items-center gap-2 px-6 py-3 bg-red-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg shadow-red-500/20 active:scale-95 transition-all disabled:opacity-30"
               >
                 {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <Eraser size={16} />} Limpar Tudo do Operador
@@ -660,6 +818,57 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
           </div>
 
 
+          <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_0.8fr] gap-6">
+            <div className="p-6 rounded-[28px] border border-slate-100 bg-slate-50 space-y-4">
+              <div>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Times operacionais</p>
+                <h4 className="mt-2 text-lg font-black text-slate-800">Base de atribuicao da Agenda Central</h4>
+              </div>
+
+              <form onSubmit={handleCreateTeam} className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <input
+                  type="text"
+                  placeholder="Nome do time"
+                  value={newTeamData.name}
+                  onChange={e => setNewTeamData({ ...newTeamData, name: e.target.value })}
+                  className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold"
+                />
+                <input
+                  type="text"
+                  placeholder="Codigo do setor"
+                  value={newTeamData.sectorCode}
+                  onChange={e => setNewTeamData({ ...newTeamData, sectorCode: e.target.value.toUpperCase() })}
+                  className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold uppercase"
+                />
+                <button type="submit" className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-2">
+                  <Plus size={16} /> Criar time
+                </button>
+              </form>
+
+              <input
+                type="text"
+                placeholder="Descricao opcional"
+                value={newTeamData.description}
+                onChange={e => setNewTeamData({ ...newTeamData, description: e.target.value })}
+                className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold"
+              />
+            </div>
+
+            <div className="p-6 rounded-[28px] border border-slate-100 bg-slate-50">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Resumo rapido</p>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <div className="p-4 rounded-2xl bg-white border border-slate-100">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Times ativos</p>
+                  <p className="mt-2 text-2xl font-black text-slate-800">{teams.filter(team => team.active).length}</p>
+                </div>
+                <div className="p-4 rounded-2xl bg-white border border-slate-100">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Usuarios ativos</p>
+                  <p className="mt-2 text-2xl font-black text-slate-800">{users.filter(u => u.active).length}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div className="overflow-x-auto">
             <table className="w-full text-left">
               <thead>
@@ -668,11 +877,11 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                     <input
                       type="checkbox"
                       onChange={(e) => {
-                        const tasks = taskFilterChannel === 'VOICE' ? pendingTasks : pendingWhatsAppTasks;
+                        const tasks = visiblePendingTasks;
                         if (e.target.checked) setSelectedTaskIds(tasks.map((t: Task | WhatsAppTask) => t.id));
                         else setSelectedTaskIds([]);
                       }}
-                      checked={(taskFilterChannel === 'VOICE' ? pendingTasks : pendingWhatsAppTasks).length > 0 && selectedTaskIds.length === (taskFilterChannel === 'VOICE' ? pendingTasks : pendingWhatsAppTasks).length}
+                      checked={visiblePendingTasks.length > 0 && selectedTaskIds.length === visiblePendingTasks.length}
                       className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                     />
                   </th>
@@ -684,7 +893,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50">
-                {(taskFilterChannel === 'VOICE' ? pendingTasks : pendingWhatsAppTasks).map((task: any) => (
+                {visiblePendingTasks.map((task: any) => (
                   <tr key={task.id} className={`transition-all group ${selectedTaskIds.includes(task.id) ? 'bg-blue-50' : 'hover:bg-slate-50'}`}>
                     <td className="py-5 px-4">
                       <input
@@ -711,7 +920,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                           onClick={() => {
                             setTaskToEditType(task);
                             setSelectedCallType(task.type as CallType);
-                            setSelectedOperatorId(''); // Reset selector to "Keep current"
+                            setTypeEditOperatorId(''); // Reset selector to "Keep current"
                             setIsTypeModalOpen(true);
                           }}
                           className="p-1 text-slate-300 hover:text-blue-600 transition-colors"
@@ -741,7 +950,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                     </td>
                   </tr>
                 ))}
-                {(taskFilterChannel === 'VOICE' ? pendingTasks : pendingWhatsAppTasks).length === 0 && (
+                {visiblePendingTasks.length === 0 && (
                   <tr>
                     <td colSpan={4} className="py-20 text-center text-slate-300 font-black uppercase text-xs tracking-widest">A fila de trabalho está vazia.</td>
                   </tr>
@@ -752,16 +961,67 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
         </div>
       )}
 
-      {activeTab === 'users' && (
+            {activeTab === 'users' && (
         <div className="bg-white p-10 rounded-[40px] border border-slate-100 shadow-sm space-y-8 animate-in fade-in duration-300">
           <div className="flex justify-between items-center">
             <div>
-              <h3 className="text-2xl font-black text-slate-800">Equipe e Permissões</h3>
-              <p className="text-xs text-slate-400 font-bold">Gerencie os acessos e funções dos colaboradores.</p>
+              <h3 className="text-2xl font-black text-slate-800">Equipe e Permissoes</h3>
+              <p className="text-xs text-slate-400 font-bold">Gerencie acessos, times operacionais e o setor base da Agenda Central.</p>
             </div>
             <button onClick={() => setIsUserModalOpen(true)} className="px-8 py-4 bg-slate-900 text-white rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-xl flex items-center gap-2">
-              <UserPlus size={18} /> Novo Usuário
+              <UserPlus size={18} /> Novo Usuario
             </button>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-[1.2fr_0.8fr] gap-6">
+            <div className="p-6 rounded-[28px] border border-slate-100 bg-slate-50 space-y-4">
+              <div>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Times operacionais</p>
+                <h4 className="mt-2 text-lg font-black text-slate-800">Base de atribuicao da Agenda Central</h4>
+              </div>
+
+              <form onSubmit={handleCreateTeam} className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <input
+                  type="text"
+                  placeholder="Nome do time"
+                  value={newTeamData.name}
+                  onChange={e => setNewTeamData({ ...newTeamData, name: e.target.value })}
+                  className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold"
+                />
+                <input
+                  type="text"
+                  placeholder="Codigo do setor"
+                  value={newTeamData.sectorCode}
+                  onChange={e => setNewTeamData({ ...newTeamData, sectorCode: e.target.value.toUpperCase() })}
+                  className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold uppercase"
+                />
+                <button type="submit" className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-2">
+                  <Plus size={16} /> Criar time
+                </button>
+              </form>
+
+              <input
+                type="text"
+                placeholder="Descricao opcional"
+                value={newTeamData.description}
+                onChange={e => setNewTeamData({ ...newTeamData, description: e.target.value })}
+                className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold"
+              />
+            </div>
+
+            <div className="p-6 rounded-[28px] border border-slate-100 bg-slate-50">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Resumo rapido</p>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <div className="p-4 rounded-2xl bg-white border border-slate-100">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Times ativos</p>
+                  <p className="mt-2 text-2xl font-black text-slate-800">{teams.filter(team => team.active).length}</p>
+                </div>
+                <div className="p-4 rounded-2xl bg-white border border-slate-100">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Usuarios ativos</p>
+                  <p className="mt-2 text-2xl font-black text-slate-800">{users.filter(u => u.active).length}</p>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="overflow-x-auto">
@@ -769,7 +1029,9 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
               <thead>
                 <tr className="border-b border-slate-100">
                   <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Colaborador</th>
-                  <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Função</th>
+                  <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Funcao</th>
+                  <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Time</th>
+                  <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Setor</th>
                   <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Status</th>
                 </tr>
               </thead>
@@ -793,6 +1055,28 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                       >
                         {Object.values(UserRole).map(role => <option key={role} value={role}>{role}</option>)}
                       </select>
+                    </td>
+                    <td className="py-6 px-4">
+                      <select
+                        value={u.teamId || ''}
+                        onChange={(e) => handleUpdateUser(u.id, { teamId: e.target.value || null })}
+                        className="bg-white border border-slate-200 rounded-xl px-4 py-2 text-[10px] font-black uppercase tracking-tighter text-slate-700 outline-none min-w-[180px]"
+                      >
+                        <option value="">Sem time</option>
+                        {teams.filter(team => team.active).map(team => (
+                          <option key={team.id} value={team.id}>{team.name}</option>
+                        ))}
+                      </select>
+                      <p className="mt-2 text-[9px] font-bold text-slate-400 uppercase tracking-widest">{u.teamName || 'Nao vinculado'}</p>
+                    </td>
+                    <td className="py-6 px-4">
+                      <input
+                        type="text"
+                        value={u.sectorCode || ''}
+                        onChange={(e) => handleUpdateUser(u.id, { sectorCode: e.target.value.toUpperCase() || null })}
+                        placeholder="SETOR"
+                        className="w-full min-w-[120px] bg-white border border-slate-200 rounded-xl px-4 py-2 text-[10px] font-black uppercase tracking-widest text-slate-700 outline-none"
+                      />
                     </td>
                     <td className="py-6 px-4">
                       <button
@@ -871,12 +1155,12 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
               <div className="space-y-4">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">1. Selecione o Operador Destinatário</label>
                 <select
-                  value={selectedOperatorId}
-                  onChange={e => setSelectedOperatorId(e.target.value)}
+                  value={importOperatorId}
+                  onChange={e => setImportOperatorId(e.target.value)}
                   className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-[11px] uppercase outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
                 >
                   <option value="">Selecione um operador...</option>
-                  {users.filter(u => u.role === UserRole.OPERATOR || u.role === UserRole.SUPERVISOR).map(u => (
+                  {assignableUsers.map(u => (
                     <option key={u.id} value={u.id}>{u.name} (@{u.username})</option>
                   ))}
                 </select>
@@ -1148,7 +1432,47 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                     Esta chave é armazenada de forma segura e usada apenas pelo Backend (Edge Function).
                   </p>
                 </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">Janela Anti-Spam de ComunicaÃ§Ã£o</label>
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={communicationBlockDays}
+                      onChange={e => setCommunicationBlockDays(e.target.value)}
+                      className="w-32 p-4 bg-white border border-slate-200 rounded-2xl font-bold text-slate-700 outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
+                    />
+                    <span className="text-xs font-bold text-slate-500">dia(s) para bloquear novas ligaÃ§Ãµes e repiques do mesmo cliente</span>
+                  </div>
+                  <p className="text-[9px] text-slate-400 pl-2">
+                    Valor `0` desativa a trava anti-spam. O padrÃ£o recomendado Ã© `3`.
+                  </p>
+                </div>
               </form>
+            </div>
+
+            <div className="p-8 bg-slate-50 border border-slate-200 rounded-[32px] space-y-6">
+              <div className="flex items-start gap-4">
+                <div className="p-3 bg-amber-100 text-amber-600 rounded-xl">
+                  <Calendar size={24} />
+                </div>
+                <div className="flex-1">
+                  <h4 className="text-lg font-black text-slate-800">Limpeza de Agendamentos Duplicados</h4>
+                  <p className="text-xs text-slate-500 font-medium mt-1">
+                    Remove agendamentos ativos duplicados do mesmo cliente no mesmo dia e preserva apenas o primeiro registro vÃ¡lido.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleCleanupDuplicateSchedules}
+                    disabled={isProcessing}
+                    className="mt-6 px-8 py-3 bg-amber-600 text-white rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-lg hover:bg-amber-500 transition-all disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <Calendar size={16} />}
+                    Remover Agendamentos Duplicados
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div className="p-8 bg-slate-50 border border-slate-200 rounded-[32px] space-y-6 mt-8">
@@ -1192,6 +1516,11 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
               <select value={userData.role} onChange={e => setUserData({ ...userData, role: e.target.value as UserRole })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-[10px] uppercase">
                 {Object.values(UserRole).map(role => <option key={role} value={role}>{role}</option>)}
               </select>
+              <select value={userData.teamId} onChange={e => setUserData({ ...userData, teamId: e.target.value })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-[10px] uppercase">
+                <option value="">Sem time</option>
+                {teams.filter(team => team.active).map(team => <option key={team.id} value={team.id}>{team.name}</option>)}
+              </select>
+              <input type="text" placeholder="Codigo do setor" value={userData.sectorCode} onChange={e => setUserData({ ...userData, sectorCode: e.target.value.toUpperCase() })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold uppercase" />
               <button type="submit" className="w-full py-6 bg-slate-900 text-white rounded-[32px] font-black uppercase tracking-widest text-[10px]">Criar Usuário</button>
             </form>
           </div>
@@ -1233,8 +1562,8 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                 <input type="date" required value={scheduleDate.date} onChange={e => setScheduleDate({ ...scheduleDate, date: e.target.value })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" />
               </div>
               <div className="space-y-2">
-                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">Horário</label>
-                <input type="time" required value={scheduleDate.time} onChange={e => setScheduleDate({ ...scheduleDate, time: e.target.value })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" />
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">Horário (opcional)</label>
+                <input type="time" value={scheduleDate.time} onChange={e => setScheduleDate({ ...scheduleDate, time: e.target.value })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" />
               </div>
               <button type="submit" disabled={isProcessing} className="w-full py-6 bg-blue-600 text-white rounded-[32px] font-black uppercase tracking-widest text-[10px] flex items-center justify-center gap-2">
                 {isProcessing ? <Loader2 className="animate-spin" /> : <Clock size={16} />} Confirmar Agendamento
@@ -1280,6 +1609,59 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+
+          <div className="p-8 bg-emerald-50/60 rounded-3xl border border-emerald-100 space-y-6">
+            <div>
+              <h4 className="font-black text-slate-800 flex items-center gap-2"><MessageCircle size={18} className="text-emerald-600" /> Reparar Telefones Concatenados</h4>
+              <p className="text-xs text-slate-500 font-medium mt-1">Rastreia cadastros com telefone primario/secundario colados, consolida os clientes corretos e limpa os reflexos na fila.</p>
+            </div>
+            <button onClick={handleRepairWhatsAppDuplicates} disabled={isProcessing} className="px-6 py-3 bg-emerald-600 text-white rounded-xl font-black uppercase tracking-widest text-[10px] shadow-lg flex items-center gap-2 transition-all active:scale-95">
+              {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <MessageCircle size={16} />} Corrigir Cadastros Concatenados
+            </button>
+
+            {whatsAppRepairReport && (
+              <div className="space-y-4 max-h-[520px] overflow-y-auto custom-scrollbar mt-6 pt-6 border-t border-emerald-100">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                  <div className="bg-white rounded-2xl border border-emerald-100 p-4">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Clientes lidos</p>
+                    <p className="text-xl font-black text-slate-800 mt-1">{whatsAppRepairReport.scannedClients}</p>
+                  </div>
+                  <div className="bg-white rounded-2xl border border-emerald-100 p-4">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Suspeitos</p>
+                    <p className="text-xl font-black text-slate-800 mt-1">{whatsAppRepairReport.suspectClients}</p>
+                  </div>
+                  <div className="bg-white rounded-2xl border border-emerald-100 p-4">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Corrigidos</p>
+                    <p className="text-xl font-black text-slate-800 mt-1">{whatsAppRepairReport.repairedClients}</p>
+                  </div>
+                  <div className="bg-white rounded-2xl border border-emerald-100 p-4">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Mesclagens</p>
+                    <p className="text-xl font-black text-slate-800 mt-1">{whatsAppRepairReport.mergedClients}</p>
+                  </div>
+                  <div className="bg-white rounded-2xl border border-emerald-100 p-4">
+                    <p className="text-[9px] font-black uppercase text-slate-400">Tasks remapeadas</p>
+                    <p className="text-xl font-black text-slate-800 mt-1">{whatsAppRepairReport.remappedWhatsAppTasks}</p>
+                  </div>
+                </div>
+
+                {whatsAppRepairReport.repairs?.length > 0 && (
+                  <div className="space-y-3">
+                    {whatsAppRepairReport.repairs.map((repair: any) => (
+                      <div key={repair.malformedClientId} className="p-5 bg-white border border-slate-200 rounded-[24px] space-y-2">
+                        <p className="font-black text-sm text-slate-800">{repair.malformedName} <span className="text-emerald-600">→</span> {repair.keeperName}</p>
+                        <p className="text-[10px] font-bold uppercase text-slate-400">Telefone colado</p>
+                        <p className="text-xs font-bold text-slate-600">{repair.malformedPhone || 'N/D'}</p>
+                        <p className="text-[10px] font-bold uppercase text-slate-400">Telefones recuperados</p>
+                        <p className="text-xs font-bold text-slate-600">{(repair.normalizedPhones || []).join(' | ') || 'N/D'}</p>
+                        <p className="text-[10px] font-bold uppercase text-slate-400">Tasks migradas</p>
+                        <p className="text-xs font-bold text-slate-600">{repair.migratedTasks}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1377,6 +1759,16 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
               <span className="font-bold text-sm">Selecionados</span>
             </div>
             <div className="flex items-center gap-3">
+              {activeTab === 'tasks' && (
+                <button
+                  onClick={handleTransferSelectedTasks}
+                  disabled={isProcessing}
+                  className="flex items-center gap-2 hover:text-emerald-200 transition-colors font-bold text-sm uppercase tracking-wider disabled:opacity-50"
+                >
+                  {taskFilterChannel === 'VOICE' ? <MessageCircle size={18} /> : <Phone size={18} />}
+                  {taskFilterChannel === 'VOICE' ? 'Mover para WhatsApp' : 'Mover para Ligacao'}
+                </button>
+              )}
               <button
                 onClick={() => setIsRepiqueModalOpen(true)}
                 className="flex items-center gap-2 hover:text-blue-200 transition-colors font-bold text-sm uppercase tracking-wider"
@@ -1414,7 +1806,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
               customerId: t.clientId,
               requestedByOperatorId: user.id,
               assignedOperatorId: t.assignedTo || user.id,
-              scheduledFor: `${data.date}T${data.time}:00`,
+              scheduledFor: buildScheduledForValue(data.date, data.time),
               callType: t.type,
               status: 'PENDENTE_APROVACAO' as ScheduleStatus, // Force approval
               scheduleReason: data.reason,
@@ -1444,7 +1836,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
             alert('Repique solicitado com sucesso! Aguardando aprovação.');
           } catch (error) {
             console.error(error);
-            alert('Erro ao processar repique.');
+            alert(`Erro ao processar repique: ${(error as any)?.message || 'Falha desconhecida.'}`);
           } finally {
             setIsProcessingRepique(false);
           }
@@ -1481,12 +1873,12 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
               <div className="space-y-4">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">2. Reatribuir Operador (Opcional)</label>
                 <select
-                  value={selectedOperatorId}
-                  onChange={e => setSelectedOperatorId(e.target.value)}
+                  value={typeEditOperatorId}
+                  onChange={e => setTypeEditOperatorId(e.target.value)}
                   className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-[11px] uppercase outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
                 >
                   <option value="">Manter atual...</option>
-                  {users.filter(u => u.role === UserRole.OPERATOR || u.role === UserRole.SUPERVISOR).map(u => (
+                  {assignableUsers.map(u => (
                     <option key={u.id} value={u.id}>{u.name} (@{u.username})</option>
                   ))}
                 </select>
@@ -1507,6 +1899,14 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
               <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-2">Gestão de intenções e ferramentas avançadas Dreon Skill v3.</p>
             </div>
             <div className="flex gap-4">
+              <button
+                onClick={handleRebuildClientTags}
+                disabled={isProcessing}
+                className="px-6 py-3 bg-slate-900 text-white rounded-xl font-black uppercase text-[10px] shadow-lg hover:bg-slate-800 transition-all flex items-center gap-2 disabled:opacity-50"
+              >
+                {isProcessing ? <Loader2 className="animate-spin" size={16} /> : <RotateCcw size={16} />}
+                Reprocessar Tags dos Clientes
+              </button>
               <button 
                 onClick={() => setIsCampaignPlannerOpen(true)}
                 className="px-6 py-3 bg-blue-600 text-white rounded-xl font-black uppercase text-[10px] shadow-lg shadow-blue-500/20 hover:bg-blue-700 transition-all flex items-center gap-2"
@@ -1561,3 +1961,4 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
 };
 
 export default Admin;
+

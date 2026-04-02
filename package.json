@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview --port 3000"
+    "preview": "vite preview --port 3000",
+    "fix:secondary-phones": "node scripts/audit_secondary_phones.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.96.0",

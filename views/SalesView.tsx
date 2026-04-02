@@ -3,12 +3,23 @@ import React from 'react';
 import {
     ShoppingBag, Plus, Search, Truck, CheckCircle2,
     MapPin, Tag, X, Save, Loader2, Hash, Zap,
-    TrendingUp, DollarSign, BarChart3, Receipt, Check,
+    TrendingUp, DollarSign, BarChart3, Check,
     Clock, Filter, Edit2, Trash2, AlertCircle
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { Sale, SaleCategory, SaleChannel, SaleStatus, User as UserType, UserRole } from '../types';
 import { CurrencyInput } from '../components/CurrencyInput';
+
+type SaleFormState = {
+    saleNumber: string;
+    clientName: string;
+    clientId: string;
+    address: string;
+    externalSalesperson: string;
+    category: SaleCategory;
+    channel: SaleChannel;
+    value: number | string;
+};
 
 const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
     const [sales, setSales] = React.useState<Sale[]>([]);
@@ -36,11 +47,12 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
     const [channelFilter, setChannelFilter] = React.useState('');
     const [operatorFilter, setOperatorFilter] = React.useState('');
 
-    const [newSale, setNewSale] = React.useState({
+    const [newSale, setNewSale] = React.useState<SaleFormState>({
         saleNumber: '',
         clientName: '',
         clientId: '', // New field
         address: '',
+        externalSalesperson: '',
         category: SaleCategory.QUIMICOS,
         channel: SaleChannel.WHATSAPP,
         value: ''
@@ -48,20 +60,34 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
 
     const loadData = React.useCallback(async () => {
         setIsLoading(true);
-        try {
-            const [allSales, allUsers, allClients] = await Promise.all([
-                dataService.getSales(),
-                dataService.getUsers(),
-                dataService.getClients()
-            ]);
-            setSales(allSales);
-            setOperators(allUsers);
-            setClients(allClients);
-        } catch (e) {
-            console.error("Erro ao carregar vendas:", e);
-        } finally {
-            setIsLoading(false);
+        const [salesResult, usersResult, clientsResult] = await Promise.allSettled([
+            dataService.getSales(),
+            dataService.getUsers(),
+            dataService.getClients(true)
+        ]);
+
+        if (salesResult.status === 'fulfilled') {
+            setSales(salesResult.value);
+        } else {
+            console.error("Erro ao carregar vendas:", salesResult.reason);
+            setSales([]);
         }
+
+        if (usersResult.status === 'fulfilled') {
+            setOperators(usersResult.value);
+        } else {
+            console.error("Erro ao carregar operadores:", usersResult.reason);
+            setOperators([]);
+        }
+
+        if (clientsResult.status === 'fulfilled') {
+            setClients(clientsResult.value);
+        } else {
+            console.error("Erro ao carregar clientes de apoio:", clientsResult.reason);
+            setClients([]);
+        }
+
+        setIsLoading(false);
     }, []);
 
     React.useEffect(() => { loadData(); }, [loadData]);
@@ -104,6 +130,7 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
             const saleData = {
                 ...newSale,
                 clientId: finalClientId,
+                externalSalesperson: newSale.externalSalesperson.trim(),
                 value: isNaN(saleValue) ? 0 : saleValue,
                 operatorId: editingSaleId ? undefined : user.id // Maintain original operator on edit
             };
@@ -123,6 +150,7 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
                 clientName: '',
                 clientId: '',
                 address: '',
+                externalSalesperson: '',
                 category: SaleCategory.QUIMICOS,
                 channel: SaleChannel.WHATSAPP,
                 value: ''
@@ -142,6 +170,7 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
             clientName: sale.clientName,
             clientId: sale.clientId || '',
             address: sale.address,
+            externalSalesperson: sale.externalSalesperson || '',
             category: sale.category,
             channel: sale.channel,
             value: String(sale.value)
@@ -249,6 +278,14 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
         return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
     };
 
+    const getSaleResponsibleLabel = (sale: Sale) => {
+        if (sale.externalSalesperson?.trim()) return sale.externalSalesperson.trim();
+        const operator = operators.find(o => o.id === sale.operatorId);
+        if (operator?.username) return `@${operator.username}`;
+        if (operator?.name) return operator.name;
+        return 'Venda Externa';
+    };
+
     const calculateGapDays = (start: string, end: string) => {
         const diffTime = Math.abs(new Date(end).getTime() - new Date(start).getTime());
         const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
@@ -281,6 +318,7 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
                             clientName: '',
                             clientId: '',
                             address: '',
+                            externalSalesperson: '',
                             category: SaleCategory.QUIMICOS,
                             channel: SaleChannel.WHATSAPP,
                             value: ''
@@ -466,7 +504,7 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
                                 <div className="flex flex-col items-center md:items-end gap-4 shrink-0 w-full md:w-auto">
                                     <div className="text-center md:text-right">
                                         <p className={`text-[9px] font-black uppercase tracking-widest ${isPendente ? 'text-slate-400' : 'text-emerald-400'}`}>Indicado por</p>
-                                        <p className={`font-bold text-sm ${isPendente ? 'text-slate-700' : 'text-emerald-700'}`}>@{operators.find(o => o.id === sale.operatorId)?.username || 'Venda Externa'}</p>
+                                        <p className={`font-bold text-sm ${isPendente ? 'text-slate-700' : 'text-emerald-700'}`}>{getSaleResponsibleLabel(sale)}</p>
 
                                         {/* ADMIN CONTROLS */}
                                         {user.role === UserRole.ADMIN && (
@@ -591,6 +629,17 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
                                             {Object.values(SaleChannel).map(c => <option key={c} value={c}>{c}</option>)}
                                         </select>
                                     </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Vendedor Responsável</label>
+                                    <input
+                                        type="text"
+                                        value={newSale.externalSalesperson}
+                                        onChange={e => setNewSale({ ...newSale, externalSalesperson: e.target.value })}
+                                        className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-bold outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
+                                        placeholder="Ex: Stefani, Jessica, Vendedor Externo..."
+                                    />
                                 </div>
 
                                 <div className="space-y-2 relative">

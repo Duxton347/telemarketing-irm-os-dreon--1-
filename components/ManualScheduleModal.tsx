@@ -4,6 +4,7 @@ import { X, Calendar, User, Phone, Search, Loader2, Save, Plus } from 'lucide-re
 import { dataService } from '../services/dataService';
 import { Client, CallType, User as AppUser, UserRole } from '../types';
 import { normalizePhone } from '../lib/supabase';
+import { getTaskAssignableUsers } from '../utils/taskAssignment';
 
 interface ManualScheduleModalProps {
     onClose: () => void;
@@ -36,9 +37,14 @@ export const ManualScheduleModal: React.FC<ManualScheduleModalProps> = ({ onClos
     useEffect(() => {
         // Load Operators
         dataService.getUsers().then(users => {
-            setOperators(users.filter(u => u.role === UserRole.OPERATOR || u.role === UserRole.SUPERVISOR));
+            const assignableUsers = getTaskAssignableUsers(users);
+            setOperators(assignableUsers);
+            setScheduleForm(prev => ({
+                ...prev,
+                operatorId: prev.operatorId || assignableUsers.find(operator => operator.id === user.id)?.id || assignableUsers[0]?.id || ''
+            }));
         });
-    }, []);
+    }, [user.id]);
 
     useEffect(() => {
         // Debounced search
@@ -48,11 +54,12 @@ export const ManualScheduleModal: React.FC<ManualScheduleModalProps> = ({ onClos
                 return;
             }
             try {
-                const allClients = await dataService.getClients(); // In real app, this should be a search query
+                const allClients = await dataService.getClients(true); // Include LEADs in manual scheduling search
                 const lowerTerm = searchTerm.toLowerCase();
                 const filtered = allClients.filter(c =>
                     c.name.toLowerCase().includes(lowerTerm) ||
-                    c.phone.includes(searchTerm)
+                    c.phone.includes(searchTerm) ||
+                    (c.phone_secondary || '').includes(searchTerm)
                 ).slice(0, 5);
                 setSearchResults(filtered);
             } catch (error) {
@@ -128,13 +135,13 @@ export const ManualScheduleModal: React.FC<ManualScheduleModalProps> = ({ onClos
                     {step === 'client' ? (
                         <div className="space-y-6">
                             <div>
-                                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Buscar Cliente</label>
+                                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Buscar Cliente ou Lead</label>
                                 <div className="relative">
                                     <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                                     <input
                                         type="text"
                                         className="w-full pl-12 pr-4 py-3 bg-slate-50 rounded-xl font-bold text-slate-700 outline-none focus:ring-2 focus:ring-orange-500/20"
-                                        placeholder="Nome ou Telefone..."
+                                        placeholder="Nome, telefone ou lead..."
                                         value={searchTerm}
                                         onChange={e => {
                                             setSearchTerm(e.target.value);

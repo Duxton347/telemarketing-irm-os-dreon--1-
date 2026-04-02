@@ -1,5 +1,6 @@
 
 import React from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
    Search, User, Plus, X,
    History, UserCheck, Clock, CheckCircle2,
@@ -16,6 +17,7 @@ import { PROTOCOL_SLA } from '../constants';
 const Protocols: React.FC<{ user: UserType }> = ({ user }) => {
    if (!user || !user.id) return <div className="p-20 text-center font-black uppercase text-slate-300 animate-pulse">Autenticando sessão...</div>;
 
+   const [searchParams, setSearchParams] = useSearchParams();
    const [protocols, setProtocols] = React.useState<Protocol[]>([]);
    const [clients, setClients] = React.useState<Client[]>([]);
    const [operators, setOperators] = React.useState<UserType[]>([]);
@@ -43,6 +45,7 @@ const Protocols: React.FC<{ user: UserType }> = ({ user }) => {
    const [newOwnerId, setNewOwnerId] = React.useState('');
    const [rejectProtocol, setRejectProtocol] = React.useState<Protocol | null>(null);
    const [rejectReason, setRejectReason] = React.useState('');
+   const focusedProtocolId = searchParams.get('protocolId');
 
    const config = dataService.getProtocolConfig();
 
@@ -92,6 +95,28 @@ const Protocols: React.FC<{ user: UserType }> = ({ user }) => {
          setResolutionResponses({});
       }
    }, [selectedProtocol]);
+
+   React.useEffect(() => {
+      if (!focusedProtocolId || protocols.length === 0) return;
+      const targetProtocol = protocols.find(protocol => protocol.id === focusedProtocolId);
+      if (targetProtocol) {
+         setSelectedProtocol(targetProtocol);
+      }
+   }, [focusedProtocolId, protocols]);
+
+   const openProtocol = React.useCallback((protocol: Protocol) => {
+      setSelectedProtocol(protocol);
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.set('protocolId', protocol.id);
+      setSearchParams(nextParams, { replace: true });
+   }, [searchParams, setSearchParams]);
+
+   const closeProtocol = React.useCallback(() => {
+      setSelectedProtocol(null);
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete('protocolId');
+      setSearchParams(nextParams, { replace: true });
+   }, [searchParams, setSearchParams]);
 
    const handleCreateProtocol = async (e: React.FormEvent) => {
       e.preventDefault();
@@ -165,7 +190,12 @@ const Protocols: React.FC<{ user: UserType }> = ({ user }) => {
          await loadData();
          if (selectedProtocol?.id === pId) {
             const updated = await dataService.getProtocols();
-            setSelectedProtocol(updated.find(up => up.id === pId) || null);
+            const refreshedProtocol = updated.find(up => up.id === pId) || null;
+            if (refreshedProtocol) {
+               openProtocol(refreshedProtocol);
+            } else {
+               closeProtocol();
+            }
          }
          alert("Status atualizado!");
       } catch (e) { alert("Erro ao atualizar."); }
@@ -193,7 +223,7 @@ const Protocols: React.FC<{ user: UserType }> = ({ user }) => {
          await dataService.updateProtocol(reassignTarget.id, { ownerOperatorId: newOwnerId }, user.id, `Chamado reatribuído para o operador: ${targetOp?.name}`);
          await loadData();
          setReassignTarget(null);
-         setSelectedProtocol(null);
+         closeProtocol();
          alert("Protocolo reatribuído com sucesso!");
       } catch (e) { alert("Erro ao reatribuir."); }
       finally { setIsProcessing(false); }
@@ -204,7 +234,7 @@ const Protocols: React.FC<{ user: UserType }> = ({ user }) => {
       try {
          await dataService.updateProtocol(pId, { status: ProtocolStatus.FECHADO, closedAt: new Date().toISOString() }, user.id, "Resolução APROVADA pelo gestor. Protocolo arquivado.");
          await loadData();
-         setSelectedProtocol(null);
+         closeProtocol();
          alert("Protocolo encerrado e salvo nos registros!");
       } catch (e) { alert("Erro ao aprovar."); }
       finally { setIsProcessing(false); }
@@ -403,7 +433,7 @@ const Protocols: React.FC<{ user: UserType }> = ({ user }) => {
                return (
                   <div
                      key={p.id}
-                     onClick={() => setSelectedProtocol(p)}
+                     onClick={() => openProtocol(p)}
                      className={`p-6 rounded-[32px] border-2 transition-all flex flex-col md:flex-row gap-6 items-center cursor-pointer ${cardClass}`}
                   >
                      <div className="flex-1 space-y-2 w-full">
@@ -550,7 +580,7 @@ const Protocols: React.FC<{ user: UserType }> = ({ user }) => {
                         </div>
                         <h3 className="text-3xl font-black mt-2 tracking-tighter uppercase leading-tight">{selectedProtocol.title}</h3>
                      </div>
-                     <button onClick={() => setSelectedProtocol(null)} className="p-3 hover:bg-white/10 rounded-full transition-all active:scale-90"><X size={28} /></button>
+                     <button onClick={closeProtocol} className="p-3 hover:bg-white/10 rounded-full transition-all active:scale-90"><X size={28} /></button>
                   </div>
 
                   <div className="flex-1 overflow-y-auto p-10 grid grid-cols-1 md:grid-cols-12 gap-10 custom-scrollbar">
@@ -732,7 +762,7 @@ const Protocols: React.FC<{ user: UserType }> = ({ user }) => {
                            setRejectProtocol(null);
                            setRejectReason('');
                            await loadData();
-                           setSelectedProtocol(null);
+                           closeProtocol();
                            alert("Protocolo devolvido para correção.");
                         } catch (e) { alert("Erro ao rejeitar."); }
                         finally { setIsProcessing(false); }
