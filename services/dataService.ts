@@ -2257,6 +2257,243 @@ const normalizeTaskTemplateAssignConfigForClient = (assignConfig?: Record<string
   return Object.keys(normalized).length > 0 ? normalized : (Object.keys(raw).length > 0 ? raw : null);
 };
 
+type RecurringTargetDescriptor = {
+  assignedTo: string | null;
+  userIds: string[];
+  assignMode: TaskTemplate['assignMode'];
+  assignConfig: Record<string, any> | null;
+  visibilityScope: TaskInstance['visibilityScope'];
+  isShared: boolean;
+  targetKey: string;
+};
+
+const OPEN_TASK_INSTANCE_STATUSES = new Set<TaskInstance['status']>(['PENDENTE', 'EM_ANDAMENTO', 'AGUARDANDO', 'ATRASADO']);
+
+const stableStringify = (value: any): string => {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${key}:${stableStringify(value[key])}`).join(',')}}`;
+  }
+
+  return JSON.stringify(value ?? null);
+};
+
+const formatLocalDayKey = (value?: string | Date | null) => {
+  if (!value) return '';
+  const date = value instanceof Date ? value : new Date(value);
+
+  if (Number.isNaN(date.getTime())) return '';
+
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
+
+const parseLocalDayKey = (dayKey: string) => {
+  const [year, month, day] = dayKey.split('-').map(value => Number.parseInt(value, 10));
+  return new Date(year, (month || 1) - 1, day || 1);
+};
+
+const shiftLocalDayKey = (dayKey: string, offsetDays: number) => {
+  const date = parseLocalDayKey(dayKey);
+  date.setDate(date.getDate() + offsetDays);
+  return formatLocalDayKey(date);
+};
+
+const normalizeTaskDueTime = (value?: string | null) => {
+  const rawValue = getSafeText(value);
+  return rawValue && /^\d{2}:\d{2}$/.test(rawValue) ? rawValue : '09:00';
+};
+
+const buildLocalDateTimeIso = (dayKey: string, dueTime?: string | null) => (
+  new Date(`${dayKey}T${normalizeTaskDueTime(dueTime)}:00`).toISOString()
+);
+
+const getTaskInstanceReferenceDayKey = (task: Pick<TaskInstance, 'dueAt' | 'metadata' | 'createdAt'>) => {
+  const metadata = task.metadata || {};
+  const referenceDay = getSafeText(metadata.referenceDate || metadata.reference_date);
+  return referenceDay || formatLocalDayKey(task.dueAt || task.createdAt);
+};
+
+const getTaskInstanceAssignMode = (task: Pick<TaskInstance, 'metadata' | 'template'>): TaskTemplate['assignMode'] => (
+  (task.metadata?.assignMode || task.metadata?.assign_mode || task.template?.assignMode || 'SPECIFIC') as TaskTemplate['assignMode']
+);
+
+const getTaskInstanceAssignConfig = (task: Pick<TaskInstance, 'metadata' | 'template'>) => (
+  normalizeTaskTemplateAssignConfigForClient(
+    task.metadata?.assignConfig
+    || task.metadata?.assign_config
+    || task.template?.assignConfig
+    || null
+  )
+);
+
+const getTaskScopeLabelFromInstance = (task: Pick<TaskInstance, 'assignedTo' | 'assignedBy' | 'visibilityScope' | 'metadata' | 'template'>) => (
+  (task.metadata?.taskScope
+    || task.metadata?.task_scope
+    || task.template?.taskScope
+    || ((task.assignedTo && task.assignedBy && task.assignedTo !== task.assignedBy) ? 'SETOR' : (task.visibilityScope === 'PRIVATE' ? 'PESSOAL' : 'SETOR'))) as TaskTemplate['taskScope']
+);
+
+const buildTaskVisibilityScope = (
+  taskScope: TaskTemplate['taskScope'],
+  assignMode: TaskTemplate['assignMode']
+): TaskInstance['visibilityScope'] => (
+  taskScope === 'PESSOAL'
+    ? 'PRIVATE'
+    : (assignMode === 'SPECIFIC'
+      ? 'PRIVATE'
+      : (assignMode === 'TEAM' ? 'TEAM' : 'SECTOR'))
+);
+
+const isTaskInstanceOpen = (task: Pick<TaskInstance, 'status'>) => OPEN_TASK_INSTANCE_STATUSES.has(task.status);
+
+const buildRecurringTargetKey = (
+  assignMode: TaskTemplate['assignMode'],
+  assignConfig?: Record<string, any> | null,
+  assignedTo?: string | null
+) => {
+  if (assignMode === 'SPECIFIC') {
+    return `SPECIFIC:${assignedTo || ''}`;
+  }
+
+  return `SHARED:${assignMode}:${stableStringify(normalizeTaskTemplateAssignConfigForStorage(assignMode, assignConfig) || null)}`;
+};
+
+const buildRecurringTargetDescriptors = async (template: TaskTemplate): Promise<RecurringTargetDescriptor[]> => {
+  const assignConfig = normalizeTaskTemplateAssignConfigForClient(template.assignConfig);
+  const resolvedAssignedIds = await resolveTargetProfileIds({
+    assignMode: template.assignMode,
+    assignConfig
+  });
+
+  if (template.assignMode === 'SPECIFIC') {
+    return resolvedAssignedIds.map(assignedTo => ({
+      assignedTo,
+      userIds: [assignedTo],
+      assignMode: template.assignMode,
+      assignConfig,
+      visibilityScope: buildTaskVisibilityScope(template.taskScope, template.assignMode),
+      isShared: false,
+      targetKey: buildRecurringTargetKey(template.assignMode, assignConfig, assignedTo)
+    }));
+  }
+
+  return [{
+    assignedTo: null,
+    userIds: resolvedAssignedIds,
+    assignMode: template.assignMode,
+    assignConfig,
+    visibilityScope: buildTaskVisibilityScope(template.taskScope, template.assignMode),
+    isShared: true,
+    targetKey: buildRecurringTargetKey(template.assignMode, assignConfig, null)
+  }];
+};
+
+const taskMatchesRecurringTarget = (task: TaskInstance, descriptor: RecurringTargetDescriptor) => {
+  const assignMode = getTaskInstanceAssignMode(task);
+  const assignConfig = getTaskInstanceAssignConfig(task);
+  const targetKey = buildRecurringTargetKey(assignMode, assignConfig, assignMode === 'SPECIFIC' ? (task.assignedTo || null) : null);
+  return targetKey === descriptor.targetKey;
+};
+
+const matchesTaskRecurrenceForDay = (template: TaskTemplate, dayKey: string) => {
+  const anchorKey = getSafeText(template.recurrenceConfig?.start_date) || formatLocalDayKey(template.createdAt);
+  if (!anchorKey || !dayKey || dayKey < anchorKey) return false;
+
+  const date = parseLocalDayKey(dayKey);
+  const anchorDate = parseLocalDayKey(anchorKey);
+  const isoDay = date.getDay() === 0 ? 7 : date.getDay();
+
+  switch (template.recurrenceType) {
+    case 'DAILY':
+      return true;
+    case 'WEEKDAYS':
+      return isoDay >= 1 && isoDay <= 5;
+    case 'WEEKLY': {
+      const configuredWeekdays = Array.isArray(template.recurrenceConfig?.weekdays)
+        ? template.recurrenceConfig?.weekdays.map((value: string) => String(value).trim().toUpperCase()).filter(Boolean)
+        : [];
+      if (configuredWeekdays.length === 0) {
+        return isoDay === (anchorDate.getDay() === 0 ? 7 : anchorDate.getDay());
+      }
+      const shortWeekday = String(date.toLocaleDateString('en-US', { weekday: 'short' })).trim().toUpperCase();
+      return configuredWeekdays.includes(shortWeekday);
+    }
+    case 'MONTHLY': {
+      const configuredDay = Number.parseInt(String(template.recurrenceConfig?.day_of_month || ''), 10);
+      const dayOfMonth = Number.isFinite(configuredDay) && configuredDay > 0 ? configuredDay : anchorDate.getDate();
+      return date.getDate() === dayOfMonth;
+    }
+    default:
+      return false;
+  }
+};
+
+const getRelevantRecurringDayKey = (
+  template: TaskTemplate,
+  referenceDate: Date,
+  horizonDays: number
+) => {
+  const referenceDayKey = formatLocalDayKey(referenceDate);
+  const anchorKey = getSafeText(template.recurrenceConfig?.start_date) || formatLocalDayKey(template.createdAt);
+  const historyStartKey = shiftLocalDayKey(referenceDayKey, -62);
+  const startKey = anchorKey > historyStartKey ? anchorKey : historyStartKey;
+  const futureEndKey = shiftLocalDayKey(referenceDayKey, Math.max(horizonDays, 1));
+  let latestMatch: string | null = null;
+  let nextMatch: string | null = null;
+
+  for (let cursor = startKey; cursor <= futureEndKey; cursor = shiftLocalDayKey(cursor, 1)) {
+    if (!matchesTaskRecurrenceForDay(template, cursor)) continue;
+
+    if (cursor <= referenceDayKey) {
+      latestMatch = cursor;
+      continue;
+    }
+
+    nextMatch = cursor;
+    break;
+  }
+
+  return latestMatch || nextMatch;
+};
+
+const scoreRecurringCanonicalCandidate = (task: TaskInstance, preferSharedRow: boolean) => (
+  (new Date(task.dueAt || task.createdAt).getTime() || 0) * 10
+  + Number(preferSharedRow && !task.assignedTo) * 5
+  + Number(task.status === 'EM_ANDAMENTO') * 2
+  + Number(task.status === 'ATRASADO')
+);
+
+const buildSharedTaskGroupKey = (task: Pick<TaskInstance, 'templateId' | 'sourceType' | 'title' | 'description' | 'category' | 'dueAt' | 'metadata' | 'assignedBy' | 'visibilityScope' | 'assignedTo' | 'template' | 'createdAt'>) => {
+  const assignMode = getTaskInstanceAssignMode(task);
+  if (assignMode === 'SPECIFIC') return null;
+
+  const metadata = task.metadata || {};
+  const listId = getSafeText(metadata.taskListId || metadata.list_id);
+
+  return stableStringify({
+    templateId: task.templateId || null,
+    sourceType: task.sourceType,
+    title: task.title,
+    description: task.description || '',
+    category: task.category,
+    dueDate: formatLocalDayKey(task.dueAt || null),
+    referenceDate: getTaskInstanceReferenceDayKey({
+      dueAt: task.dueAt,
+      metadata,
+      createdAt: task.createdAt
+    }),
+    listId: listId || null,
+    assignedBy: task.assignedBy || null,
+    assignMode,
+    assignConfig: getTaskInstanceAssignConfig(task),
+    taskScope: getTaskScopeLabelFromInstance(task),
+    visibilityScope: task.visibilityScope
+  });
+};
+
 const mapTaskTemplateRecord = (template: any): TaskTemplate => ({
   id: template.id,
   title: template.title,
@@ -2373,6 +2610,27 @@ const isMissingSchemaResourceError = (error: any, resourceNames: string[] = []) 
     || message.includes('could not find the function')
     || message.includes('does not exist')
   );
+};
+
+const insertTaskActivityLogs = async (logs: Array<Partial<TaskActivityLog>>) => {
+  const payload = logs
+    .filter(log => log.taskInstanceId && log.action)
+    .map(log => ({
+      task_instance_id: log.taskInstanceId,
+      action: log.action,
+      actor_id: log.actorId || null,
+      old_value: log.oldValue || null,
+      new_value: log.newValue || null,
+      note: log.note || null
+    }));
+
+  if (payload.length === 0) return;
+
+  const { error } = await supabase.from('task_activity_logs').insert(payload);
+  if (error) {
+    if (isMissingSchemaResourceError(error, ['task_activity_logs'])) return;
+    throw error;
+  }
 };
 
 const normalizePersistedTaskTemplateConfigs = async (): Promise<void> => {
@@ -6224,17 +6482,256 @@ export const dataService = {
 
   syncTaskRecurringInstances: async (referenceDate?: string, horizonDays: number = 14): Promise<any> => {
     await normalizePersistedTaskTemplateConfigs();
+    const normalizedReferenceDate = referenceDate || new Date().toISOString();
+    const safeHorizonDays = Math.max(Number.isFinite(horizonDays) ? horizonDays : 14, 1);
+    const reference = new Date(normalizedReferenceDate);
 
-    const { data, error } = await supabase.rpc('sync_task_recurring_instances', {
-      p_reference: referenceDate || new Date().toISOString(),
-      p_horizon_days: horizonDays
+    const { data: templateRows, error: templatesError } = await supabase
+      .from('task_templates')
+      .select('*')
+      .eq('is_active', true)
+      .neq('recurrence_type', 'NONE');
+
+    if (templatesError) {
+      if (isMissingSchemaResourceError(templatesError, ['task_templates'])) return null;
+      throw templatesError;
+    }
+
+    const templates = (templateRows || []).map(mapTaskTemplateRecord);
+    if (templates.length === 0) {
+      return { created: 0, archived: 0, updated: 0 };
+    }
+
+    const templateIds = templates.map(template => template.id);
+    const { data: instanceRows, error: instancesError } = await supabase
+      .from('task_instances')
+      .select('*, task_templates(*)')
+      .in('template_id', templateIds)
+      .not('status', 'eq', 'ARQUIVADO');
+
+    if (instancesError) {
+      if (isMissingSchemaResourceError(instancesError, ['task_instances'])) return null;
+      throw instancesError;
+    }
+
+    const instancesByTemplate = new Map<string, TaskInstance[]>();
+    (instanceRows || []).map(mapTaskInstanceRecord).forEach(task => {
+      const group = instancesByTemplate.get(task.templateId || '') || [];
+      group.push(task);
+      instancesByTemplate.set(task.templateId || '', group);
     });
 
-    if (error) {
-      if (isMissingSchemaResourceError(error, ['sync_task_recurring_instances'])) return null;
-      throw error;
+    let createdCount = 0;
+    let archivedCount = 0;
+    let updatedCount = 0;
+
+    for (const template of templates) {
+      const targetDescriptors = await buildRecurringTargetDescriptors(template);
+      if (targetDescriptors.length === 0) continue;
+
+      let templateInstances = instancesByTemplate.get(template.id) || [];
+
+      for (const descriptor of targetDescriptors) {
+        let matchingInstances = templateInstances.filter(task => taskMatchesRecurringTarget(task, descriptor));
+        let openInstances = matchingInstances.filter(task => isTaskInstanceOpen(task));
+
+        if (!template.isAccumulative && openInstances.length > 1) {
+          const canonicalTask = [...openInstances]
+            .sort((left, right) => scoreRecurringCanonicalCandidate(right, descriptor.isShared) - scoreRecurringCanonicalCandidate(left, descriptor.isShared))[0];
+          const duplicateOpenTasks = openInstances.filter(task => task.id !== canonicalTask.id);
+
+          if (duplicateOpenTasks.length > 0) {
+            const duplicateIds = duplicateOpenTasks.map(task => task.id);
+            const { error: archiveDuplicatesError } = await supabase
+              .from('task_instances')
+              .update({ status: 'ARQUIVADO' })
+              .in('id', duplicateIds);
+
+            if (archiveDuplicatesError) throw archiveDuplicatesError;
+
+            await insertTaskActivityLogs(duplicateOpenTasks.map(task => ({
+              taskInstanceId: task.id,
+              action: 'AUTO_ARCHIVED_BY_RECURRENCE',
+              actorId: template.createdBy || null,
+              note: 'Instancia recorrente duplicada arquivada para manter apenas uma tarefa ativa.',
+              newValue: {
+                status: 'ARQUIVADO',
+                consolidatedInto: canonicalTask.id
+              }
+            })));
+
+            archivedCount += duplicateOpenTasks.length;
+            templateInstances = templateInstances.map(task => (
+              duplicateIds.includes(task.id)
+                ? { ...task, status: 'ARQUIVADO' }
+                : task
+            ));
+            matchingInstances = templateInstances.filter(task => taskMatchesRecurringTarget(task, descriptor) && task.status !== 'ARQUIVADO');
+            openInstances = matchingInstances.filter(task => isTaskInstanceOpen(task));
+          }
+        }
+
+        if (!template.isAccumulative && openInstances.length > 0) {
+          const canonicalTask = [...openInstances]
+            .sort((left, right) => scoreRecurringCanonicalCandidate(right, descriptor.isShared) - scoreRecurringCanonicalCandidate(left, descriptor.isShared))[0];
+
+          if (descriptor.isShared && (canonicalTask.assignedTo || canonicalTask.visibilityScope !== descriptor.visibilityScope)) {
+            const healedMetadata = {
+              ...(canonicalTask.metadata || {}),
+              generatedFromTemplate: true,
+              generated_from_template: true,
+              taskScope: template.taskScope,
+              task_scope: template.taskScope,
+              assignMode: descriptor.assignMode,
+              assign_mode: descriptor.assignMode,
+              assignConfig: descriptor.assignConfig,
+              assign_config: normalizeTaskTemplateAssignConfigForStorage(descriptor.assignMode, descriptor.assignConfig),
+              referenceDate: getTaskInstanceReferenceDayKey(canonicalTask),
+              reference_date: getTaskInstanceReferenceDayKey(canonicalTask),
+              reminderAt: getSafeText(template.recurrenceConfig?.reminderAt) || null,
+              taskListId: getSafeText(template.recurrenceConfig?.taskListId) || null,
+              taskListName: getSafeText(template.recurrenceConfig?.taskListName) || null,
+              inMyDay: Boolean(template.recurrenceConfig?.inMyDay),
+              isImportant: Boolean(template.recurrenceConfig?.isImportant),
+              explicitDueTime: Boolean(template.recurrenceConfig?.explicitDueTime || template.defaultDueTime)
+            };
+
+            const { data: healedRow, error: healError } = await supabase
+              .from('task_instances')
+              .update({
+                assigned_to: null,
+                visibility_scope: descriptor.visibilityScope,
+                metadata: healedMetadata
+              })
+              .eq('id', canonicalTask.id)
+              .select('*, task_templates(*)')
+              .single();
+
+            if (healError) throw healError;
+
+            const healedTask = mapTaskInstanceRecord(healedRow);
+            templateInstances = templateInstances.map(task => task.id === healedTask.id ? healedTask : task);
+            updatedCount += 1;
+          }
+
+          continue;
+        }
+
+        const candidateDayKey = getRelevantRecurringDayKey(template, reference, safeHorizonDays);
+        if (!candidateDayKey) continue;
+
+        const existingCandidateTasks = matchingInstances.filter(task => getTaskInstanceReferenceDayKey(task) === candidateDayKey);
+        if (existingCandidateTasks.length > 0) {
+          continue;
+        }
+
+        const dueAt = buildLocalDateTimeIso(candidateDayKey, template.defaultDueTime);
+        const recurrenceMetadata = {
+          generatedFromTemplate: true,
+          generated_from_template: true,
+          taskScope: template.taskScope,
+          task_scope: template.taskScope,
+          assignMode: descriptor.assignMode,
+          assign_mode: descriptor.assignMode,
+          assignConfig: descriptor.assignConfig,
+          assign_config: normalizeTaskTemplateAssignConfigForStorage(descriptor.assignMode, descriptor.assignConfig),
+          referenceDate: candidateDayKey,
+          reference_date: candidateDayKey,
+          reminderAt: getSafeText(template.recurrenceConfig?.reminderAt) || null,
+          taskListId: getSafeText(template.recurrenceConfig?.taskListId) || null,
+          taskListName: getSafeText(template.recurrenceConfig?.taskListName) || null,
+          inMyDay: Boolean(template.recurrenceConfig?.inMyDay),
+          isImportant: Boolean(template.recurrenceConfig?.isImportant),
+          explicitDueTime: Boolean(template.recurrenceConfig?.explicitDueTime || template.defaultDueTime)
+        };
+        const recurrenceKey = `${template.id}:${descriptor.targetKey}:${candidateDayKey}`;
+
+        const { data: createdRow, error: createError } = await supabase
+          .from('task_instances')
+          .insert({
+            template_id: template.id,
+            source_type: 'TASK_INTERNAL',
+            source_id: null,
+            title: template.title,
+            description: template.description || null,
+            category: template.category,
+            assigned_to: descriptor.assignedTo,
+            assigned_by: template.createdBy || null,
+            visibility_scope: descriptor.visibilityScope,
+            priority: template.defaultPriority,
+            due_at: dueAt,
+            starts_at: dueAt,
+            status: new Date(dueAt).getTime() < reference.getTime() ? 'ATRASADO' : 'PENDENTE',
+            is_recurring_instance: true,
+            is_accumulated: template.isAccumulative,
+            metadata: recurrenceMetadata,
+            recurrence_key: recurrenceKey
+          })
+          .select('*, task_templates(*)')
+          .single();
+
+        if (createError) {
+          if (String(createError.code || '') === '23505') {
+            continue;
+          }
+          throw createError;
+        }
+
+        const createdTask = mapTaskInstanceRecord(createdRow);
+        templateInstances = [createdTask, ...templateInstances];
+        createdCount += 1;
+
+        await insertTaskActivityLogs([{
+          taskInstanceId: createdTask.id,
+          action: 'RECURRENCE_GENERATED',
+          actorId: template.createdBy || null,
+          note: 'Instancia recorrente gerada automaticamente.',
+          newValue: {
+            dueAt: createdTask.dueAt,
+            assignedTo: createdTask.assignedTo
+          }
+        }]);
+
+        const notifications: Array<Partial<UserNotification>> = [];
+        const recipientIds = Array.from(new Set(
+          (descriptor.isShared ? descriptor.userIds : [createdTask.assignedTo || '']).filter(Boolean)
+        ));
+
+        recipientIds.forEach(recipientId => {
+          if (recipientId && recipientId !== template.createdBy) {
+            notifications.push({
+              userId: recipientId,
+              type: 'TASK_ASSIGNED',
+              title: 'Nova tarefa recorrente',
+              body: createdTask.title,
+              relatedEntityType: 'task_instance',
+              relatedEntityId: createdTask.id
+            });
+          }
+        });
+
+        if (template.createdBy && recipientIds.some(recipientId => recipientId !== template.createdBy)) {
+          notifications.push({
+            userId: template.createdBy,
+            type: 'TASK_CREATED',
+            title: 'Recorrencia atualizada',
+            body: createdTask.title,
+            relatedEntityType: 'task_instance',
+            relatedEntityId: createdTask.id
+          });
+        }
+
+        await createUserNotifications(notifications);
+      }
+
+      instancesByTemplate.set(template.id, templateInstances.filter(task => task.status !== 'ARQUIVADO'));
     }
-    return data;
+
+    return {
+      created: createdCount,
+      archived: archivedCount,
+      updated: updatedCount
+    };
   },
 
   getTaskInstances: async (filters?: {
@@ -6319,21 +6816,39 @@ export const dataService = {
     requiresCommentOnCompletion?: boolean;
     templateId?: string | null;
   }): Promise<TaskInstance[]> => {
+    const providedAssignConfig = normalizeTaskTemplateAssignConfigForClient(params.assignConfig);
     const resolvedAssignedIds = params.assignedToIds && params.assignedToIds.length > 0
       ? params.assignedToIds
       : await resolveTargetProfileIds({
         assignMode: params.assignMode,
-        assignConfig: params.assignConfig
+        assignConfig: providedAssignConfig
       });
+    const createSharedTask = params.assignMode !== 'SPECIFIC';
+
+    if (!createSharedTask && resolvedAssignedIds.length === 0) {
+      throw new Error('Nao foi possivel identificar um responsavel valido para a tarefa.');
+    }
+
+    const normalizedAssignConfig = params.assignMode === 'SPECIFIC'
+      ? normalizeTaskTemplateAssignConfigForClient(
+        providedAssignConfig || { userIds: resolvedAssignedIds }
+      )
+      : providedAssignConfig;
 
     const visibilityScope = params.visibilityScope
-      || (params.taskScope === 'PESSOAL'
-        ? 'PRIVATE'
-        : (params.assignMode === 'SPECIFIC'
-          ? 'PRIVATE'
-          : (params.assignMode === 'TEAM' ? 'TEAM' : 'SECTOR')));
+      || buildTaskVisibilityScope(params.taskScope, params.assignMode);
 
-    const rows = (resolvedAssignedIds.length > 0 ? resolvedAssignedIds : [null]).map(assignedTo => ({
+    const baseMetadata = {
+      ...(params.metadata || {}),
+      requiresApproval: params.requiresApproval ?? false,
+      requiresCommentOnCompletion: params.requiresCommentOnCompletion ?? false,
+      taskScope: params.taskScope,
+      assignMode: params.assignMode,
+      assignConfig: normalizedAssignConfig
+    };
+
+    const assigneeIds = createSharedTask ? [null] : resolvedAssignedIds;
+    const rows = assigneeIds.map(assignedTo => ({
       template_id: params.templateId || null,
       source_type: 'TASK_INTERNAL',
       source_id: null,
@@ -6349,13 +6864,7 @@ export const dataService = {
       status: params.dueAt && new Date(params.dueAt).getTime() < Date.now() ? 'ATRASADO' : 'PENDENTE',
       is_recurring_instance: false,
       is_accumulated: false,
-      metadata: {
-        ...(params.metadata || {}),
-        requiresApproval: params.requiresApproval ?? false,
-        requiresCommentOnCompletion: params.requiresCommentOnCompletion ?? false,
-        taskScope: params.taskScope,
-        assignMode: params.assignMode
-      }
+      metadata: baseMetadata
     }));
 
     const { data, error } = await supabase
@@ -6386,18 +6895,22 @@ export const dataService = {
 
     const notifications: Array<Partial<UserNotification>> = [];
     const creatorId = params.assignedBy;
-    const createdForOtherUsers = createdTasks.some(task => task.assignedTo && task.assignedTo !== creatorId);
-    const createdForMultipleRecipients = new Set(createdTasks.map(task => task.assignedTo).filter(Boolean)).size > 1;
+    const recipientIds = Array.from(new Set(
+      (createSharedTask ? resolvedAssignedIds : createdTasks.map(task => task.assignedTo).filter(Boolean))
+        .filter(Boolean)
+    ));
+    const createdForOtherUsers = recipientIds.some(recipientId => recipientId !== creatorId);
+    const createdForMultipleRecipients = recipientIds.length > 1;
 
-    createdTasks.forEach(task => {
-      if (task.assignedTo && task.assignedTo !== creatorId) {
+    recipientIds.forEach(recipientId => {
+      if (recipientId && recipientId !== creatorId) {
         notifications.push({
-          userId: task.assignedTo,
+          userId: recipientId,
           type: 'TASK_ASSIGNED',
           title: 'Nova tarefa atribuida',
-          body: task.title,
+          body: params.title,
           relatedEntityType: 'task_instance',
-          relatedEntityId: task.id
+          relatedEntityId: createdTasks[0]?.id
         });
       }
     });
@@ -6432,6 +6945,7 @@ export const dataService = {
 
     if (existingError) throw existingError;
 
+    const existingMetadata = parseJsonValue(existing.metadata) || {};
     const payload: Record<string, any> = {};
     if (updates.title !== undefined) payload.title = updates.title;
     if (updates.description !== undefined) payload.description = updates.description;
@@ -6446,6 +6960,30 @@ export const dataService = {
     if (updates.status !== undefined) payload.status = updates.status;
     if (updates.completionNote !== undefined) payload.completion_note = updates.completionNote;
     if (updates.metadata !== undefined) payload.metadata = updates.metadata;
+
+    if (updates.assignedTo && updates.assignedTo !== existing.assigned_to) {
+      const nextTaskScope = (
+        existingMetadata.taskScope
+        || existingMetadata.task_scope
+        || ((existing.assigned_by && updates.assignedTo !== existing.assigned_by) ? 'SETOR' : 'PESSOAL')
+      ) as TaskTemplate['taskScope'];
+      const nextMetadata = {
+        ...existingMetadata,
+        ...(updates.metadata || {}),
+        taskScope: nextTaskScope,
+        assignMode: 'SPECIFIC',
+        assignConfig: {
+          userIds: [updates.assignedTo],
+          userId: updates.assignedTo
+        }
+      };
+
+      payload.metadata = nextMetadata;
+
+      if (updates.visibilityScope === undefined) {
+        payload.visibility_scope = 'PRIVATE';
+      }
+    }
 
     if (updates.dueAt !== undefined && updates.status === undefined) {
       const baseStatus = normalizeTaskInstanceStatus(existing.status, existing.due_at);
@@ -6522,14 +7060,117 @@ export const dataService = {
     }
 
     const nextStatus: TaskInstance['status'] = requiresApproval ? 'AGUARDANDO' : 'CONCLUIDO';
-    const completedTask = await dataService.updateTaskInstance(taskInstanceId, {
+    const completedAt = new Date().toISOString();
+    let completedTask = await dataService.updateTaskInstance(taskInstanceId, {
       status: nextStatus,
-      completedAt: new Date().toISOString(),
+      completedAt,
       completionNote: completionNote || null
     }, actorId, requiresApproval ? 'Tarefa concluida e enviada para aprovacao.' : 'Tarefa concluida.');
 
+    const completedAssignMode = getTaskInstanceAssignMode(completedTask);
+    const sharedTaskGroupKey = buildSharedTaskGroupKey(completedTask);
+
+    if (sharedTaskGroupKey) {
+      const canonicalMetadata = {
+        ...(completedTask.metadata || {}),
+        assignMode: completedAssignMode,
+        assignConfig: getTaskInstanceAssignConfig(completedTask),
+        taskScope: getTaskScopeLabelFromInstance(completedTask)
+      };
+      const canonicalVisibilityScope = buildTaskVisibilityScope(
+        getTaskScopeLabelFromInstance(completedTask),
+        completedAssignMode
+      );
+
+      if (completedTask.assignedTo || completedTask.visibilityScope !== canonicalVisibilityScope) {
+        const { data: canonicalRow, error: canonicalError } = await supabase
+          .from('task_instances')
+          .update({
+            assigned_to: null,
+            visibility_scope: canonicalVisibilityScope,
+            metadata: canonicalMetadata
+          })
+          .eq('id', completedTask.id)
+          .select(`
+            *,
+            assigned_profile:assigned_to(*, operation_teams(name)),
+            assigned_by_profile:assigned_by(*, operation_teams(name)),
+            task_templates(*)
+          `)
+          .single();
+
+        if (canonicalError) throw canonicalError;
+        completedTask = mapTaskInstanceRecord(canonicalRow);
+      }
+
+      let siblingsQuery = supabase
+        .from('task_instances')
+        .select(`
+          *,
+          assigned_profile:assigned_to(*, operation_teams(name)),
+          assigned_by_profile:assigned_by(*, operation_teams(name)),
+          task_templates(*)
+        `)
+        .neq('id', completedTask.id);
+
+      if (completedTask.templateId) {
+        siblingsQuery = siblingsQuery.eq('template_id', completedTask.templateId);
+      } else {
+        siblingsQuery = siblingsQuery
+          .eq('source_type', completedTask.sourceType)
+          .eq('title', completedTask.title)
+          .eq('category', completedTask.category)
+          .eq('assigned_by', completedTask.assignedBy || '');
+
+        if (completedTask.dueAt) {
+          const dayBounds = getLocalDayBounds(completedTask.dueAt);
+          siblingsQuery = siblingsQuery.gte('due_at', dayBounds.startIso).lte('due_at', dayBounds.endIso);
+        } else {
+          siblingsQuery = siblingsQuery.is('due_at', null);
+        }
+      }
+
+      const { data: siblingRows, error: siblingsError } = await siblingsQuery;
+      if (siblingsError && !isMissingSchemaResourceError(siblingsError, ['task_instances'])) {
+        throw siblingsError;
+      }
+
+      const siblingTasks = (siblingRows || []).map(mapTaskInstanceRecord)
+        .filter(task => buildSharedTaskGroupKey(task) === sharedTaskGroupKey)
+        .filter(task => task.status !== 'ARQUIVADO');
+
+      if (siblingTasks.length > 0) {
+        const siblingIds = siblingTasks.map(task => task.id);
+        const { error: archiveSiblingsError } = await supabase
+          .from('task_instances')
+          .update({
+            status: 'ARQUIVADO',
+            assigned_to: null,
+            visibility_scope: canonicalVisibilityScope,
+            metadata: canonicalMetadata
+          })
+          .in('id', siblingIds);
+
+        if (archiveSiblingsError) throw archiveSiblingsError;
+
+        await insertTaskActivityLogs(siblingTasks.map(task => ({
+          taskInstanceId: task.id,
+          action: 'SHARED_TASK_CONSOLIDATED',
+          actorId,
+          note: 'Instancia duplicada consolidada na conclusao compartilhada.',
+          newValue: {
+            status: 'ARQUIVADO',
+            consolidatedInto: completedTask.id
+          }
+        })));
+      }
+    }
+
     const managerIds = await getActiveManagerIds();
     const notifications: Array<Partial<UserNotification>> = [];
+    const recurringCreatorId = completedTask.isRecurringInstance
+      ? (template?.createdBy || completedTask.assignedBy || null)
+      : null;
 
     if (completedTask.assignedTo) {
       notifications.push({
@@ -6543,7 +7184,7 @@ export const dataService = {
     }
 
     managerIds
-      .filter(managerId => managerId !== actorId)
+      .filter(managerId => managerId !== actorId && managerId !== recurringCreatorId)
       .forEach(managerId => {
         notifications.push({
           userId: managerId,
@@ -6554,6 +7195,17 @@ export const dataService = {
           relatedEntityId: completedTask.id
         });
       });
+
+    if (recurringCreatorId && recurringCreatorId !== actorId) {
+      notifications.push({
+        userId: recurringCreatorId,
+        type: 'TASK_RECURRING_COMPLETED',
+        title: requiresApproval ? 'Recorrencia enviada para aprovacao' : 'Tarefa recorrente concluida',
+        body: completedTask.title,
+        relatedEntityType: 'task_instance',
+        relatedEntityId: completedTask.id
+      });
+    }
 
     await createUserNotifications(notifications);
 
@@ -6593,6 +7245,14 @@ export const dataService = {
 
     if (error) throw error;
 
+    const metadata = parseJsonValue(data.metadata) || {};
+    const assignMode = (metadata.assignMode || metadata.assign_mode || (data.assigned_to ? 'SPECIFIC' : 'ALL')) as TaskTemplate['assignMode'];
+    const assignConfig = normalizeTaskTemplateAssignConfigForClient(
+      metadata.assignConfig
+      || metadata.assign_config
+      || null
+    );
+
     return dataService.createInternalTasks({
       title: data.title,
       description: data.description,
@@ -6601,11 +7261,12 @@ export const dataService = {
       dueAt: data.due_at,
       startsAt: data.starts_at,
       assignedBy: actorId,
-      taskScope: (parseJsonValue(data.metadata)?.taskScope || 'PESSOAL') as TaskTemplate['taskScope'],
-      assignMode: 'SPECIFIC',
-      assignedToIds: data.assigned_to ? [data.assigned_to] : [],
+      taskScope: (metadata.taskScope || metadata.task_scope || 'PESSOAL') as TaskTemplate['taskScope'],
+      assignMode,
+      assignConfig,
+      assignedToIds: assignMode === 'SPECIFIC' && data.assigned_to ? [data.assigned_to] : [],
       visibilityScope: data.visibility_scope,
-      metadata: parseJsonValue(data.metadata)
+      metadata
     });
   },
 

@@ -5,6 +5,12 @@ import { supabase } from '../lib/supabase';
 import { dataService } from '../services/dataService';
 import { User, UserNotification } from '../types';
 import { publishAgendaRefresh } from '../utils/agendaEvents';
+import {
+  claimNotificationDisplay,
+  ensureNotificationServiceWorker,
+  requestBrowserNotificationPermission,
+  showBrowserNotification
+} from '../utils/browserNotifications';
 import { isSoundEnabled, playSoundEffect, setSoundEnabled } from '../utils/soundEffects';
 
 type ToastState = UserNotification & {
@@ -76,11 +82,8 @@ export const NotificationProvider: React.FC<{
   }, [loadNotifications]);
 
   React.useEffect(() => {
-    if (typeof window === 'undefined' || typeof Notification === 'undefined') return;
-
-    if (Notification.permission === 'default') {
-      Notification.requestPermission().catch(() => undefined);
-    }
+    void ensureNotificationServiceWorker();
+    void requestBrowserNotificationPermission();
   }, []);
 
   const enqueueToast = React.useCallback(async (notification: UserNotification) => {
@@ -94,11 +97,7 @@ export const NotificationProvider: React.FC<{
       await playSoundEffect(isCompletionNotification(notification.type) ? 'completed-task' : 'new-task');
     }
 
-    if (typeof window !== 'undefined' && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-      new Notification(notification.title, {
-        body: notification.body || 'Atualizacao operacional disponivel no sistema.'
-      });
-    }
+    await showBrowserNotification(notification);
   }, [soundEnabled]);
 
   React.useEffect(() => {
@@ -116,7 +115,7 @@ export const NotificationProvider: React.FC<{
           const notification = normalizeNotificationRow(payload.new);
           setNotifications(current => [notification, ...current]);
 
-          if (!createdToastIds.has(notification.id)) {
+          if (!createdToastIds.has(notification.id) && claimNotificationDisplay(notification.id)) {
             createdToastIds.add(notification.id);
             await enqueueToast(notification);
           }

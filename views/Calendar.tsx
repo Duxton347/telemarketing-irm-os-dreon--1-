@@ -18,10 +18,16 @@ import {
   TaskList,
   TaskPriority,
   TaskRecurrenceType,
-  User as AppUser,
-  UserRole
+  User as AppUser
 } from '../types';
 import { getTaskAssignableUsers } from '../utils/taskAssignment';
+import {
+  canUserSeeTaskInstance,
+  collapseSharedTaskCollection,
+  getTaskAssignMode,
+  getTaskScopeLabel,
+  isManagerUser
+} from '../utils/taskAccess';
 import { QuickAddTask } from '../components/tasks/QuickAddTask';
 import { TaskDetailsDrawer } from '../components/tasks/TaskDetailsDrawer';
 import { TaskFiltersBar } from '../components/tasks/TaskFiltersBar';
@@ -153,22 +159,8 @@ const storeActiveView = (userId: string, view: TaskManagerViewKey) => {
   }
 };
 
-const isManagerUser = (user: AppUser) => (
-  user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR
-);
-
 const isCompletedStatus = (status: TaskInstance['status']) => status === 'CONCLUIDO';
 const isDeletedStatus = (status: TaskInstance['status']) => status === 'CANCELADO' || status === 'ARQUIVADO';
-
-const canUserSeeTask = (task: TaskInstance, user: AppUser) => {
-  if (isManagerUser(user)) return true;
-  if (task.assignedTo === user.id) return true;
-  if (task.assignedBy === user.id) return true;
-  if (task.assignedTo && task.assignedTo !== user.id) return false;
-  if (task.visibilityScope === 'TEAM' && user.teamId && task.assignedUser?.teamId === user.teamId) return true;
-  if (task.visibilityScope === 'SECTOR' && user.sectorCode && task.assignedUser?.sectorCode === user.sectorCode) return true;
-  return false;
-};
 
 const buildQuickTaskDefaults = (activeView: TaskManagerViewKey, canAssignOthers: boolean): QuickTaskFormState => ({
   title: '',
@@ -196,10 +188,6 @@ const buildDateTimeIso = (date: string, time: string, fallbackTime: string): str
   return new Date(`${date}T${time || fallbackTime}:00`).toISOString();
 };
 
-const getTaskAssignMode = (task: Pick<TaskInstance, 'metadata' | 'template'>) => (
-  (task.metadata?.assignMode || task.template?.assignMode || 'SPECIFIC') as 'SPECIFIC' | 'ALL' | 'ROLE' | 'TEAM'
-);
-
 const buildTaskManagerTask = (
   task: TaskInstance,
   currentUser: AppUser,
@@ -208,9 +196,7 @@ const buildTaskManagerTask = (
   const metadata = task.metadata || {};
   const list = task.listId ? taskListsMap.get(task.listId) || null : null;
   const assignMode = getTaskAssignMode(task);
-  const taskScopeLabel = (metadata.taskScope
-    || task.template?.taskScope
-    || ((task.assignedTo && task.assignedBy && task.assignedTo !== task.assignedBy) ? 'SETOR' : (task.visibilityScope === 'PRIVATE' ? 'PESSOAL' : 'SETOR'))) as 'PESSOAL' | 'SETOR';
+  const taskScopeLabel = getTaskScopeLabel(task);
   const wasAssignedByOtherUser = Boolean(task.assignedTo === currentUser.id && task.assignedBy && task.assignedBy !== currentUser.id);
   const wasAssignedByCurrentUser = Boolean(task.assignedBy === currentUser.id && task.assignedTo && task.assignedTo !== currentUser.id);
   const isCompleted = isCompletedStatus(task.status);
@@ -274,7 +260,10 @@ const filterTasksByView = (
     case 'completed':
       return tasks.filter(task => task.isCompleted);
     case 'personal':
-      return tasks.filter(task => task.taskScopeLabel === 'PESSOAL' && !task.wasAssignedByOtherUser);
+      return tasks.filter(task =>
+        task.taskScopeLabel === 'PESSOAL'
+        && task.assignedTo === user.id
+      );
     case 'team':
       return tasks.filter(task => task.taskScopeLabel === 'SETOR' && getTaskAssignMode(task) !== 'SPECIFIC');
     case 'created-by-me':
@@ -428,10 +417,11 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
     }
   }, [activeView, taskLists]);
 
-  const visibleTasks = React.useMemo(
-    () => tasks.filter(task => canUserSeeTask(task, user)).map(task => buildTaskManagerTask(task, user, taskListsMap)),
-    [tasks, taskListsMap, user]
-  );
+  const visibleTasks = React.useMemo(() => {
+    const accessibleTasks = tasks.filter(task => canUserSeeTaskInstance(task, user));
+    const collapsedTasks = collapseSharedTaskCollection(accessibleTasks, user.id);
+    return collapsedTasks.map(task => buildTaskManagerTask(task, user, taskListsMap));
+  }, [tasks, taskListsMap, user]);
 
   const sidebarItems = React.useMemo<TaskSidebarItem[]>(() => {
     const smartIds: Array<Exclude<TaskManagerViewKey, `custom:${string}` | 'personal' | 'team' | 'created-by-me'>> = [

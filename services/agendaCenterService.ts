@@ -11,6 +11,11 @@ import {
   UserRole,
   Visit
 } from '../types';
+import {
+  canUserSeeTaskInstance,
+  collapseSharedTaskCollection,
+  getTaskScopeLabel
+} from '../utils/taskAccess';
 
 const ACTIVE_SCHEDULE_STATUSES = ['PENDENTE_APROVACAO', 'APROVADO', 'REPROGRAMADO'];
 const ACTIVE_INTERNAL_STATUSES = ['PENDENTE', 'EM_ANDAMENTO', 'AGUARDANDO', 'ATRASADO'];
@@ -107,17 +112,8 @@ const cleanRepickReason = (...candidates: Array<string | null | undefined>) => {
   return undefined;
 };
 
-const canSeeInternalTask = (task: TaskInstance, user: User) => {
-  if (isManager(user)) return true;
-  if (task.assignedTo === user.id) return true;
-  if (task.assignedTo) return false;
-  if (task.visibilityScope === 'TEAM' && user.teamId && task.assignedUser?.teamId === user.teamId) return true;
-  if (task.visibilityScope === 'SECTOR' && user.sectorCode && task.assignedUser?.sectorCode === user.sectorCode) return true;
-  return false;
-};
-
 const buildInternalTaskItem = (task: TaskInstance, user: User): AgendaCentralItem => {
-  const taskScope = (task.metadata?.taskScope || task.template?.taskScope || (task.visibilityScope === 'PRIVATE' ? 'PESSOAL' : 'SETOR')) as 'PESSOAL' | 'SETOR';
+  const taskScope = getTaskScopeLabel(task);
   const assignedByAnotherUser = Boolean(task.assignedTo && task.assignedBy && task.assignedBy !== task.assignedTo);
   const sourceType = assignedByAnotherUser
     ? 'DEMANDA_SETOR'
@@ -338,8 +334,7 @@ export const agendaCenterService = {
       dataService.getProtocols(),
       dataService.getVisits(),
       dataService.getTaskInstances({
-        includeArchived: false,
-        assignedTo: isManager(user) ? undefined : user.id
+        includeArchived: false
       }),
       dataService.getUsers(),
       dataService.getClients(true),
@@ -364,8 +359,11 @@ export const agendaCenterService = {
       managerView || visit.salespersonId === user.id
     );
 
-    const visibleInternalTasks = taskInstances.filter(task =>
-      VISIBLE_INTERNAL_TASK_STATUSES.includes(task.status) && canSeeInternalTask(task, user)
+    const visibleInternalTasks = collapseSharedTaskCollection(
+      taskInstances.filter(task =>
+        VISIBLE_INTERNAL_TASK_STATUSES.includes(task.status) && canUserSeeTaskInstance(task, user)
+      ),
+      user.id
     );
 
     const visibleQueueTasks = queueTasks.filter(task =>
