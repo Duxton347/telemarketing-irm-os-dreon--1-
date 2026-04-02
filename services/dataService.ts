@@ -841,6 +841,58 @@ const isMissingSchemaColumnError = (error: any, tableName: string, columnName: s
     );
 };
 
+type SchemaFallbackPayload = Record<string, any> | Array<Record<string, any>>;
+
+const payloadHasColumn = (payload: SchemaFallbackPayload, columnName: string) => {
+  if (Array.isArray(payload)) {
+    return payload.some(row => row && Object.prototype.hasOwnProperty.call(row, columnName));
+  }
+
+  return payload[columnName] !== undefined;
+};
+
+const removeColumnFromPayload = (payload: SchemaFallbackPayload, columnName: string): SchemaFallbackPayload => {
+  if (Array.isArray(payload)) {
+    return payload.map(row => {
+      if (!row || !Object.prototype.hasOwnProperty.call(row, columnName)) {
+        return row;
+      }
+
+      const { [columnName]: _removed, ...rest } = row;
+      return rest;
+    });
+  }
+
+  const { [columnName]: _removed, ...rest } = payload;
+  return rest;
+};
+
+const runWithMissingSchemaColumnFallback = async <TResult>(
+  tableName: string,
+  payload: SchemaFallbackPayload,
+  executor: (safePayload: SchemaFallbackPayload) => Promise<TResult>,
+  optionalColumns: string[] = []
+): Promise<TResult> => {
+  let safePayload = payload;
+  let result: any = await executor(safePayload);
+
+  while (result?.error) {
+    const missingColumn = optionalColumns.find(columnName =>
+      payloadHasColumn(safePayload, columnName)
+      && isMissingSchemaColumnError(result.error, tableName, columnName)
+    );
+
+    if (!missingColumn) {
+      break;
+    }
+
+    safePayload = removeColumnFromPayload(safePayload, missingColumn);
+    result = await executor(safePayload);
+  }
+
+  return result;
+};
+
 const removeUpdatedAt = <T extends Record<string, any>>(payload: T): Omit<T, 'updated_at'> => {
   const { updated_at, ...rest } = payload;
   return rest;
@@ -985,37 +1037,33 @@ const isUniqueViolationError = (error: any) => {
 const runUpdateWithUpdatedAtFallback = async <TResult>(
   tableName: string,
   payload: Record<string, any>,
-  updater: (safePayload: Record<string, any>) => Promise<TResult>
+  updater: (safePayload: Record<string, any>) => Promise<TResult>,
+  optionalColumns: string[] = ['updated_at']
 ): Promise<TResult> => {
-  let result: any = await updater(payload);
-
-  if (result?.error && payload.updated_at !== undefined && isMissingSchemaColumnError(result.error, tableName, 'updated_at')) {
-    result = await updater(removeUpdatedAt(payload));
-  }
-
-  return result;
+  return runWithMissingSchemaColumnFallback(
+    tableName,
+    payload,
+    async (safePayload) => updater(safePayload as Record<string, any>),
+    optionalColumns
+  );
 };
 
 const insertWhatsAppTaskRecord = async (payload: Record<string, any>) => {
-  let result = await supabase.from('whatsapp_tasks').insert(payload);
-
-  if (result.error && payload.proposito !== undefined && isMissingSchemaColumnError(result.error, 'whatsapp_tasks', 'proposito')) {
-    const { proposito, ...safePayload } = payload;
-    result = await supabase.from('whatsapp_tasks').insert(safePayload);
-  }
-
-  return result;
+  return runWithMissingSchemaColumnFallback(
+    'whatsapp_tasks',
+    payload,
+    async (safePayload) => supabase.from('whatsapp_tasks').insert(safePayload as Record<string, any>),
+    ['proposito']
+  );
 };
 
 const insertTaskRecord = async (payload: Record<string, any>) => {
-  let result = await supabase.from('tasks').insert(payload);
-
-  if (result.error && payload.proposito !== undefined && isMissingSchemaColumnError(result.error, 'tasks', 'proposito')) {
-    const { proposito, ...safePayload } = payload;
-    result = await supabase.from('tasks').insert(safePayload);
-  }
-
-  return result;
+  return runWithMissingSchemaColumnFallback(
+    'tasks',
+    payload,
+    async (safePayload) => supabase.from('tasks').insert(safePayload as Record<string, any>),
+    ['proposito', 'origin_call_id']
+  );
 };
 
 const parseLocationFromGoogleAddress = (rawAddress?: string) => {
@@ -2118,6 +2166,97 @@ const mapOperationTeamRecord = (team: any): OperationTeam => ({
   updatedAt: team.updated_at
 });
 
+const normalizeStringArray = (values: unknown[]): string[] => Array.from(new Set(
+  values
+    .map(value => getSafeText(value))
+    .filter(Boolean)
+));
+
+const extractTaskTemplateAssignConfigValues = (assignConfig?: Record<string, any> | null) => {
+  const parsedAssignConfig = (parseJsonValue(assignConfig) || assignConfig || {}) as Record<string, any>;
+
+  return {
+    raw: parsedAssignConfig,
+    userIds: normalizeStringArray([
+      ...(Array.isArray(parsedAssignConfig.userIds) ? parsedAssignConfig.userIds : []),
+      ...(Array.isArray(parsedAssignConfig.user_ids) ? parsedAssignConfig.user_ids : []),
+      parsedAssignConfig.userId,
+      parsedAssignConfig.user_id
+    ]),
+    roles: normalizeStringArray(Array.isArray(parsedAssignConfig.roles) ? parsedAssignConfig.roles : []),
+    teamIds: normalizeStringArray([
+      ...(Array.isArray(parsedAssignConfig.teamIds) ? parsedAssignConfig.teamIds : []),
+      ...(Array.isArray(parsedAssignConfig.team_ids) ? parsedAssignConfig.team_ids : []),
+      parsedAssignConfig.teamId,
+      parsedAssignConfig.team_id
+    ]),
+    sectorCodes: normalizeStringArray([
+      ...(Array.isArray(parsedAssignConfig.sectorCodes) ? parsedAssignConfig.sectorCodes : []),
+      ...(Array.isArray(parsedAssignConfig.sector_codes) ? parsedAssignConfig.sector_codes : []),
+      parsedAssignConfig.sectorCode,
+      parsedAssignConfig.sector_code
+    ])
+  };
+};
+
+const normalizeTaskTemplateAssignConfigForStorage = (
+  assignMode: TaskTemplate['assignMode'] = 'SPECIFIC',
+  assignConfig?: Record<string, any> | null
+) => {
+  const { userIds, roles, teamIds, sectorCodes } = extractTaskTemplateAssignConfigValues(assignConfig);
+
+  if (assignMode === 'SPECIFIC') {
+    if (userIds.length === 0) return null;
+    return {
+      user_ids: userIds,
+      user_id: userIds[0]
+    };
+  }
+
+  if (assignMode === 'ROLE') {
+    if (roles.length === 0) return null;
+    return {
+      roles
+    };
+  }
+
+  if (assignMode === 'TEAM') {
+    if (teamIds.length === 0 && sectorCodes.length === 0) return null;
+    return {
+      ...(teamIds.length > 0 ? { team_ids: teamIds, team_id: teamIds[0] } : {}),
+      ...(sectorCodes.length > 0 ? { sector_codes: sectorCodes, sector_code: sectorCodes[0] } : {})
+    };
+  }
+
+  return null;
+};
+
+const normalizeTaskTemplateAssignConfigForClient = (assignConfig?: Record<string, any> | null) => {
+  const { raw, userIds, roles, teamIds, sectorCodes } = extractTaskTemplateAssignConfigValues(assignConfig);
+  const normalized: Record<string, any> = {};
+
+  if (userIds.length > 0) {
+    normalized.userIds = userIds;
+    normalized.userId = userIds[0];
+  }
+
+  if (roles.length > 0) {
+    normalized.roles = roles;
+  }
+
+  if (teamIds.length > 0) {
+    normalized.teamIds = teamIds;
+    normalized.teamId = teamIds[0];
+  }
+
+  if (sectorCodes.length > 0) {
+    normalized.sectorCodes = sectorCodes;
+    normalized.sectorCode = sectorCodes[0];
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : (Object.keys(raw).length > 0 ? raw : null);
+};
+
 const mapTaskTemplateRecord = (template: any): TaskTemplate => ({
   id: template.id,
   title: template.title,
@@ -2135,7 +2274,7 @@ const mapTaskTemplateRecord = (template: any): TaskTemplate => ({
   createdBy: template.created_by,
   isActive: template.is_active ?? true,
   assignMode: template.assign_mode || 'SPECIFIC',
-  assignConfig: parseJsonValue(template.assign_config),
+  assignConfig: normalizeTaskTemplateAssignConfigForClient(parseJsonValue(template.assign_config)),
   createdAt: template.created_at,
   updatedAt: template.updated_at
 });
@@ -2234,6 +2373,40 @@ const isMissingSchemaResourceError = (error: any, resourceNames: string[] = []) 
     || message.includes('could not find the function')
     || message.includes('does not exist')
   );
+};
+
+const normalizePersistedTaskTemplateConfigs = async (): Promise<void> => {
+  try {
+    const { data, error } = await supabase
+      .from('task_templates')
+      .select('id, assign_mode, assign_config')
+      .eq('is_active', true)
+      .neq('recurrence_type', 'NONE');
+
+    if (error) throw error;
+
+    for (const template of data || []) {
+      const currentAssignConfig = parseJsonValue(template.assign_config);
+      const normalizedAssignConfig = normalizeTaskTemplateAssignConfigForStorage(
+        template.assign_mode || 'SPECIFIC',
+        currentAssignConfig
+      );
+
+      if (JSON.stringify(currentAssignConfig || null) === JSON.stringify(normalizedAssignConfig || null)) {
+        continue;
+      }
+
+      const { error: updateError } = await supabase
+        .from('task_templates')
+        .update({ assign_config: normalizedAssignConfig })
+        .eq('id', template.id);
+
+      if (updateError) throw updateError;
+    }
+  } catch (error) {
+    if (isMissingSchemaResourceError(error, ['task_templates'])) return;
+    throw error;
+  }
 };
 
 const listAssignableProfileRecords = async (includeInactive: boolean = true) => {
@@ -2339,7 +2512,8 @@ const resolveTargetProfileIds = async (params: {
   assignMode: TaskTemplate['assignMode'];
   assignConfig?: Record<string, any> | null;
 }) => {
-  const { assignMode, assignConfig } = params;
+  const { assignMode } = params;
+  const assignConfig = normalizeTaskTemplateAssignConfigForClient(params.assignConfig);
   const profiles = await listAssignableProfileRecords(false);
 
   if (assignMode === 'SPECIFIC') {
@@ -2537,9 +2711,8 @@ export const dataService = {
     const dbCallType = CALL_TYPE_DB_MAP[rawType] || CALL_TYPE_DB_MAP[rawType.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/-/g, '_')] || 'VENDA';
     console.log('🔍 [createScheduleRequest] rawType:', JSON.stringify(rawType), '→ dbCallType:', JSON.stringify(dbCallType));
 
-    const { data, error } = await supabase.from('call_schedules').insert({
+    const scheduleInsertPayload: Record<string, any> = {
       customer_id: schedule.customerId || null,
-      origin_call_id: schedule.originCallId || null,
       requested_by_operator_id: schedule.requestedByOperatorId,
       assigned_operator_id: schedule.assignedOperatorId,
       scheduled_for: schedule.scheduledFor,
@@ -2551,7 +2724,18 @@ export const dataService = {
       whatsapp_sent: schedule.whatsappSent ?? false,
       whatsapp_note: schedule.whatsappNote || null,
       has_repick: schedule.hasRepick ?? false
-    }).select('id').single();
+    };
+
+    if (schedule.originCallId !== undefined) {
+      scheduleInsertPayload.origin_call_id = schedule.originCallId;
+    }
+
+    const { data, error } = await runWithMissingSchemaColumnFallback(
+      'call_schedules',
+      scheduleInsertPayload,
+      async (safePayload) => supabase.from('call_schedules').insert(safePayload as Record<string, any>).select('id').single(),
+      ['origin_call_id']
+    );
     if (error) throw error;
 
     const scheduleType = schedule.hasRepick || schedule.skipReason ? 'REPIQUE' : 'AGENDAMENTO';
@@ -2587,13 +2771,11 @@ export const dataService = {
     const mapType = (t: string) => {
       return CALL_TYPE_DB_MAP[t] || CALL_TYPE_DB_MAP[t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/-/g, '_')] || 'VENDA';
     };
-    const { data, error } = await supabase.from('call_schedules').insert(
-      schedules.map(s => {
+    const scheduleBatchPayload = schedules.map(s => {
         const reason = s.scheduleReason || '';
 
-        return {
+        const payload: Record<string, any> = {
           customer_id: s.customerId || null,
-          origin_call_id: s.originCallId || null,
           requested_by_operator_id: s.requestedByOperatorId,
           assigned_operator_id: s.assignedOperatorId,
           scheduled_for: s.scheduledFor,
@@ -2606,8 +2788,23 @@ export const dataService = {
           whatsapp_note: s.whatsappNote || null,
           has_repick: s.hasRepick ?? false
         };
-      })
-    ).select('id, assigned_operator_id, schedule_reason, has_repick, skip_reason');
+
+        if (s.originCallId !== undefined) {
+          payload.origin_call_id = s.originCallId;
+        }
+
+        return payload;
+      });
+
+    const { data, error } = await runWithMissingSchemaColumnFallback(
+      'call_schedules',
+      scheduleBatchPayload,
+      async (safePayload) => supabase
+        .from('call_schedules')
+        .insert(safePayload as Record<string, any>[])
+        .select('id, assigned_operator_id, schedule_reason, has_repick, skip_reason'),
+      ['origin_call_id']
+    );
     if (error) throw error;
 
     const managerIds = await getActiveManagerIds();
@@ -3178,7 +3375,8 @@ export const dataService = {
         const { error: updateError } = await runUpdateWithUpdatedAtFallback(
           'tasks',
           { ...payload, updated_at: new Date().toISOString() },
-          async (safePayload) => await supabase.from('tasks').update(safePayload).eq('id', existingTask.id)
+          async (safePayload) => await supabase.from('tasks').update(safePayload).eq('id', existingTask.id),
+          ['updated_at', 'proposito']
         );
         if (updateError) throw updateError;
       }
@@ -3205,17 +3403,22 @@ export const dataService = {
       }
     }
 
-    const { error } = await insertTaskRecord({
+    const taskInsertPayload: Record<string, any> = {
       client_id: task.clientId,
       type: dbType,
       assigned_to: normalizedAssignedTo,
       status,
-      origin_call_id: task.originCallId || null,
       scheduled_for: task.scheduledFor,
       schedule_reason: task.scheduleReason,
       proposito: task.proposito,
       campanha_id: normalizedCampaignId
-    });
+    };
+
+    if (task.originCallId !== undefined) {
+      taskInsertPayload.origin_call_id = task.originCallId;
+    }
+
+    const { error } = await insertTaskRecord(taskInsertPayload);
 
     if (error) {
       if (status === 'pending' && isUniqueViolationError(error)) {
@@ -3248,7 +3451,8 @@ export const dataService = {
     const { data: updatedTasks, error: tError } = await runUpdateWithUpdatedAtFallback(
       'tasks',
       payload,
-      async (safePayload) => await supabase.from('tasks').update(safePayload).eq('id', taskId).select('id')
+      async (safePayload) => await supabase.from('tasks').update(safePayload).eq('id', taskId).select('id'),
+      ['updated_at', 'origin_call_id']
     );
     if (tError) throw tError;
     const count = updatedTasks?.length || 0;
@@ -3271,7 +3475,8 @@ export const dataService = {
          const { error: schedError } = await runUpdateWithUpdatedAtFallback(
            'call_schedules',
            schedulePayload,
-           async (safePayload) => await supabase.from('call_schedules').update(safePayload).eq('id', taskId)
+           async (safePayload) => await supabase.from('call_schedules').update(safePayload).eq('id', taskId),
+           ['updated_at', 'origin_call_id']
          );
          if (schedError) throw schedError;
        }
@@ -5984,6 +6189,11 @@ export const dataService = {
   },
 
   saveTaskTemplate: async (template: Partial<TaskTemplate>): Promise<TaskTemplate> => {
+    const normalizedAssignConfig = normalizeTaskTemplateAssignConfigForStorage(
+      template.assignMode || 'SPECIFIC',
+      template.assignConfig
+    );
+
     const payload = {
       title: template.title,
       description: template.description || null,
@@ -6000,7 +6210,7 @@ export const dataService = {
       created_by: template.createdBy || null,
       is_active: template.isActive ?? true,
       assign_mode: template.assignMode || 'SPECIFIC',
-      assign_config: template.assignConfig || null
+      assign_config: normalizedAssignConfig
     };
 
     const query = template.id
@@ -6013,6 +6223,8 @@ export const dataService = {
   },
 
   syncTaskRecurringInstances: async (referenceDate?: string, horizonDays: number = 14): Promise<any> => {
+    await normalizePersistedTaskTemplateConfigs();
+
     const { data, error } = await supabase.rpc('sync_task_recurring_instances', {
       p_reference: referenceDate || new Date().toISOString(),
       p_horizon_days: horizonDays
