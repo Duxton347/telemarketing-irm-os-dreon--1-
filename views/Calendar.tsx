@@ -740,7 +740,7 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
         await dataService.completeTaskInstance(task.id, user.id, completionNote || undefined);
       }
 
-      await refreshAfterMutation(task.id);
+      await refreshAfterMutation();
     } catch (error: any) {
       console.error('Erro ao alterar conclusao da tarefa.', error);
       alert(error?.message || 'Nao foi possivel atualizar essa tarefa agora.');
@@ -755,7 +755,7 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
           isImportant: !task.isImportant
         }
       }, user.id, 'Importancia da tarefa atualizada.');
-      await refreshAfterMutation(task.id);
+      await refreshAfterMutation();
     } catch (error: any) {
       console.error('Erro ao atualizar importancia.', error);
       alert(error?.message || 'Nao foi possivel atualizar a importancia agora.');
@@ -770,7 +770,7 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
           inMyDay: !task.inMyDay
         }
       }, user.id, 'Marcador Meu dia atualizado.');
-      await refreshAfterMutation(task.id);
+      await refreshAfterMutation();
     } catch (error: any) {
       console.error('Erro ao atualizar Meu dia.', error);
       alert(error?.message || 'Nao foi possivel atualizar Meu dia agora.');
@@ -780,7 +780,7 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
   const handleDuplicateTask = async (task: TaskManagerTask) => {
     try {
       await dataService.duplicateTaskInstance(task.id, user.id);
-      await refreshAfterMutation(task.id);
+      await refreshAfterMutation();
     } catch (error: any) {
       console.error('Erro ao duplicar tarefa.', error);
       alert(error?.message || 'Nao foi possivel duplicar a tarefa agora.');
@@ -793,7 +793,7 @@ const Calendar: React.FC<CalendarProps> = ({ user }) => {
 
     try {
       await dataService.cancelTaskInstance(task.id, user.id, 'Tarefa removida pela interface de tarefas.');
-      await refreshAfterMutation(task.id);
+      await refreshAfterMutation();
     } catch (error: any) {
       console.error('Erro ao excluir tarefa.', error);
       alert(error?.message || 'Nao foi possivel excluir a tarefa agora.');
