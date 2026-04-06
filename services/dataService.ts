@@ -4,10 +4,11 @@ import {
   UserRole, CallType, ProtocolStatus, ProtocolEvent,
   OperatorEventType, OperatorEvent, Sale, SaleStatus, Visit,
   CallSchedule, CallScheduleWithClient, ScheduleStatus, WhatsAppTask, ProductivityMetrics,
-  UnifiedReportRow, Protocol, ClientTag, TagStatus, Quote
+  UnifiedReportRow, Protocol, ClientTag, TagStatus, Quote, TaskBrowserAlert, TaskAlertChannel
 } from '../types';
 import { TagDecisionEngine } from './tagDecisionEngine';
 import { SCORE_MAP, STAGE_CONFIG } from '../constants';
+import { buildTaskAlertNote, parseTaskAlertNote, TASK_ALERT_PREFIX } from '../utils/taskAlerts';
 
 const normalize = (str: string) =>
   str ? str.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, "") : "";
@@ -1056,7 +1057,50 @@ export const dataService = {
     return [...mappedSchedules, ...validLegacyTasks];
   },
 
+  sendTaskBrowserAlert: async (payload: {
+    operatorId: string;
+    taskId?: string;
+    channel: TaskAlertChannel;
+    clientName: string;
+    taskType?: string;
+    senderName: string;
+  }): Promise<void> => {
+    const { error } = await supabase.from('operator_events').insert({
+      operator_id: payload.operatorId,
+      event_type: OperatorEventType.ADMIN_AGENDAR,
+      task_id: null,
+      note: buildTaskAlertNote({
+        channel: payload.channel,
+        taskId: payload.taskId,
+        clientName: payload.clientName,
+        taskType: payload.taskType,
+        senderName: payload.senderName,
+        message: `${payload.senderName} avisou sobre a tarefa pendente de ${payload.clientName}.`
+      })
+    });
 
+    if (error) throw error;
+  },
+
+  getTaskBrowserAlerts: async (operatorId: string): Promise<TaskBrowserAlert[]> => {
+    const since = new Date(Date.now() - 1000 * 60 * 60 * 48).toISOString();
+
+    const { data, error } = await supabase
+      .from('operator_events')
+      .select('id, operator_id, note, timestamp')
+      .eq('operator_id', operatorId)
+      .eq('event_type', OperatorEventType.ADMIN_AGENDAR)
+      .like('note', `${TASK_ALERT_PREFIX}%`)
+      .gte('timestamp', since)
+      .order('timestamp', { ascending: false })
+      .limit(20);
+
+    if (error) throw error;
+
+    return (data || [])
+      .map(event => parseTaskAlertNote(event.note, event))
+      .filter((event): event is TaskBrowserAlert => Boolean(event));
+  },
 
   logOperatorEvent: async (operatorId: string, type: OperatorEventType, taskId?: string, note?: string) => {
     const { error } = await supabase.from('operator_events').insert({

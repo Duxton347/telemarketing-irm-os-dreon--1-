@@ -123,6 +123,21 @@ export interface OperatorEvent {
   note?: string;
 }
 
+export type TaskAlertChannel = 'VOICE' | 'WHATSAPP';
+
+export interface TaskBrowserAlert {
+  id: string;
+  operatorId: string;
+  taskId?: string;
+  channel: TaskAlertChannel;
+  clientName: string;
+  taskType?: string;
+  senderName: string;
+  message: string;
+  route: '/queue' | '/whatsapp';
+  timestamp: string;
+}
+
 export interface Interaction {
   id: string;
   type: string;

@@ -5,7 +5,7 @@ import {
   Upload, Users, FileSpreadsheet, X, UserPlus, CheckCircle2,
   Loader2, Info, AlertCircle, Clock, Database, Trash2, Save,
   MessageSquarePlus, ChevronUp, ChevronDown, Trash, Edit3, RotateCcw,
-  PhoneOff, RefreshCw, ListFilter, Plus, UserCheck, UserMinus, Phone, PlayCircle, ChevronRight, LayoutList, Eraser, Sparkles, BarChart3, MessageCircle, Settings, Search, AlertTriangle, Calendar
+  PhoneOff, RefreshCw, ListFilter, Plus, UserCheck, UserMinus, Phone, PlayCircle, ChevronRight, LayoutList, Eraser, Sparkles, BarChart3, MessageCircle, Settings, Search, AlertTriangle, Calendar, Bell
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { User, UserRole, CallType, Question, Task, ScheduleStatus, ProductivityMetrics, WhatsAppTask, ClientTag, Campanha } from '../types';
@@ -45,6 +45,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   const [csvPreview, setCsvPreview] = React.useState<any[]>([]);
   const [isProcessing, setIsProcessing] = React.useState(false);
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
+  const [notifyingTaskId, setNotifyingTaskId] = React.useState<string | null>(null);
   const [isUserModalOpen, setIsUserModalOpen] = React.useState(false);
   const [isQuestionModalOpen, setIsQuestionModalOpen] = React.useState(false);
   const [isTaskModalOpen, setIsTaskModalOpen] = React.useState(false);
@@ -361,6 +362,36 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
     setIsTaskModalOpen(true);
   };
 
+  const handleNotifyTask = async (task: any) => {
+    const operatorId = task.assignedTo || task.assigned_to;
+
+    if (!operatorId) {
+      alert('Essa tarefa ainda nao possui operador atribuido.');
+      return;
+    }
+
+    setNotifyingTaskId(task.id);
+
+    try {
+      await dataService.sendTaskBrowserAlert({
+        operatorId,
+        taskId: task.id,
+        channel: taskFilterChannel === 'WHATSAPP' ? 'WHATSAPP' : 'VOICE',
+        clientName: task.client?.name || task.clientName || 'Cliente pendente',
+        taskType: task.type,
+        senderName: user?.name || 'Supervisor'
+      });
+
+      const operatorName = task.operator?.name || task.operator?.username || 'o operador';
+      alert(`Aviso enviado para ${operatorName}.`);
+    } catch (e: any) {
+      console.error('Erro ao enviar aviso de tarefa:', e);
+      alert(`Erro ao enviar aviso: ${e?.message || 'Falha desconhecida.'}`);
+    } finally {
+      setNotifyingTaskId(null);
+    }
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -605,7 +636,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
           <div className="flex flex-col lg:flex-row justify-between items-start gap-4">
             <div>
               <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">Gerenciar Fila Ativa</h3>
-              <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-2">Remova duplicatas ou limpe a fila inteira de um operador.</p>
+              <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-2">Remova duplicatas, limpe a fila ou use o sino para avisar o navegador do operador.</p>
             </div>
             <div className="flex flex-wrap gap-4">
               <button
@@ -723,6 +754,14 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                     </td>
 
                     <td className="py-5 px-4 text-right">
+                      <button
+                        onClick={() => handleNotifyTask(task)}
+                        disabled={notifyingTaskId === task.id}
+                        className="w-10 h-10 inline-flex items-center justify-center bg-amber-100 text-amber-600 rounded-2xl hover:bg-amber-200 transition-all active:scale-95 mr-2 disabled:opacity-50"
+                        title="Avisar operador no navegador"
+                      >
+                        {notifyingTaskId === task.id ? <Loader2 className="animate-spin" size={16} /> : <Bell size={16} />}
+                      </button>
                       <button
                         onClick={() => openRescheduleModal(task)}
                         className="w-12 h-12 inline-flex items-center justify-center bg-blue-100 text-blue-600 rounded-2xl hover:bg-blue-200 transition-all active:scale-95 mr-2"

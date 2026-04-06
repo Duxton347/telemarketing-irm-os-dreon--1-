@@ -22,9 +22,11 @@ import {
   FileUp,
   Sparkles,
   FileText,
-  Database
+  Database,
+  BellRing
 } from 'lucide-react';
 import { UserRole } from '../types';
+import { dataService } from '../services/dataService';
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -36,6 +38,118 @@ const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false);
   const location = useLocation();
   const navigate = useNavigate();
+  const notificationsSupported = typeof window !== 'undefined' && 'Notification' in window;
+  const [notificationPermission, setNotificationPermission] = React.useState<NotificationPermission | 'unsupported'>(
+    notificationsSupported ? Notification.permission : 'unsupported'
+  );
+  const [isEnablingNotifications, setIsEnablingNotifications] = React.useState(false);
+  const seenAlertsRef = React.useRef<Set<string>>(new Set());
+  const seenAlertsStorageKey = React.useMemo(
+    () => `dreon_seen_task_alerts_${user?.id || 'anonymous'}`,
+    [user?.id]
+  );
+
+  React.useEffect(() => {
+    if (!notificationsSupported) {
+      setNotificationPermission('unsupported');
+      return;
+    }
+
+    setNotificationPermission(Notification.permission);
+  }, [notificationsSupported]);
+
+  React.useEffect(() => {
+    try {
+      const stored = localStorage.getItem(seenAlertsStorageKey);
+      const parsed = stored ? JSON.parse(stored) : [];
+      seenAlertsRef.current = new Set(Array.isArray(parsed) ? parsed : []);
+    } catch (error) {
+      console.error('Failed to load seen task alerts:', error);
+      seenAlertsRef.current = new Set();
+    }
+  }, [seenAlertsStorageKey]);
+
+  const persistSeenAlerts = React.useCallback(() => {
+    try {
+      const seenIds = Array.from(seenAlertsRef.current).slice(-200);
+      localStorage.setItem(seenAlertsStorageKey, JSON.stringify(seenIds));
+    } catch (error) {
+      console.error('Failed to persist seen task alerts:', error);
+    }
+  }, [seenAlertsStorageKey]);
+
+  const enableBrowserNotifications = React.useCallback(async () => {
+    if (!notificationsSupported) {
+      alert('Seu navegador nao suporta notificacoes.');
+      return;
+    }
+
+    setIsEnablingNotifications(true);
+
+    try {
+      const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+
+      if (permission === 'denied') {
+        alert('As notificacoes foram bloqueadas. Libere nas permissoes do navegador para receber os avisos.');
+      }
+    } finally {
+      setIsEnablingNotifications(false);
+    }
+  }, [notificationsSupported]);
+
+  React.useEffect(() => {
+    if (!user?.id || user.role === UserRole.ADMIN) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const pollTaskAlerts = async () => {
+      try {
+        const alerts = await dataService.getTaskBrowserAlerts(user.id);
+
+        if (cancelled || !notificationsSupported || notificationPermission !== 'granted') {
+          return;
+        }
+
+        const unseenAlerts = alerts
+          .filter(alert => !seenAlertsRef.current.has(alert.id))
+          .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+        if (unseenAlerts.length === 0) {
+          return;
+        }
+
+        unseenAlerts.forEach(alert => {
+          const notification = new Notification('Tarefa pendente aguardando voce', {
+            body: alert.message,
+            tag: `dreon-task-alert-${alert.id}`
+          });
+
+          notification.onclick = () => {
+            window.focus();
+            navigate(alert.route);
+            notification.close();
+          };
+
+          seenAlertsRef.current.add(alert.id);
+        });
+
+        persistSeenAlerts();
+      } catch (error) {
+        console.error('Failed to poll browser task alerts:', error);
+      }
+    };
+
+    pollTaskAlerts();
+    const intervalId = window.setInterval(pollTaskAlerts, 15000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [navigate, notificationPermission, notificationsSupported, persistSeenAlerts, user?.id, user?.role]);
 
   const navItems = [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/', roles: [UserRole.ADMIN, UserRole.OPERATOR, UserRole.SUPERVISOR] },
@@ -141,6 +255,28 @@ const Layout: React.FC<LayoutProps> = ({ children, user, onLogout }) => {
 
       {/* Content */}
       <main className="flex-1 flex flex-col p-4 md:p-8 overflow-y-auto max-w-full">
+        {user.role !== UserRole.ADMIN && notificationPermission !== 'granted' && notificationPermission !== 'unsupported' && (
+          <div className="mb-4 rounded-3xl border border-amber-200 bg-amber-50 px-5 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
+                <BellRing size={20} />
+              </div>
+              <div>
+                <p className="text-sm font-black text-slate-800">Ative os avisos do navegador</p>
+                <p className="text-xs font-bold text-slate-500">
+                  Assim voce recebe o toque quando um supervisor clicar no sino de uma tarefa pendente para voce.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={enableBrowserNotifications}
+              disabled={isEnablingNotifications}
+              className="px-5 py-3 bg-amber-500 text-white rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-lg shadow-amber-500/20 hover:bg-amber-600 transition-all disabled:opacity-50"
+            >
+              {isEnablingNotifications ? 'Ativando...' : 'Ativar avisos'}
+            </button>
+          </div>
+        )}
         {children}
       </main>
     </div>
