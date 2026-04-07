@@ -2,6 +2,7 @@ import { Client, ClientPortfolioEntry } from '../types';
 import {
   collectPortfolioMetadata,
   getClientPortfolioEntries,
+  inferCustomerProfilesFromClient,
   mergePortfolioEntries,
   mergeUniquePortfolioValues,
   normalizeComparableText,
@@ -246,10 +247,11 @@ export const normalizePortfolioEntriesWithCatalog = (
 export const normalizeClientPortfolioSnapshot = (client: Partial<Client>, config?: PortfolioCatalogConfig) => {
   const portfolioEntries = normalizePortfolioEntriesWithCatalog(getClientPortfolioEntries(client), config);
   const portfolioMetadata = collectPortfolioMetadata(portfolioEntries);
+  const inferredProfiles = inferCustomerProfilesFromClient(client);
 
   return {
     portfolio_entries: portfolioEntries,
-    customer_profiles: mergeUniquePortfolioValues(client.customer_profiles, portfolioMetadata.customer_profiles),
+    customer_profiles: mergeUniquePortfolioValues(client.customer_profiles, inferredProfiles, portfolioMetadata.customer_profiles),
     product_categories: mergeUniquePortfolioValues(portfolioMetadata.product_categories),
     equipment_models: mergeUniquePortfolioValues(portfolioMetadata.equipment_models),
     items: mergeUniquePortfolioValues(portfolioMetadata.equipment_models)

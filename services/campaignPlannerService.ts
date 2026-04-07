@@ -79,6 +79,27 @@ export interface PortfolioFilterOptions {
 
 const PORTFOLIO_PROFILE_FAMILIES: Array<{ canonical: string; label: string; keywords: string[] }> = [
   {
+    canonical: 'pousadas',
+    label: 'Pousadas',
+    keywords: [
+      'pousada',
+      'pousadas',
+      'hotel',
+      'hoteis',
+      'hostel',
+      'resort',
+      'guest house',
+      'guesthouse',
+      'hospedaria',
+      'hospedagem',
+      'inn',
+      'chale',
+      'chales',
+      'chalé',
+      'chalés'
+    ]
+  },
+  {
     canonical: 'construtor',
     label: 'Construtor',
     keywords: ['construtor', 'construtora', 'construcao', 'construcao civil']

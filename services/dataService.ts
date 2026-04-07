@@ -15,6 +15,7 @@ import {
   collectPortfolioMetadata,
   getClientEquipmentList,
   getClientPortfolioEntries,
+  inferCustomerProfilesFromClient,
   mergePortfolioEntries,
   mergeUniquePortfolioValues
 } from '../utils/clientPortfolio';
@@ -2824,6 +2825,7 @@ const mapClientRecord = (record: any): Client => {
   const portfolioMetadata = collectPortfolioMetadata(portfolioEntries);
   const equipmentModels = mergeUniquePortfolioValues(record?.equipment_models, record?.items, portfolioMetadata.equipment_models);
   const structuredAddress = resolveStructuredAddressFields(record);
+  const inferredProfiles = inferCustomerProfilesFromClient(record);
 
   return {
     id: getSafeText(record.id),
@@ -2853,7 +2855,7 @@ const mapClientRecord = (record: any): Client => {
     state: getTrimmedText(structuredAddress.state),
     zip_code: getTrimmedText(structuredAddress.zip_code),
     last_purchase_date: getTrimmedText(record.last_purchase_date),
-    customer_profiles: mergeUniquePortfolioValues(record?.customer_profiles, portfolioMetadata.customer_profiles),
+    customer_profiles: mergeUniquePortfolioValues(record?.customer_profiles, inferredProfiles, portfolioMetadata.customer_profiles),
     product_categories: mergeUniquePortfolioValues(record?.product_categories, portfolioMetadata.product_categories),
     equipment_models: equipmentModels,
     portfolio_entries: portfolioEntries,
@@ -4754,11 +4756,13 @@ export const dataService = {
     const customerProfiles = shouldReplacePortfolio
       ? mergeUniquePortfolioValues(
           client.customer_profiles,
+          inferCustomerProfilesFromClient({ ...existing, ...client }),
           portfolioMetadata.customer_profiles
         )
       : mergeUniquePortfolioValues(
           existing?.customer_profiles,
           client.customer_profiles,
+          inferCustomerProfilesFromClient({ ...existing, ...client }),
           portfolioMetadata.customer_profiles
         );
     const productCategories = shouldReplacePortfolio
@@ -4883,11 +4887,13 @@ export const dataService = {
     const customerProfiles = hasPortfolioUpdate
       ? mergeUniquePortfolioValues(
           updates.customer_profiles,
+          inferCustomerProfilesFromClient({ ...existing, ...updates }),
           portfolioMetadata.customer_profiles
         )
       : mergeUniquePortfolioValues(
           existing.customer_profiles,
           updates.customer_profiles,
+          inferCustomerProfilesFromClient({ ...existing, ...updates }),
           portfolioMetadata.customer_profiles
         );
     const productCategories = hasPortfolioUpdate

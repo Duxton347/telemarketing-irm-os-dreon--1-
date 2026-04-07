@@ -85,6 +85,52 @@ export const mergeUniquePortfolioValues = (...groups: Array<Array<string | undef
   return next;
 };
 
+const CUSTOMER_PROFILE_INFERENCE_RULES: Array<{
+  label: string;
+  keywords: string[];
+}> = [
+  {
+    label: 'Pousadas',
+    keywords: [
+      'pousada',
+      'pousadas',
+      'hotel',
+      'hoteis',
+      'hostel',
+      'resort',
+      'guest house',
+      'guesthouse',
+      'hospedaria',
+      'hospedagem',
+      'inn',
+      'chale',
+      'chales',
+      'chalé',
+      'chalés'
+    ]
+  }
+];
+
+export const inferCustomerProfilesFromClient = (client?: Partial<Client> | null) => {
+  const signal = normalizeComparableText([
+    client?.name,
+    client?.origin_detail,
+    client?.website
+  ]
+    .filter(Boolean)
+    .join(' '));
+
+  if (!signal) {
+    return [];
+  }
+
+  return mergeUniquePortfolioValues(
+    CUSTOMER_PROFILE_INFERENCE_RULES
+      .filter(rule => rule.keywords.some(keyword => signal.includes(normalizeComparableText(keyword))))
+      .map(rule => rule.label)
+  );
+};
+
 export const mergePortfolioEntries = (...groups: Array<Array<Partial<ClientPortfolioEntry> | null | undefined> | undefined>) => {
   const byKey = new Map<string, ClientPortfolioEntry>();
   const next: ClientPortfolioEntry[] = [];
