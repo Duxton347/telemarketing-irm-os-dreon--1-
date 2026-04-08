@@ -44,6 +44,27 @@ const QUESTIONNAIRE_INTERNAL_RESPONSE_KEYS = new Set([
   'resultado'
 ]);
 
+const EMAIL_REGEX = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i;
+const EMAIL_REGEX_GLOBAL = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
+const EMAIL_LABEL_HINTS = ['email', 'e mail', 'e-mail', 'correio eletronico'];
+const BUYER_LABEL_HINTS = [
+  'nome do contato',
+  'contato principal',
+  'comprador',
+  'decisor',
+  'responsavel pela compra',
+  'responsavel'
+];
+const PHONE_LABEL_HINTS = [
+  'whatsapp',
+  'telefone',
+  'celular',
+  'contato',
+  'telefone do contato',
+  'telefone do comprador',
+  'telefone do decisor'
+];
+
 const normalizeCallTypeValue = (value?: string | null) =>
   String(value || '')
     .toUpperCase()
@@ -211,8 +232,14 @@ const sanitizePhone = (value?: string) => {
 const sanitizeEmail = (value?: string) => {
   if (!value) return undefined;
   const normalized = value.trim().toLowerCase();
-  const match = normalized.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
+  const match = normalized.match(EMAIL_REGEX);
   return match ? match[0].toLowerCase() : undefined;
+};
+
+const sanitizeTextValue = (value?: unknown) => {
+  if (value === null || value === undefined) return undefined;
+  const text = String(value).trim();
+  return text.length > 0 ? text : undefined;
 };
 
 const sanitizeInterest = (value?: string) => {
@@ -221,6 +248,142 @@ const sanitizeInterest = (value?: string) => {
   const normalized = normalizeText(cleaned);
   if (!normalized || normalized === 'nao' || normalized === 'nenhum') return undefined;
   return cleaned;
+};
+
+const labelMatchesHints = (label: unknown, hints: string[]) => {
+  const normalizedLabel = normalizeText(String(label || ''));
+  if (!normalizedLabel) return false;
+  return hints.some(hint => normalizedLabel.includes(normalizeText(hint)));
+};
+
+const mergeClientInsights = (
+  base: {
+    email?: string;
+    interestProduct?: string;
+    buyerName?: string;
+    responsiblePhone?: string;
+  },
+  extra: {
+    email?: string;
+    interestProduct?: string;
+    buyerName?: string;
+    responsiblePhone?: string;
+  }
+) => ({
+  email: base.email || extra.email,
+  interestProduct: base.interestProduct || extra.interestProduct,
+  buyerName: base.buyerName || extra.buyerName,
+  responsiblePhone: base.responsiblePhone || extra.responsiblePhone
+});
+
+const extractClientInsightsFromBusinessSignals = (signals: unknown) => {
+  if (!Array.isArray(signals)) {
+    return {} as {
+      email?: string;
+      interestProduct?: string;
+      buyerName?: string;
+      responsiblePhone?: string;
+    };
+  }
+
+  return signals.reduce((acc, signal) => {
+    const capturedData = signal && typeof signal === 'object'
+      ? ((signal as any).capturedData || {})
+      : {};
+    const answerText = sanitizeTextValue((signal as any)?.answer);
+    const questionText = sanitizeTextValue((signal as any)?.questionText);
+
+    return mergeClientInsights(acc, {
+      email:
+        sanitizeEmail(capturedData.email) ||
+        (labelMatchesHints(questionText, EMAIL_LABEL_HINTS) ? sanitizeEmail(answerText) : undefined),
+      interestProduct: sanitizeInterest(capturedData.interest_product || capturedData.interestProduct),
+      buyerName:
+        sanitizeTextValue(capturedData.buyer_name || capturedData.buyerName) ||
+        (labelMatchesHints(questionText, BUYER_LABEL_HINTS) ? sanitizeTextValue(answerText) : undefined),
+      responsiblePhone:
+        sanitizePhone(capturedData.responsible_phone || capturedData.responsiblePhone) ||
+        (labelMatchesHints(questionText, PHONE_LABEL_HINTS) ? sanitizePhone(answerText) : undefined)
+    });
+  }, {} as {
+    email?: string;
+    interestProduct?: string;
+    buyerName?: string;
+    responsiblePhone?: string;
+  });
+};
+
+const extractClientInsightsFromSummaryText = (value?: unknown) => {
+  const text = sanitizeTextValue(value);
+  if (!text) {
+    return {} as {
+      email?: string;
+      buyerName?: string;
+      responsiblePhone?: string;
+    };
+  }
+
+  let extracted: {
+    email?: string;
+    buyerName?: string;
+    responsiblePhone?: string;
+  } = {};
+
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const separatorIndex = line.indexOf(':');
+    const hasLabel = separatorIndex >= 0;
+    const label = hasLabel ? line.slice(0, separatorIndex).trim() : '';
+    const content = hasLabel ? line.slice(separatorIndex + 1).trim() : line;
+
+    extracted = mergeClientInsights(extracted, {
+      email:
+        labelMatchesHints(label, EMAIL_LABEL_HINTS) ? sanitizeEmail(content) : undefined,
+      buyerName:
+        labelMatchesHints(label, BUYER_LABEL_HINTS) ? sanitizeTextValue(content) : undefined,
+      responsiblePhone:
+        labelMatchesHints(label, PHONE_LABEL_HINTS) ? sanitizePhone(content) : undefined
+    });
+  }
+
+  if (!extracted.email) {
+    const allMatches = Array.from(text.matchAll(EMAIL_REGEX_GLOBAL));
+    if (allMatches.length > 0) {
+      extracted.email = allMatches[0][0].toLowerCase();
+    }
+  }
+
+  return extracted;
+};
+
+const extractClientInsightsFromFallbackArtifacts = (responses: Record<string, any>) => {
+  let extracted = extractClientInsightsFromBusinessSignals(responses.questionnaire_business_questions);
+
+  extracted = mergeClientInsights(
+    extracted,
+    extractClientInsightsFromSummaryText(responses.questionnaire_text_summary)
+  );
+
+  extracted = mergeClientInsights(
+    extracted,
+    extractClientInsightsFromSummaryText(responses.written_report)
+  );
+
+  for (const [key, rawValue] of Object.entries(responses || {})) {
+    if (QUESTIONNAIRE_INTERNAL_RESPONSE_KEYS.has(key)) continue;
+    const value = sanitizeTextValue(rawValue);
+    if (!value) continue;
+
+    extracted = mergeClientInsights(extracted, {
+      email: labelMatchesHints(key, EMAIL_LABEL_HINTS) ? sanitizeEmail(value) : undefined,
+      buyerName: labelMatchesHints(key, BUYER_LABEL_HINTS) ? sanitizeTextValue(value) : undefined,
+      responsiblePhone: labelMatchesHints(key, PHONE_LABEL_HINTS) ? sanitizePhone(value) : undefined
+    });
+  }
+
+  return extracted;
 };
 
 const pickResponseValue = (responses: Record<string, any>, keys: string[]) => {
@@ -622,6 +785,7 @@ export const extractClientInsightsFromResponses = (
   context?: QuestionnaireQuestionDisplayContext
 ) => {
   const enriched = enrichQuestionnaireResponses(responses, questions, callType, proposito, context);
+  const fallbackInsights = extractClientInsightsFromFallbackArtifacts(enriched);
   const businessContext = buildQuestionnaireBusinessContext({
     responses: enriched,
     questions,
@@ -630,17 +794,19 @@ export const extractClientInsightsFromResponses = (
     clientContext: context?.clientContext
   });
   const email = sanitizeEmail(
-    businessContext.capturedData.email || pickResponseValue(enriched, EMAIL_KEYS)
+    businessContext.capturedData.email || pickResponseValue(enriched, EMAIL_KEYS) || fallbackInsights.email
   );
   const interestProduct = sanitizeInterest(
-    businessContext.capturedData.interestProduct || pickResponseValue(enriched, INTEREST_KEYS)
+    businessContext.capturedData.interestProduct || pickResponseValue(enriched, INTEREST_KEYS) || fallbackInsights.interestProduct
   );
   const buyerName =
     businessContext.capturedData.buyerName ||
+    fallbackInsights.buyerName ||
     pickResponseValue(enriched, BUYER_KEYS)?.toString().trim() ||
     undefined;
   const responsiblePhone = sanitizePhone(
     businessContext.capturedData.responsiblePhone ||
+    fallbackInsights.responsiblePhone ||
     pickResponseValue(enriched, PHONE_KEYS)?.toString()
   );
 

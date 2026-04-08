@@ -1938,7 +1938,12 @@ const buildDerivedClientTags = (
   return Array.from(nextTags);
 };
 
-const syncDerivedTagsForClient = async (clientId: string, questionsOverride?: Question[]): Promise<boolean> => {
+const syncDerivedTagsForClient = async (
+  clientId: string,
+  questionsOverride?: Question[],
+  options?: { historyLimit?: number }
+): Promise<boolean> => {
+  const historyLimit = options?.historyLimit ?? 50;
   const { data: client, error: clientError } = await supabase
     .from('clients')
     .select('id, tags, items, equipment_models, interest_product, status, satisfaction, email, buyer_name, responsible_phone')
@@ -1957,7 +1962,7 @@ const syncDerivedTagsForClient = async (clientId: string, questionsOverride?: Qu
       .select('responses, call_type, start_time, proposito')
       .eq('client_id', clientId)
       .order('start_time', { ascending: false })
-      .limit(50)
+      .limit(historyLimit)
   ]);
 
   const { data: callLogs, error: logsError } = logsResult;
@@ -1971,11 +1976,10 @@ const syncDerivedTagsForClient = async (clientId: string, questionsOverride?: Qu
     .from('whatsapp_tasks')
     .select('responses, type, completed_at, updated_at, started_at, created_at, status')
     .eq('client_id', clientId)
-    .in('status', ['started', 'completed', 'skipped'])
     .not('responses', 'is', null)
     .order('completed_at', { ascending: false, nullsFirst: false })
     .order('updated_at', { ascending: false })
-    .limit(50);
+    .limit(historyLimit);
 
   if (whatsAppLogsError) {
     console.error('Error loading whatsapp task logs for derived tag sync', whatsAppLogsError);
@@ -4343,7 +4347,7 @@ export const dataService = {
     const questions = await loadActiveQuestions();
     let updated = 0;
     for (const client of clients || []) {
-      if (await syncDerivedTagsForClient(client.id, questions)) {
+      if (await syncDerivedTagsForClient(client.id, questions, { historyLimit: 500 })) {
         updated += 1;
       }
     }

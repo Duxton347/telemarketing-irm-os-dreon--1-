@@ -244,8 +244,10 @@ const sanitizePhone = (value?: unknown) => {
 };
 
 const sanitizeEmail = (value?: unknown) => {
-  if (!hasValidEmail(value)) return undefined;
-  return String(value).trim().toLowerCase();
+  if (!hasMeaningfulValue(value)) return undefined;
+  const text = String(value).trim().toLowerCase();
+  const match = text.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
+  return match ? match[0].toLowerCase() : undefined;
 };
 
 const buildClientContextFromClient = (client?: Partial<Client> | null): QuestionnaireBusinessClientContext => ({
