@@ -229,6 +229,11 @@ const cleanupDuplicateWhatsAppQueueEntries = async (
     recentClosedQuery = recentClosedQuery.eq('client_id', options.clientId);
   }
 
+  if (options?.operatorId) {
+    openQuery = openQuery.eq('assigned_to', options.operatorId);
+    recentClosedQuery = recentClosedQuery.eq('assigned_to', options.operatorId);
+  }
+
   if (options?.taskType) {
     openQuery = openQuery.eq('type', options.taskType);
     recentClosedQuery = recentClosedQuery.eq('type', options.taskType);
@@ -6028,8 +6033,24 @@ export const dataService = {
 
   getWhatsAppTasks: async (operatorId?: string, startDate?: string, endDate?: string): Promise<WhatsAppTask[]> => {
     if (!startDate && !endDate) {
-      await cleanupDuplicateWhatsAppQueueEntries();
-      await cleanupInvalidWhatsAppQueueEntries({ operatorId });
+      const maintenanceTasks = [
+        cleanupInvalidWhatsAppQueueEntries({ operatorId })
+      ];
+
+      // Avoid sweeping the entire WhatsApp queue on every consolidated dashboard load.
+      if (operatorId) {
+        maintenanceTasks.unshift(cleanupDuplicateWhatsAppQueueEntries({ operatorId }));
+      }
+
+      const maintenanceResults = await Promise.allSettled(maintenanceTasks);
+      maintenanceResults.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          const label = operatorId
+            ? (index === 0 ? 'cleanupDuplicateWhatsAppQueueEntries' : 'cleanupInvalidWhatsAppQueueEntries')
+            : 'cleanupInvalidWhatsAppQueueEntries';
+          console.warn(`WhatsApp queue maintenance failed during getWhatsAppTasks (${label})`, result.reason);
+        }
+      });
     }
 
     let query = supabase.from('whatsapp_tasks').select('*, clients(name, phone, invalid)');
