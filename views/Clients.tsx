@@ -105,6 +105,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
   const [cityFilter, setCityFilter] = React.useState('');
   const [profileFilter, setProfileFilter] = React.useState('');
   const [productCategoryFilter, setProductCategoryFilter] = React.useState('');
+  const [emailFilter, setEmailFilter] = React.useState<'all' | 'with' | 'without'>('all');
   const [clientTags, setClientTags] = React.useState<ClientTag[]>([]);
   const [isEmailModalOpen, setIsEmailModalOpen] = React.useState(false);
   const [newEmail, setNewEmail] = React.useState('');
@@ -400,9 +401,16 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
   const filtered = (clients || []).filter(c => {
     const matchSearch = (c.name || '').toLowerCase().includes(search.toLowerCase()) ||
       (c.phone || '').includes(search) ||
-      (c.phone_secondary || '').includes(search);
+      (c.phone_secondary || '').includes(search) ||
+      (c.email || '').toLowerCase().includes(search.toLowerCase());
     const matchNeighborhood = neighborhoodFilter ? c.neighborhood === neighborhoodFilter : true;
     const matchCity = cityFilter ? c.city === cityFilter : true;
+    const hasEmail = Boolean(String(c.email || '').trim());
+    const matchEmail = emailFilter === 'with'
+      ? hasEmail
+      : emailFilter === 'without'
+        ? !hasEmail
+        : true;
     const clientPortfolioMetadata = clientPortfolioFilterMap.get(c.id) || {
       customer_profiles: [],
       product_categories: [],
@@ -414,7 +422,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
     const matchProductCategory = productCategoryFilter
       ? clientPortfolioMetadata.product_categories.includes(productCategoryFilter)
       : true;
-    return matchSearch && matchNeighborhood && matchCity && matchProfile && matchProductCategory;
+    return matchSearch && matchNeighborhood && matchCity && matchEmail && matchProfile && matchProductCategory;
   });
 
   const isAdmin = user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR;
@@ -493,7 +501,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
           <select
             value={neighborhoodFilter}
             onChange={e => setNeighborhoodFilter(e.target.value)}
@@ -525,6 +533,15 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
           >
             <option value="">Todas as Categorias</option>
             {portfolioFilterOptions.product_categories.map((category, categoryIndex) => <option key={`clients-category-filter-${category}-${categoryIndex}`} value={category}>{category}</option>)}
+          </select>
+          <select
+            value={emailFilter}
+            onChange={e => setEmailFilter(e.target.value as 'all' | 'with' | 'without')}
+            className="px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 outline-none"
+          >
+            <option value="all">Todos os E-mails</option>
+            <option value="with">Com E-mail</option>
+            <option value="without">Sem E-mail</option>
           </select>
         </div>
       </div>
