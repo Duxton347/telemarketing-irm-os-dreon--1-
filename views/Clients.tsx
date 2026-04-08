@@ -112,6 +112,7 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
   const [expandedCategory, setExpandedCategory] = React.useState<string | null>(null);
   const [isQuickPortfolioEditorOpen, setIsQuickPortfolioEditorOpen] = React.useState(false);
   const [clientProfileDraft, setClientProfileDraft] = React.useState('');
+  const [isRebuildingInsights, setIsRebuildingInsights] = React.useState(false);
 
   const [clientData, setClientData] = React.useState<ClientFormState>(createEmptyClientData);
   const resetClientForm = React.useCallback(() => {
@@ -460,6 +461,24 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
     window.URL.revokeObjectURL(url);
   };
 
+  const handleRebuildClientInsights = async () => {
+    if (!confirm('Reprocessar historico de questionarios para recuperar e-mails e contatos dos cadastros?')) {
+      return;
+    }
+
+    setIsRebuildingInsights(true);
+    try {
+      const updatedCount = await dataService.rebuildClientInsightsFromHistory();
+      await loadClients();
+      alert(`${updatedCount} cadastro(s) foram atualizados com dados recuperados do historico.`);
+    } catch (error) {
+      console.error(error);
+      alert('Erro ao reprocessar historico dos questionarios.');
+    } finally {
+      setIsRebuildingInsights(false);
+    }
+  };
+
   return (
     <div className="space-y-6 pb-20 animate-in fade-in duration-500">
       <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -468,6 +487,16 @@ const Clients: React.FC<{ user: any }> = ({ user }) => {
           <p className="text-slate-500 text-sm font-bold mt-1">Gestão centralizada com histórico de atendimentos e protocolos.</p>
         </div>
         <div className="flex flex-col sm:flex-row gap-3">
+          {isAdmin && (
+            <button
+              onClick={handleRebuildClientInsights}
+              disabled={isRebuildingInsights}
+              className="flex items-center justify-center gap-2 bg-amber-500 text-white px-6 py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-xl hover:bg-amber-600 transition-all disabled:opacity-60"
+            >
+              {isRebuildingInsights ? <Loader2 className="animate-spin" size={18} /> : <Sparkles size={18} />}
+              Reprocessar Questionarios
+            </button>
+          )}
           <button
             onClick={handleExportClientsCsv}
             className="flex items-center justify-center gap-2 bg-emerald-600 text-white px-6 py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-xl hover:bg-emerald-700 transition-all"

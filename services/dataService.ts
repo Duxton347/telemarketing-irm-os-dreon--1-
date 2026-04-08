@@ -1827,15 +1827,31 @@ const hasPositiveCallSignal = (responses?: Record<string, any>) => {
   );
 };
 
-const enrichClientInsightsFromCallLogs = (callLogs: any[] = [], questions: Question[] = []) => {
+const enrichClientInsightsFromInteractions = (
+  interactions: Array<{
+    responses?: Record<string, any>;
+    call_type?: CallType | 'ALL' | string;
+    proposito?: string | null;
+  }> = [],
+  questions: Question[] = [],
+  clientContext?: any
+) => {
   const derivedProfile: Partial<Client> = {};
 
-  const normalizedLogs = callLogs.map(log => {
+  const normalizedLogs = interactions.map(log => {
+    const interactionContext = {
+      clientContext,
+      responses: log.responses || {}
+    };
+    const scopedQuestions = questions.filter(question =>
+      questionMatchesContext(question, log.call_type, log.proposito || undefined, interactionContext)
+    );
     const insights = extractClientInsightsFromResponses(
       log.responses || {},
-      questions,
+      scopedQuestions,
       log.call_type,
-      log.proposito
+      log.proposito,
+      interactionContext
     );
 
     if (!derivedProfile.email && insights.email) derivedProfile.email = insights.email;
@@ -1922,7 +1938,7 @@ const buildDerivedClientTags = (
   return Array.from(nextTags);
 };
 
-const syncDerivedTagsForClient = async (clientId: string): Promise<boolean> => {
+const syncDerivedTagsForClient = async (clientId: string, questionsOverride?: Question[]): Promise<boolean> => {
   const { data: client, error: clientError } = await supabase
     .from('clients')
     .select('id, tags, items, equipment_models, interest_product, status, satisfaction, email, buyer_name, responsible_phone')
@@ -1935,7 +1951,7 @@ const syncDerivedTagsForClient = async (clientId: string): Promise<boolean> => {
   }
 
   const [questions, logsResult] = await Promise.all([
-    loadActiveQuestions(),
+    questionsOverride ? Promise.resolve(questionsOverride) : loadActiveQuestions(),
     supabase
       .from('call_logs')
       .select('responses, call_type, start_time, proposito')
@@ -1951,7 +1967,44 @@ const syncDerivedTagsForClient = async (clientId: string): Promise<boolean> => {
     return false;
   }
 
-  const { normalizedLogs, derivedProfile } = enrichClientInsightsFromCallLogs(callLogs || [], questions);
+  const { data: whatsAppLogs, error: whatsAppLogsError } = await supabase
+    .from('whatsapp_tasks')
+    .select('responses, type, completed_at, updated_at, started_at, created_at, status')
+    .eq('client_id', clientId)
+    .in('status', ['started', 'completed', 'skipped'])
+    .not('responses', 'is', null)
+    .order('completed_at', { ascending: false, nullsFirst: false })
+    .order('updated_at', { ascending: false })
+    .limit(50);
+
+  if (whatsAppLogsError) {
+    console.error('Error loading whatsapp task logs for derived tag sync', whatsAppLogsError);
+    return false;
+  }
+
+  const interactionLogs = [
+    ...(callLogs || []).map((log: any) => ({
+      responses: log.responses || {},
+      call_type: log.call_type,
+      proposito: log.proposito,
+      occurred_at: log.start_time
+    })),
+    ...(whatsAppLogs || []).map((task: any) => ({
+      responses: task.responses || {},
+      call_type: task.type,
+      proposito: null,
+      occurred_at: task.completed_at || task.updated_at || task.started_at || task.created_at
+    }))
+  ].sort((left, right) =>
+    new Date(right.occurred_at || 0).getTime() - new Date(left.occurred_at || 0).getTime()
+  );
+
+  const questionnaireClientContext = buildQuestionnaireClientContext(client as any);
+  const { normalizedLogs, derivedProfile } = enrichClientInsightsFromInteractions(
+    interactionLogs,
+    questions,
+    questionnaireClientContext
+  );
   const nextTags = buildDerivedClientTags(client, normalizedLogs, derivedProfile, questions);
   const currentTags = Array.isArray(client.tags) ? client.tags : [];
   const sortedCurrent = [...currentTags].sort();
@@ -4283,18 +4336,23 @@ export const dataService = {
     await syncClientTagToClientProfile(tagId);
   },
 
-  rebuildDerivedClientTags: async (): Promise<number> => {
+  rebuildClientInsightsFromHistory: async (): Promise<number> => {
     const { data: clients, error } = await supabase.from('clients').select('id');
     if (error) throw error;
 
+    const questions = await loadActiveQuestions();
     let updated = 0;
     for (const client of clients || []) {
-      if (await syncDerivedTagsForClient(client.id)) {
+      if (await syncDerivedTagsForClient(client.id, questions)) {
         updated += 1;
       }
     }
 
     return updated;
+  },
+
+  rebuildDerivedClientTags: async (): Promise<number> => {
+    return dataService.rebuildClientInsightsFromHistory();
   },
 
   rejectTag: async (tagId: string, operatorId: string, reason: string): Promise<void> => {
@@ -6121,12 +6179,52 @@ export const dataService = {
   },
 
   completeWhatsAppTask: async (id: string, operatorId: string, responses: any): Promise<void> => {
+    const { data: task, error: taskError } = await supabase
+      .from('whatsapp_tasks')
+      .select('id, client_id, type')
+      .eq('id', id)
+      .single();
+    if (taskError) throw taskError;
+
+    const clientSnapshot = await dataService.getClientById(task.client_id).catch(() => null);
+    const questionnaireContext = {
+      clientContext: buildQuestionnaireClientContext(clientSnapshot)
+    };
+    const questions = await dataService.getQuestions(
+      task.type,
+      undefined,
+      questionnaireContext
+    );
+    const { enrichedResponses, email, interestProduct, buyerName, responsiblePhone } = extractClientInsightsFromResponses(
+      responses || {},
+      questions,
+      task.type,
+      undefined,
+      questionnaireContext
+    );
+
     const { error } = await supabase.from('whatsapp_tasks').update({
       status: 'completed',
-      responses: responses,
+      responses: enrichedResponses,
       completed_at: new Date().toISOString()
     }).eq('id', id);
     if (error) throw error;
+
+    const clientUpdates: any = {};
+    if (email) clientUpdates.email = email;
+    if (interestProduct) clientUpdates.interest_product = normalizeInterestProduct(interestProduct);
+    if (buyerName) clientUpdates.buyer_name = buyerName;
+    if (responsiblePhone) clientUpdates.responsible_phone = responsiblePhone;
+
+    if (Object.keys(clientUpdates).length > 0) {
+      const { error: clientError } = await supabase
+        .from('clients')
+        .update(clientUpdates)
+        .eq('id', task.client_id);
+      if (clientError) throw clientError;
+    }
+
+    await syncDerivedTagsForClient(task.client_id);
 
     // Log Analytics
     await dataService.logOperatorEvent(operatorId, OperatorEventType.WHATSAPP_COMPLETE, id);
