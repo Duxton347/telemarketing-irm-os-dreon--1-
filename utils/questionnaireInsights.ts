@@ -52,7 +52,18 @@ const normalizeCallTypeValue = (value?: string | null) =>
     .replace(/[^A-Z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
 
-const EMAIL_KEYS = ['email_cliente', 'email', 'email_comprador', 'buyer_email'];
+const EMAIL_KEYS = [
+  'email_cliente',
+  'email',
+  'email_comprador',
+  'buyer_email',
+  'email_do_cliente',
+  'cliente_email',
+  'email_contato',
+  'email_responsavel',
+  'e_mail_cliente',
+  'd48d2b9d-2d95-4f98-a71b-aa9d47edec1b'
+];
 const INTEREST_KEYS = ['interest_product', 'upsell_interesse_produto', 'interesse_produto', 'produto_interesse'];
 const BUYER_KEYS = ['buyer_name', 'nome_comprador', 'comprador_nome', 'nome_do_comprador', 'nome_decisor', 'decisor_nome'];
 const PHONE_KEYS = ['responsible_phone', 'telefone_comprador', 'telefone_decisor', 'telefone_responsavel', 'comprador_telefone'];
@@ -61,7 +72,16 @@ const OFFER_BLOCKER_KEYS = ['offer_blocker_reason', 'objecao_principal', 'objeç
 const PORTFOLIO_SCOPE_KEYS = ['portfolio_scope', 'escopo_linha', 'abrangencia_linhas'];
 
 const questionHints: Record<string, string[]> = {
-  email_cliente: ['email', 'e mail'],
+  email_cliente: [
+    'email',
+    'e mail',
+    'e-mail',
+    'qual email',
+    'possui email',
+    'endereco de email',
+    'endereço de email',
+    'correio eletronico'
+  ],
   interest_product: ['interesse', 'produto', 'servico', 'linha', 'explorado para compra', 'demonstrou interesse'],
   buyer_name: ['comprador', 'decisor', 'responsavel pela compra'],
   responsible_phone: ['telefone do comprador', 'telefone do decisor', 'telefone responsavel', 'telefone para contato do comprador'],
@@ -190,7 +210,9 @@ const sanitizePhone = (value?: string) => {
 
 const sanitizeEmail = (value?: string) => {
   if (!value) return undefined;
-  return value.trim().toLowerCase();
+  const normalized = value.trim().toLowerCase();
+  const match = normalized.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i);
+  return match ? match[0].toLowerCase() : undefined;
 };
 
 const sanitizeInterest = (value?: string) => {
