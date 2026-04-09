@@ -22,7 +22,7 @@ export interface CampaignDispatch {
   proposito: string;
   callType: string;
   canal: 'voz' | 'whatsapp' | 'email' | 'ambos';
-  operatorId: string;
+  operatorId: string | null;
   clientIds: string[];
   filters: CampaignPlannerFilters;
 }
