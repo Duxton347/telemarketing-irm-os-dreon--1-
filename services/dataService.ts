@@ -58,6 +58,28 @@ const mergePhoneFields = (
   };
 };
 
+const buildSecondaryPhoneUpdateFromCapturedContact = (
+  client: Partial<Client> | null | undefined,
+  capturedPhone?: string | null
+) => {
+  if (!client) return {};
+  const normalizedCapturedPhone = normalizePhone(String(capturedPhone || ''));
+  if (!normalizedCapturedPhone) return {};
+
+  const normalizedPrimaryPhone = normalizePhone(String(client?.phone || ''));
+  const normalizedSecondaryPhone = normalizePhone(String(client?.phone_secondary || ''));
+
+  if (
+    normalizedCapturedPhone === normalizedPrimaryPhone ||
+    normalizedCapturedPhone === normalizedSecondaryPhone ||
+    normalizedSecondaryPhone
+  ) {
+    return {};
+  }
+
+  return { phone_secondary: normalizedCapturedPhone };
+};
+
 const isLikelyBrazilPhoneLength = (value?: string | null) => {
   const digits = normalizePhone(String(value || ''));
   return digits.length >= 10 && digits.length <= 13;
@@ -1946,7 +1968,7 @@ const syncDerivedTagsForClient = async (
   const historyLimit = options?.historyLimit ?? 50;
   const { data: client, error: clientError } = await supabase
     .from('clients')
-    .select('id, tags, items, equipment_models, interest_product, status, satisfaction, email, buyer_name, responsible_phone')
+    .select('id, tags, items, equipment_models, interest_product, status, satisfaction, email, buyer_name, responsible_phone, phone, phone_secondary')
     .eq('id', clientId)
     .maybeSingle();
 
@@ -2023,6 +2045,9 @@ const syncDerivedTagsForClient = async (
   if (!client.buyer_name && derivedProfile.buyer_name) payload.buyer_name = derivedProfile.buyer_name;
   if (!client.responsible_phone && derivedProfile.responsible_phone) {
     payload.responsible_phone = derivedProfile.responsible_phone;
+  }
+  if (derivedProfile.responsible_phone) {
+    Object.assign(payload, buildSecondaryPhoneUpdateFromCapturedContact(client, derivedProfile.responsible_phone));
   }
 
   if (JSON.stringify(sortedCurrent) !== JSON.stringify(sortedNext)) {
@@ -4250,9 +4275,13 @@ export const dataService = {
       );
     }
     if (buyerName) clientUpdates.buyer_name = buyerName;
-    if (responsiblePhone) clientUpdates.responsible_phone = responsiblePhone;
+    if (responsiblePhone) {
+      clientUpdates.responsible_phone = responsiblePhone;
+      Object.assign(clientUpdates, buildSecondaryPhoneUpdateFromCapturedContact(clientSnapshot, responsiblePhone));
+    }
 
-    await supabase.from('clients').update(clientUpdates).eq('id', call.clientId);
+    const { error: clientUpdateError } = await supabase.from('clients').update(clientUpdates).eq('id', call.clientId);
+    if (clientUpdateError) throw clientUpdateError;
     await syncDerivedTagsForClient(call.clientId);
 
     // Dreon Skill v3: Tag Decision Engine Integration
@@ -4846,7 +4875,7 @@ export const dataService = {
     const normalizedInterestProduct = normalizeInterestProduct(existing?.interest_product || client.interest_product);
     const mergedPhones = mergePhoneFields(
       existing?.phone || phone,
-      existing?.phone_secondary || normalizedSecondaryPhone || client.phone_secondary || null
+      existing?.phone_secondary || normalizedSecondaryPhone || client.phone_secondary || client.responsible_phone || existing?.responsible_phone || null
     );
 
     // Build payload: existing data takes priority, only fill empty fields
@@ -4977,7 +5006,10 @@ export const dataService = {
     const normalizedInterestProduct = normalizeInterestProduct(
       updates.interest_product ?? existing.interest_product ?? undefined
     );
-    const mergedPhones = mergePhoneFields(nextPhone, nextSecondaryPhone);
+    const mergedPhones = mergePhoneFields(
+      nextPhone,
+      nextSecondaryPhone || updates.responsible_phone || existing.responsible_phone || null
+    );
 
     const payload: any = {
       name: updates.name ?? existing.name ?? 'Sem Nome',
@@ -6218,7 +6250,10 @@ export const dataService = {
     if (email) clientUpdates.email = email;
     if (interestProduct) clientUpdates.interest_product = normalizeInterestProduct(interestProduct);
     if (buyerName) clientUpdates.buyer_name = buyerName;
-    if (responsiblePhone) clientUpdates.responsible_phone = responsiblePhone;
+    if (responsiblePhone) {
+      clientUpdates.responsible_phone = responsiblePhone;
+      Object.assign(clientUpdates, buildSecondaryPhoneUpdateFromCapturedContact(clientSnapshot, responsiblePhone));
+    }
 
     if (Object.keys(clientUpdates).length > 0) {
       const { error: clientError } = await supabase

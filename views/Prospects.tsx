@@ -3,7 +3,7 @@ import {
     Search, Filter, Plus, Phone, MessageCircle, Calendar,
     UserPlus, CheckCircle2, MapPin, Globe, Mail, DollarSign,
     Target, Loader2, Users, ChevronRight, X, Send, BarChart3, Clock, Play, FileText,
-    History, ClipboardList, Map as MapIcon
+    History, ClipboardList, Map as MapIcon, Pencil
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { Client, CallType, User } from '../types';
@@ -46,6 +46,12 @@ const matchesProspectLocation = (value?: string, filter?: string, mode: 'city' |
 
 const buildProspectAddressLabel = (client?: Partial<Client> | null) =>
     client?.address || [client?.street, client?.neighborhood, client?.city, client?.state].filter(Boolean).join(', ');
+
+const getWebsiteUrl = (website?: string) => {
+    const value = String(website || '').trim();
+    if (!value) return '';
+    return /^https?:\/\//i.test(value) ? value : `https://${value}`;
+};
 
 const formatHistoryTimestamp = (value?: string) => {
     if (!value) return 'Data indisponivel';
@@ -141,6 +147,7 @@ const Prospects: React.FC = () => {
 
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [newProspect, setNewProspect] = useState<Partial<Client>>({});
+    const isEditingProspect = Boolean(newProspect.id);
 
     const [bulkDispatchActive, setBulkDispatchActive] = useState(false);
     const [bulkOperator, setBulkOperator] = useState('');
@@ -184,21 +191,70 @@ const Prospects: React.FC = () => {
         }
     };
 
+    const openCreateProspectModal = () => {
+        setNewProspect({});
+        setIsModalOpen(true);
+    };
+
+    const openEditProspectModal = (client: Client) => {
+        setNewProspect({
+            id: client.id,
+            name: client.name,
+            phone: client.phone,
+            phone_secondary: client.phone_secondary,
+            responsible_phone: client.responsible_phone,
+            buyer_name: client.buyer_name,
+            email: client.email,
+            website: client.website,
+            interest_product: client.interest_product,
+            address: client.address,
+            street: client.street,
+            neighborhood: client.neighborhood,
+            city: client.city,
+            state: client.state,
+            zip_code: client.zip_code,
+            origin: client.origin,
+            origin_detail: client.origin_detail,
+            status: client.status || 'LEAD',
+            funnel_status: client.funnel_status || 'NEW'
+        });
+        setIsModalOpen(true);
+    };
+
+    const closeProspectModal = () => {
+        setIsModalOpen(false);
+        setNewProspect({});
+    };
+
     const handleSaveProspect = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!newProspect.name || !newProspect.phone) return alert("Nome e Telefone obrigatórios");
 
         try {
-            await dataService.upsertClient({
+            const payload: Partial<Client> = {
                 ...newProspect,
                 status: 'LEAD',
-                funnel_status: 'NEW',
-                origin: 'MANUAL'
-            });
-            setIsModalOpen(false);
-            setNewProspect({});
-            loadData();
-            alert("Prospecto cadastrado!");
+                funnel_status: (newProspect.funnel_status as any) || selectedClient?.funnel_status || 'NEW',
+                origin: newProspect.origin || selectedClient?.origin || 'MANUAL'
+            };
+
+            if (newProspect.id) {
+                await dataService.updateClientFields(newProspect.id, payload);
+                const updatedClient = normalizeProspectForView({
+                    ...((selectedClient || {}) as Client),
+                    ...(payload as Client),
+                    id: newProspect.id
+                });
+                setProspects(prev => prev.map(p => p.id === newProspect.id ? { ...p, ...updatedClient } : p));
+                setSelectedClient(prev => prev?.id === newProspect.id ? { ...prev, ...updatedClient } : prev);
+                alert("Cadastro do prospecto atualizado!");
+            } else {
+                await dataService.upsertClient(payload);
+                alert("Prospecto cadastrado!");
+            }
+
+            closeProspectModal();
+            await loadData();
         } catch (e) {
             alert("Erro ao salvar prospecto");
         }
@@ -324,7 +380,7 @@ const Prospects: React.FC = () => {
                     <p className="text-slate-500 text-sm font-bold mt-1">Isolado da base de clientes. Use para focar em prospecção nativa.</p>
                 </div>
                 <button
-                    onClick={() => setIsModalOpen(true)}
+                    onClick={openCreateProspectModal}
                     className="flex items-center gap-2 bg-blue-600 text-white px-8 py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-xl hover:bg-blue-700 transition-all"
                 >
                     <Plus size={18} /> Cadastrar Lead
@@ -482,9 +538,17 @@ const Prospects: React.FC = () => {
                                         <span className="px-3 py-1 bg-blue-600 text-white rounded-lg text-[8px] font-black uppercase tracking-widest">FICHA DO LEAD</span>
                                         <span className="text-slate-400 text-[9px] font-black tracking-widest uppercase flex items-center gap-1">Origem: {selectedClient.origin === 'GOOGLE_SEARCH' ? <Globe size={12} className="text-blue-400" /> : selectedClient.origin === 'CSV_IMPORT' ? <FileText size={12} className="text-emerald-400" /> : <UserPlus size={12} />} {selectedClient.origin || 'MANUAL'}</span>
                                     </div>
-                                    <div className="flex justify-between items-start">
+                                    <div className="flex justify-between items-start gap-3">
                                         <h3 className="text-4xl font-black text-slate-900 tracking-tighter leading-tight uppercase pr-4">{selectedClient.name}</h3>
-                                        <button onClick={() => setSelectedClient(null)} className="p-2 hover:bg-slate-200 text-slate-400 rounded-full transition-colors"><X size={24} /></button>
+                                        <div className="flex items-center gap-2 shrink-0">
+                                            <button
+                                                onClick={() => openEditProspectModal(selectedClient)}
+                                                className="px-4 py-2 bg-white hover:bg-blue-50 text-blue-600 border border-blue-100 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors flex items-center gap-2"
+                                            >
+                                                <Pencil size={14} /> Editar
+                                            </button>
+                                            <button onClick={() => setSelectedClient(null)} className="p-2 hover:bg-slate-200 text-slate-400 rounded-full transition-colors"><X size={24} /></button>
+                                        </div>
                                     </div>
 
                                     <div className="flex flex-wrap items-center gap-4 pt-2">
@@ -505,6 +569,18 @@ const Prospects: React.FC = () => {
                                 <section className="space-y-6">
                                     <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 border-b border-slate-100 pb-2"><FileText size={14} className="text-indigo-500" /> Informações do Lead</h5>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                        {selectedClient.phone_secondary && (
+                                            <div className="space-y-1">
+                                                <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Telefone Alternativo</span>
+                                                <p className="text-sm font-bold text-slate-700 bg-slate-50 p-3 rounded-xl border border-slate-100">{selectedClient.phone_secondary}</p>
+                                            </div>
+                                        )}
+                                        {selectedClient.responsible_phone && (
+                                            <div className="space-y-1">
+                                                <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Telefone do Responsavel</span>
+                                                <p className="text-sm font-bold text-slate-700 bg-slate-50 p-3 rounded-xl border border-slate-100">{selectedClient.responsible_phone}</p>
+                                            </div>
+                                        )}
                                         {selectedClient.email && (
                                             <div className="space-y-1">
                                                 <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Email Corporativo</span>
@@ -514,7 +590,7 @@ const Prospects: React.FC = () => {
                                         {selectedClient.website && (
                                             <div className="space-y-1">
                                                 <span className="text-[9px] font-black uppercase text-slate-400 tracking-widest">Website</span>
-                                                <a href={selectedClient.website} target="_blank" rel="noopener noreferrer" className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1 bg-blue-50 p-3 rounded-xl border border-blue-100 w-fit">Acessar Site <Globe size={12} /></a>
+                                                <a href={getWebsiteUrl(selectedClient.website)} target="_blank" rel="noopener noreferrer" className="text-sm font-bold text-blue-500 hover:underline flex items-center gap-1 bg-blue-50 p-3 rounded-xl border border-blue-100 w-fit">Acessar Site <Globe size={12} /></a>
                                             </div>
                                         )}
                                         {selectedClient.buyer_name && (
@@ -633,16 +709,21 @@ const Prospects: React.FC = () => {
             {/* Modal Novo Prospecto */}
             {isModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-200">
-                    <div className="bg-white w-full max-w-lg rounded-[32px] shadow-2xl p-8 animate-in zoom-in-95 duration-200">
+                    <div className="bg-white w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-[32px] shadow-2xl p-8 animate-in zoom-in-95 duration-200 custom-scrollbar">
                         <div className="flex justify-between items-center mb-6">
-                            <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">Novo Lead Manual</h3>
-                            <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X size={20} /></button>
+                            <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">{isEditingProspect ? 'Editar Cadastro do Lead' : 'Novo Lead Manual'}</h3>
+                            <button onClick={closeProspectModal} className="text-slate-400 hover:bg-slate-100 p-2 rounded-full transition-colors"><X size={20} /></button>
                         </div>
                         <form onSubmit={handleSaveProspect} className="space-y-4">
                             <input type="text" placeholder="Nome da Empresa/Cliente" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all" value={newProspect.name || ''} onChange={e => setNewProspect({ ...newProspect, name: e.target.value })} required />
                             <div className="grid grid-cols-2 gap-4">
                                 <input type="text" placeholder="Telefone Principal" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all" value={newProspect.phone || ''} onChange={e => setNewProspect({ ...newProspect, phone: e.target.value })} required />
                                 <input type="text" placeholder="Telefone Secundário" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all" value={newProspect.phone_secondary || ''} onChange={e => setNewProspect({ ...newProspect, phone_secondary: e.target.value })} />
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <input type="text" placeholder="Telefone do Responsavel" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all" value={newProspect.responsible_phone || ''} onChange={e => setNewProspect({ ...newProspect, responsible_phone: e.target.value })} />
+                                <input type="email" placeholder="Email do Cliente" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all" value={newProspect.email || ''} onChange={e => setNewProspect({ ...newProspect, email: e.target.value })} />
+                                <input type="text" placeholder="Site / Website" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all" value={newProspect.website || ''} onChange={e => setNewProspect({ ...newProspect, website: e.target.value })} />
                             </div>
                             <div className="grid grid-cols-2 gap-4">
                                 <input type="text" placeholder="Comprador" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all" value={newProspect.buyer_name || ''} onChange={e => setNewProspect({ ...newProspect, buyer_name: e.target.value })} />
@@ -704,7 +785,9 @@ const Prospects: React.FC = () => {
                             <textarea placeholder="Observações Gerais (opcional)" className="w-full p-4 bg-slate-50 rounded-2xl outline-none font-bold text-sm border border-slate-200 focus:border-blue-500 focus:bg-white transition-all resize-none min-h-[80px] opacity-60" value={newProspect.address || ''} onChange={e => setNewProspect({ ...newProspect, address: e.target.value })} />
 
                             <div className="flex justify-end pt-4">
-                                <button type="submit" className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all border-b-4 border-blue-800 active:border-b-0 active:translate-y-1">Salvar Lead e Inserir no CRM</button>
+                                <button type="submit" className="w-full py-4 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-all border-b-4 border-blue-800 active:border-b-0 active:translate-y-1">
+                                    {isEditingProspect ? 'Salvar Alteracoes do Lead' : 'Salvar Lead e Inserir no CRM'}
+                                </button>
                             </div>
                         </form>
                     </div>

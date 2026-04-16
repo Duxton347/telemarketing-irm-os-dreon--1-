@@ -49,6 +49,10 @@ const EMAIL_REGEX_GLOBAL = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
 const EMAIL_LABEL_HINTS = ['email', 'e mail', 'e-mail', 'correio eletronico'];
 const BUYER_LABEL_HINTS = [
   'nome do contato',
+  'nome contato',
+  'nome do responsavel',
+  'nome responsavel',
+  'responsavel pelo contato',
   'contato principal',
   'comprador',
   'decisor',
@@ -58,10 +62,15 @@ const BUYER_LABEL_HINTS = [
 const PHONE_LABEL_HINTS = [
   'whatsapp',
   'telefone',
+  'numero',
+  'numero de telefone',
+  'numero do telefone',
   'celular',
   'contato',
   'telefone do contato',
+  'numero do contato',
   'telefone do comprador',
+  'numero do comprador',
   'telefone do decisor'
 ];
 
@@ -78,6 +87,7 @@ const EMAIL_KEYS = [
   'email',
   'email_comprador',
   'buyer_email',
+  'email_do_responsavel',
   'email_do_cliente',
   'cliente_email',
   'email_contato',
@@ -86,8 +96,8 @@ const EMAIL_KEYS = [
   'd48d2b9d-2d95-4f98-a71b-aa9d47edec1b'
 ];
 const INTEREST_KEYS = ['interest_product', 'upsell_interesse_produto', 'interesse_produto', 'produto_interesse'];
-const BUYER_KEYS = ['buyer_name', 'nome_comprador', 'comprador_nome', 'nome_do_comprador', 'nome_decisor', 'decisor_nome'];
-const PHONE_KEYS = ['responsible_phone', 'telefone_comprador', 'telefone_decisor', 'telefone_responsavel', 'comprador_telefone'];
+const BUYER_KEYS = ['buyer_name', 'nome_comprador', 'comprador_nome', 'nome_do_comprador', 'nome_decisor', 'decisor_nome', 'nome_responsavel', 'responsavel_nome', 'nome_do_responsavel', 'nome_contato', 'nome_do_contato', 'contato_nome'];
+const PHONE_KEYS = ['responsible_phone', 'telefone_comprador', 'telefone_decisor', 'telefone_responsavel', 'comprador_telefone', 'telefone_contato', 'telefone_do_contato', 'numero_contato', 'numero_do_contato', 'numero_responsavel', 'numero_do_responsavel', 'whatsapp_responsavel', 'whatsapp_contato', 'fone_responsavel'];
 const OFFER_INTEREST_KEYS = ['offer_interest_level', 'nivel_interesse_oferta', 'interesse_inicial_prospect', 'receptividade_oferta'];
 const OFFER_BLOCKER_KEYS = ['offer_blocker_reason', 'objecao_principal', 'objeção_principal', 'principal_impedimento', 'motivo_nao_compra'];
 const PORTFOLIO_SCOPE_KEYS = ['portfolio_scope', 'escopo_linha', 'abrangencia_linhas'];
@@ -104,8 +114,8 @@ const questionHints: Record<string, string[]> = {
     'correio eletronico'
   ],
   interest_product: ['interesse', 'produto', 'servico', 'linha', 'explorado para compra', 'demonstrou interesse'],
-  buyer_name: ['comprador', 'decisor', 'responsavel pela compra'],
-  responsible_phone: ['telefone do comprador', 'telefone do decisor', 'telefone responsavel', 'telefone para contato do comprador'],
+  buyer_name: ['comprador', 'decisor', 'responsavel pela compra', 'nome do responsavel', 'nome do contato', 'contato principal'],
+  responsible_phone: ['telefone do comprador', 'telefone do decisor', 'telefone responsavel', 'telefone para contato do comprador', 'numero de telefone', 'numero do contato', 'whatsapp do responsavel', 'telefone do responsavel'],
   motivo_insatisfacao_principal: ['principal ponto de insatisfacao'],
   satisfacao_resolucao: ['satisfacao com a resolucao', 'avaliacao da solucao apresentada'],
   prazo_dias_atraso: ['quantos dias de atraso'],

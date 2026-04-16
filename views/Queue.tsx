@@ -3,7 +3,7 @@ import React from 'react';
 import { QuestionnaireForm } from '../components/QuestionnaireForm';
 import {
   Phone, PhoneOff, SkipForward, Play, CheckCircle2,
-  Loader2, Clock, MapPin, User, FileText, AlertCircle, Save, X, MessageCircle, Copy, Check, ChevronRight, AlertTriangle, ClipboardList, Zap, Calendar, Mail
+  Loader2, Clock, MapPin, User, FileText, AlertCircle, Save, X, MessageCircle, Copy, Check, ChevronRight, AlertTriangle, ClipboardList, Zap, Calendar, Mail, Globe
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
 import { Task, Client, Question, CallType, OperatorEventType, ProtocolStatus, UserRole, ClientTag, ClientHistoryData } from '../types';
@@ -42,6 +42,12 @@ const EMPTY_CLIENT_HISTORY: ClientHistoryData = {
   }
 };
 
+const getWebsiteUrl = (website?: string) => {
+  const value = String(website || '').trim();
+  if (!value) return '';
+  return /^https?:\/\//i.test(value) ? value : `https://${value}`;
+};
+
 const Queue: React.FC<QueueProps> = ({ user }) => {
   const [effectiveOperatorId, setEffectiveOperatorId] = React.useState<string>(user.id);
   const [operators, setOperators] = React.useState<any[]>([]);
@@ -74,6 +80,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   const [startTime, setStartTime] = React.useState<string | null>(null);
   const [isCopied, setIsCopied] = React.useState(false);
   const [isCopiedSecondary, setIsCopiedSecondary] = React.useState(false);
+  const [isCopiedResponsible, setIsCopiedResponsible] = React.useState(false);
   const [hasRecentCall, setHasRecentCall] = React.useState(false);
   const [recentCallWindowDays, setRecentCallWindowDays] = React.useState(3);
   const [expandedPortfolioCategory, setExpandedPortfolioCategory] = React.useState<string | null>(null);
@@ -156,6 +163,9 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setResponses({});
     setCallSummary('');
     setStartTime(null);
+    setIsCopied(false);
+    setIsCopiedSecondary(false);
+    setIsCopiedResponsible(false);
     setHasRecentCall(false);
     setExpandedPortfolioCategory(null);
     setNeedsProtocol(false);
@@ -447,6 +457,14 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     }
   };
 
+  const handleCopyResponsiblePhone = () => {
+    if (client && client.responsible_phone) {
+      navigator.clipboard.writeText(client.responsible_phone);
+      setIsCopiedResponsible(true);
+      setTimeout(() => setIsCopiedResponsible(false), 2000);
+    }
+  };
+
   const handleWhatsApp = () => {
     if (client) {
       const phone = client.phone.replace(/\D/g, '');
@@ -458,6 +476,15 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   const handleWhatsAppSecondary = () => {
     if (client && client.phone_secondary) {
       const phone = client.phone_secondary.replace(/\D/g, '');
+      const url = `https://wa.me/55${phone}`;
+      window.open(url, '_blank');
+    }
+  };
+
+  const handleWhatsAppResponsible = () => {
+    if (client && client.responsible_phone) {
+      const phone = client.responsible_phone.replace(/\D/g, '');
+      if (!phone) return;
       const url = `https://wa.me/55${phone}`;
       window.open(url, '_blank');
     }
@@ -937,10 +964,37 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                 <p className="font-bold text-emerald-400 flex items-center gap-2 text-sm mt-2"><User size={16} className="shrink-0" /> Decisor: {client.buyer_name}</p>
               )}
               {(currentTask.type === 'PROSPECÇÃO' || client.status === 'LEAD') && client.responsible_phone && (
-                <p className="font-bold text-blue-400 flex items-center gap-2 text-sm mt-1"><Phone size={16} className="shrink-0" /> Responsável: {client.responsible_phone}</p>
+                <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-800/50">
+                  <div className="font-bold text-blue-400 flex items-center gap-2 text-sm">
+                    <Phone size={16} className="shrink-0" />
+                    <div className="flex flex-col">
+                      <span className="text-[10px] uppercase text-slate-500 tracking-widest leading-none mb-1">Responsavel</span>
+                      <span>{client.responsible_phone}</span>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 items-center">
+                    <button onClick={handleCopyResponsiblePhone} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-400 hover:text-white transition-all">
+                      {isCopiedResponsible ? <Check size={16} className="text-green-500" /> : <Copy size={16} />}
+                    </button>
+                    <button onClick={handleWhatsAppResponsible} className="p-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white transition-all">
+                      <MessageCircle size={16} />
+                    </button>
+                  </div>
+                </div>
               )}
               {(currentTask.type === 'PROSPECÇÃO' || client.status === 'LEAD') && client.email && (
                 <p className="font-bold text-amber-400 flex items-center gap-2 text-sm mt-1"><Mail size={16} className="shrink-0 text-amber-400" /> {client.email}</p>
+              )}
+              {client.website && (
+                <a
+                  href={getWebsiteUrl(client.website)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-bold text-cyan-300 hover:text-cyan-200 flex items-center gap-2 text-sm mt-1 underline underline-offset-4"
+                >
+                  <Globe size={16} className="shrink-0" />
+                  Acessar site do cliente
+                </a>
               )}
               {!historyLoading && clientHistory.protocols.length > 0 && (
                 <div className="space-y-2 mt-4">
