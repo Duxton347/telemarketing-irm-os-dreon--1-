@@ -58,6 +58,72 @@ const GOOGLE_NEARBY_MAX_RADIUS_METERS = 50000;
 const GOOGLE_NEARBY_MIN_RADIUS_METERS = 100;
 const GRID_RADIUS_OVERLAP_FACTOR = 1.1;
 
+export interface ScraperLocationVerification {
+    formatted_address: string;
+    location: {
+        lat: number;
+        lng: number;
+    };
+    place_id: string;
+    components?: unknown[];
+}
+
+type ScraperFunctionAction = 'verify-location' | 'places-nearby' | 'place-details';
+
+type GridPoint = {
+    lat: number;
+    lng: number;
+};
+
+type GoogleNearbyResponse = {
+    status: string;
+    error_message?: string;
+    results?: any[];
+    next_page_token?: string;
+};
+
+type GoogleDetailsResponse = {
+    status?: string;
+    error_message?: string;
+    result?: any;
+};
+
+const getFunctionErrorMessage = async (error: unknown) => {
+    const fallback = error instanceof Error ? error.message : 'Falha ao chamar a funcao do scraper.';
+    const context = (error as { context?: Response } | null | undefined)?.context;
+
+    if (!context || typeof context.clone !== 'function') {
+        return fallback;
+    }
+
+    try {
+        const body = await context.clone().json();
+        if (body?.message) return String(body.message);
+        if (body?.error) return String(body.error);
+    } catch {
+        // Keep the original Supabase error when the function did not return JSON.
+    }
+
+    return fallback;
+};
+
+const invokeScraperFunction = async <T>(action: ScraperFunctionAction, payload: Record<string, unknown>): Promise<T> => {
+    const { data, error } = await supabase.functions.invoke('scraper', {
+        body: { action, payload }
+    });
+
+    if (error) {
+        throw new Error(await getFunctionErrorMessage(error));
+    }
+
+    if (data && typeof data === 'object' && 'error' in data) {
+        const body = data as { error?: string; message?: string };
+        throw new Error(body.message || body.error || 'Falha ao executar scraper.');
+    }
+
+    return data as T;
+};
+
 const buildResultsQuery = (filters?: ScraperResultsFilters) => {
     let query = supabase
         .from('scraper_results')
@@ -86,6 +152,35 @@ const getSearchRadiusMetersForGrid = (radiusKm: number, gridSize: number) => {
     return clampSearchRadiusMeters(Math.min(radiusKm, cellCoverRadiusKm * GRID_RADIUS_OVERLAP_FACTOR) * 1000);
 };
 
+const kmToDegLat = (km: number) => km / 111.0;
+
+const kmToDegLng = (km: number, latDeg: number) => {
+    const latRad = latDeg * (Math.PI / 180);
+    return km / (111.0 * Math.cos(latRad));
+};
+
+const generateGridPoints = (centerLat: number, centerLng: number, radiusKm: number, gridSize: number): GridPoint[] => {
+    if (gridSize <= 1) return [{ lat: centerLat, lng: centerLng }];
+
+    const cellSizeKm = (2 * radiusKm) / gridSize;
+    const points: GridPoint[] = [];
+
+    for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+            const offsetLatKm = -radiusKm + (i + 0.5) * cellSizeKm;
+            const offsetLngKm = -radiusKm + (j + 0.5) * cellSizeKm;
+            points.push({
+                lat: centerLat + kmToDegLat(offsetLatKm),
+                lng: centerLng + kmToDegLng(offsetLngKm, centerLat)
+            });
+        }
+    }
+
+    return points;
+};
+
+const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 export const scraperService = {
     parseGoogleAddress: (fullAddress: string) => {
         const parsed = parseAddress(fullAddress);
@@ -96,26 +191,10 @@ export const scraperService = {
         };
     },
 
-    verifyLocation: async (input: string) => {
-        // A verificação agora é feita no componente para obter a chave dinamicamente
-        return null;
-    },
+    verifyLocation: async (input: string) =>
+        invokeScraperFunction<ScraperLocationVerification>('verify-location', { input }),
 
     runProcess: async (processId: string, userId: string): Promise<any> => {
-        // Busca a chave do Google das configurações do sistema
-        const { data: setting } = await supabase
-            .from('system_settings')
-            .select('value')
-            .eq('key', 'GOOGLE_MAPS_KEY')
-            .maybeSingle();
-
-        const GOOGLE_MAPS_KEY = setting?.value;
-
-        if (!GOOGLE_MAPS_KEY) {
-            throw new Error("Chave do Google Maps não configurada. Cadastre 'GOOGLE_MAPS_KEY' nas configurações.");
-        }
-
-        // 1. Fetch Process
         const { data: process, error: procError } = await supabase
             .from('scraper_processes')
             .select('*')
@@ -124,7 +203,6 @@ export const scraperService = {
 
         if (procError || !process) throw new Error("Processo não encontrado no banco de dados.");
 
-        // 2. Create Run Entry
         const { data: run, error: runError } = await supabase
             .from('scraper_runs')
             .insert({
@@ -136,41 +214,21 @@ export const scraperService = {
             .select()
             .single();
 
-        if (runError) throw new Error(`Falha ao iniciar corrida: ${runError.message}`);
+        if (runError) throw new Error(`Falha ao iniciar execução: ${runError.message}`);
 
-        // 3. GENERATE GRID
         const gridSize = process.grid_size || 1;
-        const searchRadiusMeters = getSearchRadiusMetersForGrid(process.radius_km, gridSize);
+        const radiusKm = Number(process.radius_km || 1);
+        const searchRadiusMeters = getSearchRadiusMetersForGrid(radiusKm, gridSize);
+        const points = generateGridPoints(
+            Number(process.resolved_lat),
+            Number(process.resolved_lng),
+            radiusKm,
+            gridSize
+        );
 
-        // Helpers for Grid Generation
-        const kmToDegLat = (km: number) => km / 111.0;
-        const kmToDegLng = (km: number, latDeg: number) => {
-            const latRad = latDeg * (Math.PI / 180);
-            return km / (111.0 * Math.cos(latRad));
-        };
-
-        const generateGridPoints = (centerLat: number, centerLng: number, radiusKm: number, gridSize: number) => {
-            if (gridSize <= 1) return [{ lat: centerLat, lng: centerLng }];
-            const cellSizeKm = (2 * radiusKm) / gridSize;
-            const points = [];
-            for (let i = 0; i < gridSize; i++) {
-                for (let j = 0; j < gridSize; j++) {
-                    const offsetLatKm = -radiusKm + (i + 0.5) * cellSizeKm;
-                    const offsetLngKm = -radiusKm + (j + 0.5) * cellSizeKm;
-                    const dlat = kmToDegLat(offsetLatKm);
-                    const dlng = kmToDegLng(offsetLngKm, centerLat);
-                    points.push({ lat: centerLat + dlat, lng: centerLng + dlng });
-                }
-            }
-            return points;
-        };
-
-        const points = generateGridPoints(process.resolved_lat, process.resolved_lng, process.radius_km, gridSize);
-
-        // 4. SCRAPE LOOP
         let totalFound = 0;
         let totalNew = 0;
-        let errors = [];
+        const errors: string[] = [];
         const seenPlaceIds = new Set<string>();
 
         try {
@@ -180,21 +238,21 @@ export const scraperService = {
                     let pages = 0;
 
                     do {
-                        const searchGoogleUrl = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${point.lat},${point.lng}&radius=${searchRadiusMeters}&keyword=${encodeURIComponent(process.keyword)}&key=${GOOGLE_MAPS_KEY}${nextPageToken ? `&pagetoken=${nextPageToken}` : ''}`;
-                        const searchUrl = import.meta.env.PROD ? `https://corsproxy.io/?${encodeURIComponent(searchGoogleUrl)}` : `/google-proxy/maps/api/place/nearbysearch/json?location=${point.lat},${point.lng}&radius=${searchRadiusMeters}&keyword=${encodeURIComponent(process.keyword)}&key=${GOOGLE_MAPS_KEY}${nextPageToken ? `&pagetoken=${nextPageToken}` : ''}`;
-                        const searchRes = await fetch(searchUrl);
-                        if (!searchRes.ok) throw new Error(`Network Error: ${searchRes.statusText}`);
-                        const searchData = await searchRes.json();
+                        const searchData = await invokeScraperFunction<GoogleNearbyResponse>('places-nearby', {
+                            lat: point.lat,
+                            lng: point.lng,
+                            radius: searchRadiusMeters,
+                            keyword: process.keyword,
+                            nextPageToken: nextPageToken || undefined
+                        });
 
                         if (searchData.status !== 'OK' && searchData.status !== 'ZERO_RESULTS') {
-                            throw new Error(`Maps API Error: ${searchData.status}`);
+                            throw new Error(`Maps API Error: ${searchData.status}${searchData.error_message ? ` - ${searchData.error_message}` : ''}`);
                         }
 
                         const places = (searchData.results || []).filter((place: any) => {
                             const placeId = place?.place_id;
-                            if (!placeId || seenPlaceIds.has(placeId)) {
-                                return false;
-                            }
+                            if (!placeId || seenPlaceIds.has(placeId)) return false;
 
                             seenPlaceIds.add(placeId);
                             return true;
@@ -203,72 +261,70 @@ export const scraperService = {
                         for (const place of places) {
                             totalFound++;
 
-                            // Check deduplication (Local Scraper DB + CRM DB)
-                            const { count } = await supabase
+                            const { count, error: countError } = await supabase
                                 .from('scraper_results')
                                 .select('*', { count: 'exact', head: true })
                                 .eq('google_place_id', place.place_id);
 
-                            // We will fetch details first before CRM check to get the phone number
-                            if (count === 0) {
-                                // Fetch Details
-                                const detailsGoogleUrl = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place.place_id}&fields=name,formatted_address,formatted_phone_number,website,business_status&key=${GOOGLE_MAPS_KEY}`;
-                                const detailsUrl = import.meta.env.PROD ? `https://corsproxy.io/?${encodeURIComponent(detailsGoogleUrl)}` : `/google-proxy/maps/api/place/details/json?place_id=${place.place_id}&fields=name,formatted_address,formatted_phone_number,website,business_status&key=${GOOGLE_MAPS_KEY}`;
-                                const detailsRes = await fetch(detailsUrl);
-                                const detailsData = await detailsRes.ok ? await detailsRes.json() : {};
-                                const details = detailsData.result || {};
+                            if (countError) throw new Error(`DB Count Error: ${countError.message}`);
+                            if (count !== 0) continue;
 
-                                let isCrmDuplicate = false;
+                            const detailsData = await invokeScraperFunction<GoogleDetailsResponse>('place-details', {
+                                placeId: place.place_id
+                            });
 
-                                if (details.formatted_phone_number) {
-                                    const phoneCleaner = details.formatted_phone_number.replace(/\D/g, '');
-                                    if (phoneCleaner.length > 3) {
-                                        const { count: clientCount } = await supabase
-                                            .from('clients')
-                                            .select('*', { count: 'exact', head: true })
-                                            .eq('phone', phoneCleaner);
-
-                                        if (clientCount && clientCount > 0) {
-                                            isCrmDuplicate = true;
-                                        }
-                                    }
-                                }
-
-                                if (!isCrmDuplicate) {
-                                    const { error: insertError } = await supabase.from('scraper_results').insert({
-                                        run_id: run.id,
-                                        google_place_id: place.place_id,
-                                        name: details.name || place.name,
-                                        address: details.formatted_address || place.vicinity,
-                                        phone: details.formatted_phone_number,
-                                        website: details.website,
-                                        types: place.types,
-                                        location_lat: place.geometry.location.lat,
-                                        location_lng: place.geometry.location.lng,
-                                        review_status: 'PENDING',
-                                        raw_data: { ...place, ...details }
-                                    });
-                                    if (insertError) throw new Error(`DB Insert Error: ${insertError.message}`);
-                                    totalNew++;
-                                } // end if !isCrmDuplicate
+                            if (detailsData.status && detailsData.status !== 'OK') {
+                                throw new Error(`Maps Details Error: ${detailsData.status}${detailsData.error_message ? ` - ${detailsData.error_message}` : ''}`);
                             }
+
+                            const details = detailsData.result || {};
+                            let isCrmDuplicate = false;
+
+                            if (details.formatted_phone_number) {
+                                const phoneCleaner = details.formatted_phone_number.replace(/\D/g, '');
+                                if (phoneCleaner.length > 3) {
+                                    const { count: clientCount, error: clientCountError } = await supabase
+                                        .from('clients')
+                                        .select('*', { count: 'exact', head: true })
+                                        .eq('phone', phoneCleaner);
+
+                                    if (clientCountError) throw new Error(`DB Client Count Error: ${clientCountError.message}`);
+                                    isCrmDuplicate = Boolean(clientCount && clientCount > 0);
+                                }
+                            }
+
+                            if (isCrmDuplicate) continue;
+
+                            const { error: insertError } = await supabase.from('scraper_results').insert({
+                                run_id: run.id,
+                                google_place_id: place.place_id,
+                                name: details.name || place.name,
+                                address: details.formatted_address || place.vicinity,
+                                phone: details.formatted_phone_number,
+                                website: details.website,
+                                types: place.types,
+                                location_lat: place.geometry.location.lat,
+                                location_lng: place.geometry.location.lng,
+                                review_status: 'PENDING',
+                                raw_data: { ...place, ...details }
+                            });
+
+                            if (insertError) throw new Error(`DB Insert Error: ${insertError.message}`);
+                            totalNew++;
                         }
 
-                        nextPageToken = searchData.next_page_token;
+                        nextPageToken = searchData.next_page_token || '';
                         pages++;
 
-                        if (nextPageToken) await new Promise(resolve => setTimeout(resolve, 2000));
+                        if (nextPageToken) await wait(2000);
                         if (pages >= 3) nextPageToken = '';
-
                     } while (nextPageToken);
-
                 } catch (err: any) {
                     console.error("Scrape Error for point:", point, err);
-                    errors.push(err.message);
+                    errors.push(`${JSON.stringify(point)} | ${err.message || String(err)}`);
                 }
             }
         } finally {
-            // 5. UPDATE RUN
             await supabase
                 .from('scraper_runs')
                 .update({
@@ -281,7 +337,7 @@ export const scraperService = {
                 .eq('id', run.id);
         }
 
-        return { success: true, runId: run.id, totalNew };
+        return { success: true, runId: run.id, totalFound, totalNew, errors };
     },
 
     // --- DB OPERATIONS: PROCESSES ---

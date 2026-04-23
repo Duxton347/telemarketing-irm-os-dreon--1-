@@ -12,12 +12,13 @@ import {
    Smile, Meh, Frown, Tag
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
-import { CallRecord, User, Client, Protocol, Question, Task, OperatorEvent, OperatorEventType, Visit, Sale, SaleStatus, WhatsAppTask, CallType, ClientTag } from '../types';
+import { CallRecord, User, Client, Protocol, Question, Task, OperatorEvent, OperatorEventType, Visit, Sale, SaleStatus, WhatsAppTask, CallType, ClientTag, Quote } from '../types';
 import PostSaleRemarketingReport from './PostSaleRemarketingReport';
 import ProspectHistoryDrawer from '../components/ProspectHistoryDrawer';
 import { buildManagementReportInsights, EMPTY_MANAGEMENT_REPORT_INSIGHTS } from '../utils/managementReportInsights';
 import { formatUnknownError } from '../utils/errorFormatting';
 import { resolveQuestionnaireEntries } from '../utils/questionnaireInsights';
+import { buildPersonNameOptions, findCanonicalPersonName } from '../utils/personName';
 
 // --- HELPER COMPONENTS ---
 
@@ -110,6 +111,36 @@ const getInteractionTypeLabel = (interaction: any) => {
    return interaction?.type || 'Ligação';
 };
 
+const formatCurrency = (value: number) =>
+   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value) || 0);
+
+const formatLocalDateInput = (date = new Date()) => {
+   const year = date.getFullYear();
+   const month = String(date.getMonth() + 1).padStart(2, '0');
+   const day = String(date.getDate()).padStart(2, '0');
+   return `${year}-${month}-${day}`;
+};
+
+const parseLocalDate = (value?: string) => {
+   if (!value) return null;
+   const [year, month, day] = value.split('-').map(Number);
+   if (!year || !month || !day) return null;
+   return new Date(year, month - 1, day, 0, 0, 0, 0);
+};
+
+const formatLocalDateLabel = (value?: string) => {
+   const parsed = parseLocalDate(value);
+   return parsed ? parsed.toLocaleDateString('pt-BR') : '-';
+};
+
+const shiftDate = (base: Date, amount: number) => {
+   const next = new Date(base);
+   next.setDate(next.getDate() + amount);
+   return next;
+};
+
+const getMonthStart = (base = new Date()) => new Date(base.getFullYear(), base.getMonth(), 1);
+
 // --- MAIN COMPONENT ---
 
 const Reports: React.FC<{ user: any }> = ({ user }) => {
@@ -120,8 +151,9 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
    // Custom Date Range
    const [dateRange, setDateRange] = React.useState({
       start: '2010-01-01',
-      end: new Date().toISOString().split('T')[0]
+      end: formatLocalDateInput()
    });
+   const [datePreset, setDatePreset] = React.useState<'today' | 'yesterday' | 'last7' | 'month' | 'custom'>('today');
 
    // --- FILTER & MODAL STATE ---
    const [searchTerm, setSearchTerm] = React.useState('');
@@ -137,6 +169,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
    const [tasks, setTasks] = React.useState<Task[]>([]);
    const [whatsappTasks, setWhatsappTasks] = React.useState<WhatsAppTask[]>([]);
    const [sales, setSales] = React.useState<Sale[]>([]);
+   const [quotes, setQuotes] = React.useState<Quote[]>([]);
    const [operators, setOperators] = React.useState<User[]>([]);
    const [clients, setClients] = React.useState<Client[]>([]);
    const [invalidClients, setInvalidClients] = React.useState<Client[]>([]);
@@ -175,6 +208,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
             dataService.getTasks(), // Tasks history is tricky, might need filter update in future
             dataService.getWhatsAppTasks(undefined, dateRange.start, dateRange.end),
             dataService.getSales(dateRange.start, dateRange.end),
+            dataService.getQuotes(dateRange.start, dateRange.end),
             dataService.getUsers(),
             dataService.getClients(),
 
@@ -200,19 +234,21 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
          const fetchedTasks = resolveResult(results[1], 'Tarefas', [] as Task[]);
          const fetchedWa = resolveResult(results[2], 'WhatsApp', [] as WhatsAppTask[]);
          const fetchedSales = resolveResult(results[3], 'Vendas', [] as Sale[]);
-         const fetchedOps = resolveResult(results[4], 'Usuarios', [] as User[]);
-         const fetchedClients = resolveResult(results[5], 'Clientes', [] as Client[]);
-         const fetchedEvents = resolveResult(results[6], 'Eventos de operador', [] as OperatorEvent[]);
-         const fetchedQuestions = resolveResult(results[7], 'Perguntas', [] as Question[]);
-         const fetchedVisits = resolveResult(results[8], 'Visitas', [] as Visit[]);
-         const fetchedProspects = resolveResult(results[9], 'Prospects', [] as Client[]);
-         const fetchedTags = resolveResult(results[10], 'Tags', [] as ClientTag[]);
-         const fetchedInvalid = resolveResult(results[11], 'Telefones invalidos', [] as Client[]);
+         const fetchedQuotes = resolveResult(results[4], 'Orcamentos', [] as Quote[]);
+         const fetchedOps = resolveResult(results[5], 'Usuarios', [] as User[]);
+         const fetchedClients = resolveResult(results[6], 'Clientes', [] as Client[]);
+         const fetchedEvents = resolveResult(results[7], 'Eventos de operador', [] as OperatorEvent[]);
+         const fetchedQuestions = resolveResult(results[8], 'Perguntas', [] as Question[]);
+         const fetchedVisits = resolveResult(results[9], 'Visitas', [] as Visit[]);
+         const fetchedProspects = resolveResult(results[10], 'Prospects', [] as Client[]);
+         const fetchedTags = resolveResult(results[11], 'Tags', [] as ClientTag[]);
+         const fetchedInvalid = resolveResult(results[12], 'Telefones invalidos', [] as Client[]);
 
          setCalls(fetchedCalls);
          setTasks(fetchedTasks); // Note: filter by date if needed for history
          setWhatsappTasks(fetchedWa);
          setSales(fetchedSales);
+         setQuotes(fetchedQuotes);
          setOperators(fetchedOps);
          setClients(fetchedClients);
          setEvents(fetchedEvents);
@@ -224,7 +260,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
 
          // --- CALCULATE BASE METRICS ---
          // Revenue now counts ALL sales except CANCELADA
-         const validSales = fetchedSales.filter(s => s.status !== ('CANCELADA' as any));
+         const validSales = fetchedSales.filter(s => s.status !== SaleStatus.CANCELADO && s.status !== ('CANCELADA' as any));
          const totalRevenue = validSales.reduce((acc, s) => acc + (s.value || 0), 0);
          const totalSalesCount = validSales.length;
 
@@ -446,6 +482,128 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
       }
    }, [calls, whatsappTasks, questions, operators]);
 
+   const salespersonNameOptions = React.useMemo(() => buildPersonNameOptions(
+      sales.map(sale => sale.externalSalesperson).filter(Boolean),
+      operators.map(operator => ({ id: operator.id, label: operator.name }))
+   ), [sales, operators]);
+
+   const salesRanking = React.useMemo(() => {
+      const totals: Record<string, number> = {};
+
+      sales.forEach(sale => {
+         if (sale.status !== SaleStatus.ENTREGUE) return;
+
+         const operatorName = operators.find(operator => operator.id === sale.operatorId)?.name;
+         const name = sale.externalSalesperson
+            ? findCanonicalPersonName(sale.externalSalesperson, salespersonNameOptions)
+            : operatorName || 'N/A';
+
+         totals[name] = (totals[name] || 0) + (sale.value || 0);
+      });
+
+      return Object.entries(totals)
+         .sort(([, a], [, b]) => b - a)
+         .map(([name, value]) => ({ name, value }));
+   }, [sales, operators, salespersonNameOptions]);
+
+   const salesReportMetrics = React.useMemo(() => {
+      const isCanceledSale = (sale: Sale) => sale.status === SaleStatus.CANCELADO || sale.status === ('CANCELADA' as any);
+      const activeSales = sales.filter(sale => !isCanceledSale(sale));
+      const deliveredSales = activeSales.filter(sale => sale.status === SaleStatus.ENTREGUE);
+      const pendingSales = activeSales.filter(sale => sale.status === SaleStatus.PENDENTE);
+      const canceledSales = sales.filter(isCanceledSale);
+
+      const sumSales = (items: Sale[]) => items.reduce((acc, sale) => acc + (Number(sale.value) || 0), 0);
+      const sumQuotes = (items: Quote[]) => items.reduce((acc, quote) => acc + (Number(quote.value) || 0), 0);
+
+      const totalSalesValue = sumSales(activeSales);
+      const deliveredRevenue = sumSales(deliveredSales);
+      const totalQuoteValue = sumQuotes(quotes);
+      const wonQuotes = quotes.filter(quote => quote.status === 'WON');
+      const openQuotes = quotes.filter(quote => quote.status === 'OPEN');
+      const lostQuotes = quotes.filter(quote => quote.status === 'LOST');
+
+      const categoryMap = new Map<string, {
+         name: string;
+         totalCount: number;
+         deliveredCount: number;
+         pendingCount: number;
+         canceledCount: number;
+         totalValue: number;
+         deliveredValue: number;
+      }>();
+
+      sales.forEach(sale => {
+         const name = String(sale.category || 'Sem categoria');
+         const current = categoryMap.get(name) || {
+            name,
+            totalCount: 0,
+            deliveredCount: 0,
+            pendingCount: 0,
+            canceledCount: 0,
+            totalValue: 0,
+            deliveredValue: 0
+         };
+
+         current.totalCount += 1;
+         if (sale.status === SaleStatus.ENTREGUE) {
+            current.deliveredCount += 1;
+            current.deliveredValue += Number(sale.value) || 0;
+         } else if (sale.status === SaleStatus.PENDENTE) {
+            current.pendingCount += 1;
+         } else if (isCanceledSale(sale)) {
+            current.canceledCount += 1;
+         }
+
+         if (!isCanceledSale(sale)) {
+            current.totalValue += Number(sale.value) || 0;
+         }
+
+         categoryMap.set(name, current);
+      });
+
+      const salesCategoryData = Array.from(categoryMap.values())
+         .sort((a, b) => b.totalValue - a.totalValue);
+
+      const quoteStatusData = [
+         { name: 'Em aberto', count: openQuotes.length, value: sumQuotes(openQuotes) },
+         { name: 'Ganhos', count: wonQuotes.length, value: sumQuotes(wonQuotes) },
+         { name: 'Perdidos', count: lostQuotes.length, value: sumQuotes(lostQuotes) }
+      ];
+
+      const quoteProductMap = new Map<string, { name: string; count: number; value: number }>();
+      quotes.forEach(quote => {
+         const name = quote.interest_product || 'Nao informado';
+         const current = quoteProductMap.get(name) || { name, count: 0, value: 0 };
+         current.count += 1;
+         current.value += Number(quote.value) || 0;
+         quoteProductMap.set(name, current);
+      });
+
+      return {
+         totalSalesCount: activeSales.length,
+         deliveredSalesCount: deliveredSales.length,
+         pendingSalesCount: pendingSales.length,
+         canceledSalesCount: canceledSales.length,
+         totalSalesValue,
+         deliveredRevenue,
+         averageSalesTicket: activeSales.length > 0 ? totalSalesValue / activeSales.length : 0,
+         totalQuotesCount: quotes.length,
+         openQuotesCount: openQuotes.length,
+         wonQuotesCount: wonQuotes.length,
+         lostQuotesCount: lostQuotes.length,
+         totalQuoteValue,
+         wonQuoteValue: sumQuotes(wonQuotes),
+         averageQuoteTicket: quotes.length > 0 ? totalQuoteValue / quotes.length : 0,
+         quoteConversionRate: quotes.length > 0 ? (wonQuotes.length / quotes.length) * 100 : 0,
+         salesCategoryData,
+         quoteStatusData,
+         quoteProductData: Array.from(quoteProductMap.values())
+            .sort((a, b) => b.value - a.value)
+            .slice(0, 8)
+      };
+   }, [sales, quotes]);
+
    // --- EXPORT FUNCTION ---
    const handleExport = (type: 'csv' | 'xls') => {
       // Basic CSV implementation for current audit view or filtered data
@@ -466,7 +624,9 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
          ...sales.map(s => [
             new Date(s.registeredAt).toLocaleDateString(),
             'VENDA',
-            operators.find(u => u.id === s.operatorId)?.name || 'N/A',
+            s.externalSalesperson
+               ? findCanonicalPersonName(s.externalSalesperson, salespersonNameOptions)
+               : operators.find(u => u.id === s.operatorId)?.name || 'N/A',
             s.clientName,
             s.status,
             s.value,
@@ -756,6 +916,29 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
       return (values[half - 1] + values[half]) / 2.0;
    };
 
+   const applyDatePreset = (preset: 'today' | 'yesterday' | 'last7' | 'month' | 'custom') => {
+      setDatePreset(preset);
+      if (preset === 'custom') return;
+
+      const today = new Date();
+      let start = today;
+      let end = today;
+
+      if (preset === 'yesterday') {
+         start = shiftDate(today, -1);
+         end = shiftDate(today, -1);
+      } else if (preset === 'last7') {
+         start = shiftDate(today, -6);
+      } else if (preset === 'month') {
+         start = getMonthStart(today);
+      }
+
+      setDateRange({
+         start: formatLocalDateInput(start),
+         end: formatLocalDateInput(end)
+      });
+   };
+
    return (
       <div className="space-y-8 pb-20 animate-in fade-in duration-500">
          {/* HEADER & FILTERS */}
@@ -763,24 +946,47 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
             <div>
                <h2 className="text-3xl font-black text-slate-900 tracking-tighter uppercase">Painel de Inteligência</h2>
                <p className="text-slate-500 font-bold text-xs mt-1 uppercase tracking-widest">
-                  {new Date(dateRange.start).toLocaleDateString()} ATÉ {new Date(dateRange.end).toLocaleDateString()}
+                  {formatLocalDateLabel(dateRange.start)} ATE {formatLocalDateLabel(dateRange.end)}
                </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-4">
+               <div className="flex flex-wrap items-center gap-2">
+                  {[
+                     { key: 'today', label: 'Hoje' },
+                     { key: 'yesterday', label: 'Ontem' },
+                     { key: 'last7', label: '7 dias' },
+                     { key: 'month', label: 'Este mes' },
+                     { key: 'custom', label: 'Outra data' }
+                  ].map(option => (
+                     <button
+                        key={option.key}
+                        onClick={() => applyDatePreset(option.key as typeof datePreset)}
+                        className={`px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${datePreset === option.key ? 'bg-slate-900 text-white shadow-lg' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                     >
+                        {option.label}
+                     </button>
+                  ))}
+               </div>
                <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-2xl border border-slate-200">
                   <Calendar size={16} className="text-slate-400 ml-2" />
                   <input
                      type="date"
                      value={dateRange.start}
-                     onChange={e => setDateRange({ ...dateRange, start: e.target.value })}
+                     onChange={e => {
+                        setDatePreset('custom');
+                        setDateRange({ ...dateRange, start: e.target.value });
+                     }}
                      className="bg-transparent text-xs font-black uppercase text-slate-700 outline-none w-28"
                   />
                   <span className="text-slate-300 font-black">/</span>
                   <input
                      type="date"
                      value={dateRange.end}
-                     onChange={e => setDateRange({ ...dateRange, end: e.target.value })}
+                     onChange={e => {
+                        setDatePreset('custom');
+                        setDateRange({ ...dateRange, end: e.target.value });
+                     }}
                      className="bg-transparent text-xs font-black uppercase text-slate-700 outline-none w-28"
                   />
                </div>
@@ -1084,6 +1290,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                            </div>
                         </div>
                      </div>
+
                   </div>
                )}
 
@@ -1290,6 +1497,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                            ))}
                         </div>
                      </div>
+
                   </div>
                )}
 
@@ -1340,23 +1548,72 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                            </ResponsiveContainer>
                         </div>
                      </div>
+
                   </div>
                )}
 
                {/* SALES TAB */}
                {activeTab === 'sales' && (
                   <div className="space-y-8">
+                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+                        <MetricCard
+                           title="Qtd. Total de Vendas"
+                           value={salesReportMetrics.totalSalesCount}
+                           icon={Trophy}
+                           color="blue"
+                           subtitle={`${salesReportMetrics.deliveredSalesCount} entregues | ${salesReportMetrics.pendingSalesCount} pendentes | ${salesReportMetrics.canceledSalesCount} canceladas`}
+                        />
+                        <MetricCard
+                           title="Valor Total de Vendas"
+                           value={formatCurrency(salesReportMetrics.totalSalesValue)}
+                           icon={DollarSign}
+                           color="emerald"
+                           subtitle={`Receita entregue: ${formatCurrency(salesReportMetrics.deliveredRevenue)}`}
+                        />
+                        <MetricCard
+                           title="Qtd. Total de Orçamentos"
+                           value={salesReportMetrics.totalQuotesCount}
+                           icon={FileSpreadsheet}
+                           color="amber"
+                           subtitle={`${salesReportMetrics.openQuotesCount} abertos | ${salesReportMetrics.wonQuotesCount} ganhos | ${salesReportMetrics.lostQuotesCount} perdidos`}
+                        />
+                        <MetricCard
+                           title="Valor Total Orçado"
+                           value={formatCurrency(salesReportMetrics.totalQuoteValue)}
+                           icon={ClipboardList}
+                           color="slate"
+                           subtitle={`Conversao: ${salesReportMetrics.quoteConversionRate.toFixed(1)}% | Ticket: ${formatCurrency(salesReportMetrics.averageQuoteTicket)}`}
+                        />
+                     </div>
+
+                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <MetricCard
+                           title="Ticket Médio de Venda"
+                           value={formatCurrency(salesReportMetrics.averageSalesTicket)}
+                           icon={TrendingUp}
+                           color="emerald"
+                        />
+                        <MetricCard
+                           title="Orçamentos Ganhos"
+                           value={formatCurrency(salesReportMetrics.wonQuoteValue)}
+                           icon={Target}
+                           color="blue"
+                           subtitle={`${salesReportMetrics.wonQuotesCount} orçamentos convertidos`}
+                        />
+                        <MetricCard
+                           title="Período Aplicado"
+                           value={`${formatLocalDateLabel(dateRange.start)} - ${formatLocalDateLabel(dateRange.end)}`}
+                           icon={Calendar}
+                           color="slate"
+                           subtitle="Todos os dados desta aba respeitam este intervalo"
+                        />
+                     </div>
+
                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                         <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm">
                            <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-6">Ranking de Vendedores</h4>
                            <div className="space-y-4">
-                              {Object.entries(sales.reduce((acc: any, sale) => {
-                                 const name = sale.externalSalesperson || operators.find(o => o.id === sale.operatorId)?.name || 'N/A';
-                                 if (sale.status === SaleStatus.ENTREGUE) {
-                                    acc[name] = (acc[name] || 0) + (sale.value || 0);
-                                 }
-                                 return acc;
-                              }, {})).sort(([, a]: any, [, b]: any) => b - a).map(([name, val]: any, i) => (
+                              {salesRanking.map(({ name, value: val }, i) => (
                                  <div key={name} className="flex items-center gap-4 p-4 border border-slate-50 rounded-2xl hover:bg-slate-50 transition-colors">
                                     <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-xs ${i === 0 ? 'bg-yellow-100 text-yellow-700' : 'bg-slate-100 text-slate-500'}`}>
                                        {i + 1}
@@ -1364,7 +1621,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                                     <div className="flex-1">
                                        <p className="font-black text-slate-800 text-sm">{name}</p>
                                        <div className="h-1.5 w-full bg-slate-100 rounded-full mt-2 overflow-hidden">
-                                          <div className="h-full bg-blue-500 rounded-full" style={{ width: `${(val / metrics.revenue) * 100}%` }} />
+                                          <div className="h-full bg-blue-500 rounded-full" style={{ width: `${salesReportMetrics.totalSalesValue > 0 ? (val / salesReportMetrics.totalSalesValue) * 100 : 0}%` }} />
                                        </div>
                                     </div>
                                     <p className="font-black text-emerald-600 text-sm">
@@ -1381,18 +1638,17 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                               <ResponsiveContainer width="100%" height="100%">
                                  <PieChart>
                                     <Pie
-                                       data={Object.entries(sales.reduce((acc: any, sale) => {
-                                          if (sale.status === SaleStatus.ENTREGUE) {
-                                             acc[sale.category] = (acc[sale.category] || 0) + 1;
-                                          }
-                                          return acc;
-                                       }, {})).map(([name, value]) => ({ name, value }))}
+                                       data={salesReportMetrics.salesCategoryData.map(item => ({
+                                          name: item.name,
+                                          value: item.totalValue,
+                                          count: item.totalCount
+                                       }))}
                                        innerRadius={80}
                                        outerRadius={120}
                                        paddingAngle={2}
                                        dataKey="value"
                                     >
-                                       {Object.keys(sales).map((_, index) => (
+                                       {salesReportMetrics.salesCategoryData.map((_, index) => (
                                           <Cell key={`cell-${index}`} fill={['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'][index % 5]} />
                                        ))}
                                     </Pie>
@@ -1400,6 +1656,69 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                                     <Legend />
                                  </PieChart>
                               </ResponsiveContainer>
+                           </div>
+                        </div>
+                     </div>
+                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+                        <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm overflow-hidden">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-6">Resumo por Categoria de Venda</h4>
+                           <div className="overflow-x-auto">
+                              <table className="w-full text-left">
+                                 <thead className="border-b border-slate-100">
+                                    <tr>
+                                       <th className="pb-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Categoria</th>
+                                       <th className="pb-4 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">Qtd.</th>
+                                       <th className="pb-4 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">Entregues</th>
+                                       <th className="pb-4 text-[10px] font-black uppercase text-slate-400 tracking-widest text-right">Valor</th>
+                                    </tr>
+                                 </thead>
+                                 <tbody className="divide-y divide-slate-50">
+                                    {salesReportMetrics.salesCategoryData.map(item => (
+                                       <tr key={item.name}>
+                                          <td className="py-4 text-sm font-black text-slate-700">{item.name}</td>
+                                          <td className="py-4 text-center text-xs font-bold text-slate-600">{item.totalCount}</td>
+                                          <td className="py-4 text-center text-xs font-bold text-emerald-600">{item.deliveredCount}</td>
+                                          <td className="py-4 text-right text-sm font-black text-slate-800">{formatCurrency(item.totalValue)}</td>
+                                       </tr>
+                                    ))}
+                                    {salesReportMetrics.salesCategoryData.length === 0 && (
+                                       <tr>
+                                          <td colSpan={4} className="py-8 text-center text-xs font-bold uppercase tracking-widest text-slate-300">Sem vendas no periodo</td>
+                                       </tr>
+                                    )}
+                                 </tbody>
+                              </table>
+                           </div>
+                        </div>
+
+                        <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm overflow-hidden">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-6">Orcamentos por Status</h4>
+                           <div className="space-y-4">
+                              {salesReportMetrics.quoteStatusData.map(item => (
+                                 <div key={item.name} className="p-4 rounded-2xl border border-slate-100 bg-slate-50 flex items-center justify-between gap-4">
+                                    <div>
+                                       <p className="text-sm font-black text-slate-800">{item.name}</p>
+                                       <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{item.count} orcamentos</p>
+                                    </div>
+                                    <p className="text-sm font-black text-slate-900">{formatCurrency(item.value)}</p>
+                                 </div>
+                              ))}
+                           </div>
+
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mt-8 mb-4">Produtos mais orcados</h4>
+                           <div className="space-y-3 max-h-[260px] overflow-y-auto pr-1">
+                              {salesReportMetrics.quoteProductData.map(item => (
+                                 <div key={item.name} className="flex items-center justify-between gap-4 border-b border-slate-50 pb-3">
+                                    <div className="min-w-0">
+                                       <p className="text-sm font-bold text-slate-700 truncate">{item.name}</p>
+                                       <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{item.count} registros</p>
+                                    </div>
+                                    <p className="text-sm font-black text-emerald-600 shrink-0">{formatCurrency(item.value)}</p>
+                                 </div>
+                              ))}
+                              {salesReportMetrics.quoteProductData.length === 0 && (
+                                 <p className="py-8 text-center text-xs font-bold uppercase tracking-widest text-slate-300">Sem orcamentos no periodo</p>
+                              )}
                            </div>
                         </div>
                      </div>

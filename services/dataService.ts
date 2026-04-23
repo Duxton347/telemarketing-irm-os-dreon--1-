@@ -34,11 +34,96 @@ import {
   buildQuestionnaireBusinessContext,
   buildQuestionnaireClientContext
 } from '../utils/questionnaireBusinessRules';
+import {
+  buildPersonNameOptions,
+  cleanPersonName,
+  normalizePersonNameKey
+} from '../utils/personName';
 
 const normalize = (str: string) =>
   str ? str.toLowerCase().trim().normalize('NFD').replace(/[\u0300-\u036f]/g, "") : "";
 
 const normalizeClientNameKey = (value?: unknown) => normalize(String(value || ''));
+
+const normalizeDateOnly = (value?: string | null) => {
+  const candidate = String(value || '').trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(candidate);
+  if (!match) return undefined;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    return undefined;
+  }
+
+  return candidate;
+};
+
+const buildLocalDateTimeString = (date: string, time: string) => {
+  const normalizedDate = normalizeDateOnly(date);
+  if (!normalizedDate) return undefined;
+  return `${normalizedDate}T${time}`;
+};
+
+const buildDateRangeFilter = (startDate?: string | null, endDate?: string | null) => {
+  const start = normalizeDateOnly(startDate);
+  const end = normalizeDateOnly(endDate);
+
+  if (!start || !end) return undefined;
+
+  return {
+    start: buildLocalDateTimeString(start, '00:00:00'),
+    end: buildLocalDateTimeString(end, '23:59:59.999')
+  };
+};
+
+const ensureExternalSalespersonName = async (name?: string | null) => {
+  const cleaned = cleanPersonName(name);
+  const key = normalizePersonNameKey(cleaned);
+  if (!key) return '';
+
+  const { data: existingRows, error: fetchError } = await supabase
+    .from('external_salespeople')
+    .select('*')
+    .order('active', { ascending: false })
+    .order('name');
+
+  if (!fetchError) {
+    const existing = (existingRows || []).find((row: any) => normalizePersonNameKey(row.name) === key);
+    if (existing) {
+      if (existing.active === false) {
+        await supabase.from('external_salespeople').update({ active: true }).eq('id', existing.id);
+      }
+      return cleanPersonName(existing.name);
+    }
+  }
+
+  const { data, error } = await supabase
+    .from('external_salespeople')
+    .insert({ name: cleaned })
+    .select('*')
+    .single();
+
+  if (error) {
+    const { data: retryRows } = await supabase
+      .from('external_salespeople')
+      .select('*')
+      .order('active', { ascending: false })
+      .order('name');
+    const retry = (retryRows || []).find((row: any) => normalizePersonNameKey(row.name) === key);
+    if (retry) return cleanPersonName(retry.name);
+    throw error;
+  }
+
+  return cleanPersonName(data?.name || cleaned);
+};
 
 const mergePhoneFields = (
   primaryCandidate?: string | null,
@@ -3195,6 +3280,9 @@ export const dataService = {
     const { data, error } = await query.order('scheduled_for', { ascending: true });
     if (error) throw error;
 
+    const users = await dataService.getUsers().catch(() => []);
+    const userMap = new Map(users.map(user => [user.id, user.name]));
+
     return (data || []).map(s => ({
       id: s.id,
       customerId: s.customer_id,
@@ -3212,6 +3300,8 @@ export const dataService = {
       updatedAt: s.updated_at,
       clientName: Array.isArray(s.clients) ? s.clients[0]?.name : s.clients?.name,
       clientPhone: Array.isArray(s.clients) ? s.clients[0]?.phone : s.clients?.phone,
+      requestedByName: userMap.get(s.requested_by_operator_id),
+      assignedOperatorName: userMap.get(s.assigned_operator_id),
 
       // New fields mapping
       skipReason: s.skip_reason,
@@ -3250,6 +3340,13 @@ export const dataService = {
     if (updates.whatsappNote !== undefined) payload.whatsapp_note = updates.whatsappNote;
     if (updates.hasRepick !== undefined) payload.has_repick = updates.hasRepick;
     if (updates.resolutionChannel !== undefined) payload.resolution_channel = updates.resolutionChannel;
+    if (updates.rescheduledBy !== undefined) payload.rescheduled_by = updates.rescheduledBy;
+    if (updates.rescheduledAt !== undefined) payload.rescheduled_at = updates.rescheduledAt;
+    if (updates.rescheduleReason !== undefined) payload.reschedule_reason = updates.rescheduleReason;
+    if (updates.deletedBy !== undefined) payload.deleted_by = updates.deletedBy;
+    if (updates.deletedAt !== undefined) payload.deleted_at = updates.deletedAt;
+    if (updates.deleteReason !== undefined) payload.delete_reason = updates.deleteReason;
+    if (updates.completedAt !== undefined) payload.completed_at = updates.completedAt;
 
     payload.updated_at = new Date().toISOString();
 
@@ -3271,16 +3368,18 @@ export const dataService = {
         ? `Status alterado para ${updates.status}.`
         : (updates.scheduledFor ? `Novo horario: ${new Date(updates.scheduledFor).toLocaleString('pt-BR')}.` : 'Item operacional atualizado.');
 
-      if (updates.status === 'CONCLUIDO' && updates.approvedByAdminId) {
+      if (updates.status === 'APROVADO' && updates.approvedByAdminId) {
         notificationType = `${scheduleType}_APPROVED`;
         title = scheduleType === 'REPIQUE' ? 'Repique aprovado' : 'Agendamento aprovado';
         body = 'Item aprovado e enviado para a fila operacional.';
       } else if (updates.status === 'CANCELADO') {
         notificationType = `${scheduleType}_CANCELED`;
         title = scheduleType === 'REPIQUE' ? 'Repique cancelado' : 'Agendamento cancelado';
+        body = updates.deleteReason || updates.approvalReason || body;
       } else if (updates.scheduledFor) {
         notificationType = `${scheduleType}_RESCHEDULED`;
         title = scheduleType === 'REPIQUE' ? 'Repique reagendado' : 'Agendamento reagendado';
+        body = updates.rescheduleReason || body;
       } else if (updates.assignedOperatorId && updates.assignedOperatorId !== existingSchedule?.assigned_operator_id) {
         notificationType = `${scheduleType}_REASSIGNED`;
         title = scheduleType === 'REPIQUE' ? 'Repique reatribuido' : 'Agendamento reatribuido';
@@ -3303,6 +3402,7 @@ export const dataService = {
     const rows: any[] = [];
     const pageSize = 1000;
     let from = 0;
+    const dateRangeFilter = buildDateRangeFilter(startDate, endDate);
 
     while (true) {
       let query = supabase
@@ -3311,10 +3411,10 @@ export const dataService = {
         .order('registered_at', { ascending: false })
         .range(from, from + pageSize - 1);
 
-      if (startDate && endDate) {
+      if (dateRangeFilter) {
         query = query
-          .gte('registered_at', `${startDate}T00:00:00`)
-          .lte('registered_at', `${endDate}T23:59:59`);
+          .gte('registered_at', dateRangeFilter.start)
+          .lte('registered_at', dateRangeFilter.end);
       }
 
       const { data, error } = await query;
@@ -3347,6 +3447,10 @@ export const dataService = {
   },
 
   saveSale: async (sale: Partial<Sale> & { externalSalesperson?: string }): Promise<void> => {
+    const externalSalesperson = sale.externalSalesperson
+      ? await ensureExternalSalespersonName(sale.externalSalesperson)
+      : undefined;
+
     const { error } = await supabase.from('sales').insert({
       sale_number: sale.saleNumber,
       customer_id: sale.clientId || null, // Convert empty string to null
@@ -3358,7 +3462,7 @@ export const dataService = {
       value: sale.value || 0,
       status: SaleStatus.PENDENTE,
       registered_at: new Date().toISOString(),
-      external_salesperson: sale.externalSalesperson
+      external_salesperson: externalSalesperson || null
     });
     if (error) throw error;
 
@@ -3418,7 +3522,11 @@ export const dataService = {
     if (updates.address) payload.address = updates.address;
     if (updates.operatorId) payload.operator_id = updates.operatorId;
     if (updates.clientId !== undefined) payload.customer_id = updates.clientId || null;
-    if (updates.externalSalesperson !== undefined) payload.external_salesperson = updates.externalSalesperson?.trim() || null;
+    if (updates.externalSalesperson !== undefined) {
+      payload.external_salesperson = updates.externalSalesperson
+        ? await ensureExternalSalespersonName(updates.externalSalesperson)
+        : null;
+    }
     if (updates.deliveryDelayReason !== undefined) payload.delivery_delay_reason = updates.deliveryDelayReason;
     if (updates.deliveryNote !== undefined) payload.delivery_note = updates.deliveryNote;
 
@@ -4088,9 +4196,10 @@ export const dataService = {
 
   getCalls: async (startDate?: string, endDate?: string): Promise<CallRecord[]> => {
     let query = supabase.from('call_logs').select('*, clients(name, phone)').order('start_time', { ascending: false });
+    const dateRangeFilter = buildDateRangeFilter(startDate, endDate);
 
-    if (startDate && endDate) {
-      query = query.gte('start_time', `${startDate}T00:00:00`).lte('start_time', `${endDate}T23:59:59`);
+    if (dateRangeFilter) {
+      query = query.gte('start_time', dateRangeFilter.start).lte('start_time', dateRangeFilter.end);
     }
 
     const { data, error } = await query;
@@ -4290,7 +4399,21 @@ export const dataService = {
       const decision = TagDecisionEngine.analyzeCall(callWithId, [], questions);
       
       if (decision.tagsToCreate && decision.tagsToCreate.length > 0) {
-        const mappedTags = decision.tagsToCreate.map(t => ({
+        const dedupedTags = decision.tagsToCreate.reduce<Partial<ClientTag>[]>((acc, tag) => {
+          const duplicate = acc.some(existing =>
+            existing.categoria === tag.categoria
+            && existing.motivo === tag.motivo
+            && String(existing.motivo_detalhe || '') === String(tag.motivo_detalhe || '')
+          );
+
+          if (!duplicate) {
+            acc.push(tag);
+          }
+
+          return acc;
+        }, []);
+
+        const mappedTags = dedupedTags.map(t => ({
           ...t,
           client_id: call.clientId,
           call_record_id: insertedCall.id,
@@ -4343,30 +4466,52 @@ export const dataService = {
     if (error) throw error;
   },
 
-  confirmTag: async (tagId: string, operatorId: string): Promise<void> => {
-    const { error } = await supabase
+  confirmTag: async (tagId: string, operatorId: string): Promise<ClientTag> => {
+    const { data, error } = await supabase
       .from('client_tags')
       .update({
         status: 'CONFIRMADA_OPERADOR',
         confirmado_por: operatorId,
-        confirmado_em: new Date().toISOString()
+        confirmado_em: new Date().toISOString(),
+        rejeitado_por: null,
+        motivo_rejeicao: null
       })
-      .eq('id', tagId);
+      .eq('status', 'SUGERIDA')
+      .eq('id', tagId)
+      .select('*');
     if (error) throw error;
+    if (!data || data.length === 0) {
+      const { data: currentTag, error: currentTagError } = await supabase.from('client_tags').select('*').eq('id', tagId).maybeSingle();
+      if (currentTagError) throw currentTagError;
+      if (!currentTag) throw new Error('Tag nao encontrada para confirmacao.');
+      return currentTag as ClientTag;
+    }
     await syncClientTagToClientProfile(tagId);
+    return data[0] as ClientTag;
   },
 
-  approveTag: async (tagId: string, supervisorId: string): Promise<void> => {
-    const { error } = await supabase
+  approveTag: async (tagId: string, supervisorId: string): Promise<ClientTag> => {
+    const { data, error } = await supabase
       .from('client_tags')
       .update({
         status: 'APROVADA_SUPERVISOR',
         aprovado_por: supervisorId,
-        aprovado_em: new Date().toISOString()
+        aprovado_em: new Date().toISOString(),
+        rejeitado_por: null,
+        motivo_rejeicao: null
       })
-      .eq('id', tagId);
+      .in('status', ['SUGERIDA', 'CONFIRMADA_OPERADOR'])
+      .eq('id', tagId)
+      .select('*');
     if (error) throw error;
+    if (!data || data.length === 0) {
+      const { data: currentTag, error: currentTagError } = await supabase.from('client_tags').select('*').eq('id', tagId).maybeSingle();
+      if (currentTagError) throw currentTagError;
+      if (!currentTag) throw new Error('Tag nao encontrada para aprovacao.');
+      return currentTag as ClientTag;
+    }
     await syncClientTagToClientProfile(tagId);
+    return data[0] as ClientTag;
   },
 
   rebuildClientInsightsFromHistory: async (): Promise<number> => {
@@ -4388,16 +4533,25 @@ export const dataService = {
     return dataService.rebuildClientInsightsFromHistory();
   },
 
-  rejectTag: async (tagId: string, operatorId: string, reason: string): Promise<void> => {
-    const { error } = await supabase
+  rejectTag: async (tagId: string, operatorId: string, reason: string): Promise<ClientTag> => {
+    const normalizedReason = getTrimmedText(reason) || 'Rejeitada manualmente';
+    const { data, error } = await supabase
       .from('client_tags')
       .update({
         status: 'REJEITADA',
         rejeitado_por: operatorId,
-        motivo_rejeicao: reason
+        motivo_rejeicao: normalizedReason
       })
-      .eq('id', tagId);
+      .eq('id', tagId)
+      .select('*');
     if (error) throw error;
+    if (!data || data.length === 0) {
+      const { data: currentTag, error: currentTagError } = await supabase.from('client_tags').select('*').eq('id', tagId).maybeSingle();
+      if (currentTagError) throw currentTagError;
+      if (!currentTag) throw new Error('Tag nao encontrada para rejeicao.');
+      return currentTag as ClientTag;
+    }
+    return data[0] as ClientTag;
   },
 
   getDetailedCallsToday: async () => {
@@ -4480,13 +4634,19 @@ export const dataService = {
     }
   },
 
-  getOperatorEvents: async (startDate: string, endDate: string): Promise<OperatorEvent[]> => {
-    const { data, error } = await supabase
+  getOperatorEvents: async (startDate?: string, endDate?: string): Promise<OperatorEvent[]> => {
+    const dateRangeFilter = buildDateRangeFilter(startDate, endDate);
+    let query = supabase
       .from('operator_events')
-      .select('*')
-      .gte('timestamp', `${startDate}T00:00:00`)
-      .lte('timestamp', `${endDate}T23:59:59`)
-      .order('timestamp', { ascending: true });
+      .select('*');
+
+    if (dateRangeFilter) {
+      query = query
+        .gte('timestamp', dateRangeFilter.start)
+        .lte('timestamp', dateRangeFilter.end);
+    }
+
+    const { data, error } = await query.order('timestamp', { ascending: true });
     if (error) throw error;
     return (data || []).map(e => ({
       id: e.id,
@@ -5663,17 +5823,26 @@ export const dataService = {
 
   // --- VISITAS ---
   // --- QUOTES (ORÇAMENTOS) ---
-  getQuotes: async (): Promise<Quote[]> => {
+  getQuotes: async (startDate?: string, endDate?: string): Promise<Quote[]> => {
     const rows: Quote[] = [];
     const pageSize = 1000;
     let from = 0;
+    const dateRangeFilter = buildDateRangeFilter(startDate, endDate);
 
     while (true) {
-      const { data, error } = await supabase
+      let query = supabase
         .from('quotes')
         .select('*')
         .order('created_at', { ascending: false })
         .range(from, from + pageSize - 1);
+
+      if (dateRangeFilter) {
+        query = query
+          .gte('created_at', dateRangeFilter.start)
+          .lte('created_at', dateRangeFilter.end);
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
 
@@ -5715,6 +5884,7 @@ export const dataService = {
     const payload = {
       ...quote,
       ...(normalizedQuoteNumber ? { quote_number: normalizedQuoteNumber } : {}),
+      ...(quote.salesperson_name !== undefined ? { salesperson_name: cleanPersonName(quote.salesperson_name) } : {}),
       interest_product: normalizedInterestProduct
     };
     const { data, error } = await supabase.from('quotes').insert(payload).select().single();
@@ -5751,6 +5921,7 @@ export const dataService = {
     const payload = {
       ...updates,
       ...(updates.quote_number !== undefined ? { quote_number: normalizedQuoteNumber } : {}),
+      ...(updates.salesperson_name !== undefined ? { salesperson_name: cleanPersonName(updates.salesperson_name) } : {}),
       ...(updates.interest_product !== undefined ? { interest_product: normalizedInterestProduct } : {})
     };
     const { data, error } = await supabase.from('quotes').update(payload).eq('id', id).select().single();
@@ -5817,6 +5988,10 @@ export const dataService = {
   },
 
   saveVisit: async (visit: Partial<Visit>): Promise<void> => {
+    const externalSalesperson = visit.externalSalesperson
+      ? await ensureExternalSalespersonName(visit.externalSalesperson)
+      : undefined;
+
     const { data, error } = await supabase.from('visits').insert({
       client_id: visit.clientId,
       client_name: visit.clientName,
@@ -5829,7 +6004,7 @@ export const dataService = {
       outcome: visit.outcome,
       // New fields
       order_index: visit.orderIndex,
-      external_salesperson: visit.externalSalesperson,
+      external_salesperson: externalSalesperson,
       is_indication: visit.isIndication,
       realized: visit.realized,
       origin_type: visit.originType,
@@ -5872,7 +6047,11 @@ export const dataService = {
     if (updates.outcome) payload.outcome = updates.outcome;
     if (updates.scheduledDate) payload.scheduled_date = updates.scheduledDate;
     if (updates.orderIndex !== undefined) payload.order_index = updates.orderIndex;
-    if (updates.externalSalesperson) payload.external_salesperson = updates.externalSalesperson;
+    if (updates.externalSalesperson !== undefined) {
+      payload.external_salesperson = updates.externalSalesperson
+        ? await ensureExternalSalespersonName(updates.externalSalesperson)
+        : null;
+    }
     if (updates.isIndication !== undefined) payload.is_indication = updates.isIndication;
     if (updates.realized !== undefined) payload.realized = updates.realized;
     if (updates.contactPerson) payload.contact_person = updates.contactPerson;
@@ -6041,12 +6220,31 @@ export const dataService = {
   getExternalSalespeople: async (): Promise<any[]> => {
     const { data, error } = await supabase.from('external_salespeople').select('*').eq('active', true).order('name');
     if (error) throw error;
-    return data || [];
+    const canonicalOptions = buildPersonNameOptions((data || []).map((person: any) => ({
+      id: person.id,
+      label: person.name
+    })));
+
+    return canonicalOptions.map(option => {
+      const source = (data || []).find((person: any) => person.id === option.id);
+      return {
+        ...source,
+        id: option.id,
+        name: option.label,
+        active: source?.active ?? true
+      };
+    });
   },
 
-  addExternalSalesperson: async (name: string): Promise<void> => {
-    const { error } = await supabase.from('external_salespeople').insert({ name });
+  addExternalSalesperson: async (name: string): Promise<any> => {
+    const canonicalName = await ensureExternalSalespersonName(name);
+    const { data, error } = await supabase
+      .from('external_salespeople')
+      .select('*')
+      .eq('active', true)
+      .order('name');
     if (error) throw error;
+    return (data || []).find((person: any) => normalizePersonNameKey(person.name) === normalizePersonNameKey(canonicalName));
   },
 
   removeExternalSalesperson: async (id: string): Promise<void> => {
@@ -6152,9 +6350,9 @@ export const dataService = {
       query = query.eq('assigned_to', operatorId);
     }
 
-    if (startDate && endDate) {
-      const start = `${startDate}T00:00:00`;
-      const end = `${endDate}T23:59:59`;
+    const dateRangeFilter = buildDateRangeFilter(startDate, endDate);
+    if (dateRangeFilter) {
+      const { start, end } = dateRangeFilter;
       // Fetch if created, started, or completed in the range
       query = query.or(`and(created_at.gte.${start},created_at.lte.${end}),and(started_at.gte.${start},started_at.lte.${end}),and(completed_at.gte.${start},completed_at.lte.${end}),and(updated_at.gte.${start},updated_at.lte.${end})`);
     }

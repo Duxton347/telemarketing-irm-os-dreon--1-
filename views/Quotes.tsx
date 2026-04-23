@@ -7,9 +7,10 @@ import {
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { dataService } from '../services/dataService';
-import { Quote, QuoteStatus, Client, SaleStatus, SaleCategory, SaleChannel } from '../types';
+import { Quote, QuoteStatus, Client, Sale, SaleStatus, SaleCategory, SaleChannel } from '../types';
 import { CurrencyInput } from '../components/CurrencyInput';
 import { AutocompleteInput } from '../components/AutocompleteInput';
+import { buildPersonNameOptions, findCanonicalPersonName, normalizePersonNameKey } from '../utils/personName';
 
 interface QuotesProps {
     user: any;
@@ -21,6 +22,28 @@ type ProbabilityFilter = 'ALL' | 'HIGH' | 'MEDIUM' | 'LOW';
 
 const formatCurrency = (value: number) =>
     new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value) || 0);
+
+const formatLocalDateInput = (date = new Date()) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+const parseLocalDate = (value?: string) => {
+    if (!value) return null;
+    const [year, month, day] = value.split('-').map(Number);
+    if (!year || !month || !day) return null;
+    return new Date(year, month - 1, day, 0, 0, 0, 0);
+};
+
+const shiftDate = (base: Date, amount: number) => {
+    const next = new Date(base);
+    next.setDate(next.getDate() + amount);
+    return next;
+};
+
+const getMonthStart = (base = new Date()) => new Date(base.getFullYear(), base.getMonth(), 1);
 
 const matchesProbabilityFilter = (value: number, filter: ProbabilityFilter) => {
     if (filter === 'ALL') return true;
@@ -34,6 +57,7 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
     const [clients, setClients] = useState<Client[]>([]);
     const [users, setUsers] = useState<any[]>([]);
     const [externalSalespeople, setExternalSalespeople] = useState<{id:string, name:string}[]>([]);
+    const [sales, setSales] = useState<Sale[]>([]);
     const [interestProducts, setInterestProducts] = useState<string[]>([]);
 
     const [isLoading, setIsLoading] = useState(true);
@@ -42,6 +66,8 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
     const [statusFilter, setStatusFilter] = useState<'ALL' | 'OPEN' | 'WON' | 'LOST'>('OPEN');
     const [salespersonFilter, setSalespersonFilter] = useState('ALL');
     const [probabilityFilter, setProbabilityFilter] = useState<ProbabilityFilter>('ALL');
+    const [dateRange, setDateRange] = useState({ start: formatLocalDateInput(), end: formatLocalDateInput() });
+    const [datePreset, setDatePreset] = useState<'today' | 'yesterday' | 'last7' | 'month' | 'custom'>('today');
 
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isConverting, setIsConverting] = useState(false);
@@ -56,18 +82,20 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
     const loadData = async () => {
         setIsLoading(true);
         try {
-            const [q, c, u, ext, products] = await Promise.all([
+            const [q, c, u, ext, products, saleRows] = await Promise.all([
                 dataService.getQuotes(),
                 dataService.getClients(true),
                 dataService.getUsers(),
                 dataService.getExternalSalespeople(),
-                CampaignPlannerService.getDistinctInterestProducts()
+                CampaignPlannerService.getDistinctInterestProducts(),
+                dataService.getSales()
             ]);
             setQuotes(q);
             setClients(c);
             setUsers(u);
             setExternalSalespeople(ext);
             setInterestProducts(products);
+            setSales(saleRows);
         } catch (e) {
             console.error(e);
             alert("Erro ao carregar dados de orçamentos.");
@@ -78,20 +106,54 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
 
     useEffect(() => { loadData(); }, []);
 
+    const salespersonNameOptions = useMemo(() => buildPersonNameOptions(
+        externalSalespeople.map(e => ({ id: e.id, label: e.name })),
+        users.map(u => ({ id: u.id, label: u.name })),
+        quotes.map(q => q.salesperson_name).filter(Boolean),
+        sales.map(s => s.externalSalesperson).filter(Boolean)
+    ), [externalSalespeople, users, quotes, sales]);
+
+    const allSalespeopleNames = useMemo(
+        () => salespersonNameOptions.map(option => option.label),
+        [salespersonNameOptions]
+    );
+
+    const getCanonicalSalespersonName = (name?: string) =>
+        findCanonicalPersonName(name, salespersonNameOptions);
+
     const filteredQuotes = useMemo(() => {
         return quotes.filter(q => {
             const normalizedSearch = searchTerm.toLowerCase().trim();
+            const normalizedSalespersonFilter = normalizePersonNameKey(salespersonFilter);
             const matchSearch =
                 !normalizedSearch ||
                 q.client_name.toLowerCase().includes(normalizedSearch) ||
                 q.quote_number.toLowerCase().includes(normalizedSearch) ||
                 (q.interest_product || '').toLowerCase().includes(normalizedSearch);
             const matchStatus = statusFilter === 'ALL' || q.status === statusFilter;
-            const matchSalesperson = salespersonFilter === 'ALL' || q.salesperson_name === salespersonFilter;
+            const matchSalesperson = salespersonFilter === 'ALL' || normalizePersonNameKey(q.salesperson_name) === normalizedSalespersonFilter;
             const matchProbability = matchesProbabilityFilter(Number(q.win_probability) || 0, probabilityFilter);
-            return matchSearch && matchStatus && matchSalesperson && matchProbability;
+            let matchDate = true;
+            const quoteDate = q.created_at ? new Date(q.created_at) : null;
+
+            if (dateRange.start) {
+                const startDate = parseLocalDate(dateRange.start);
+                if (startDate && quoteDate) {
+                    matchDate = matchDate && quoteDate >= startDate;
+                }
+            }
+
+            if (dateRange.end) {
+                const endDate = parseLocalDate(dateRange.end);
+                if (endDate && quoteDate) {
+                    endDate.setHours(23, 59, 59, 999);
+                    matchDate = matchDate && quoteDate <= endDate;
+                }
+            }
+
+            return matchSearch && matchStatus && matchSalesperson && matchProbability && matchDate;
         });
-    }, [quotes, searchTerm, statusFilter, salespersonFilter, probabilityFilter]);
+    }, [quotes, searchTerm, statusFilter, salespersonFilter, probabilityFilter, dateRange]);
 
     // Metrics
     const metrics = useMemo(() => {
@@ -102,7 +164,8 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
         // Group by salesperson
         const bySalesperson: Record<string, number> = {};
         filteredQuotes.forEach(q => {
-            bySalesperson[q.salesperson_name] = (bySalesperson[q.salesperson_name] || 0) + 1;
+            const canonicalName = getCanonicalSalespersonName(q.salesperson_name) || 'N/A';
+            bySalesperson[canonicalName] = (bySalesperson[canonicalName] || 0) + 1;
         });
         const topSalespeople = Object.entries(bySalesperson).sort((a, b) => b[1] - a[1]).slice(0, 3);
 
@@ -112,7 +175,7 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
             wonCount: won.length,
             topSalespeople
         };
-    }, [filteredQuotes]);
+    }, [filteredQuotes, salespersonNameOptions]);
 
     const normalizeQuoteNumber = (value?: string) => (value || '').trim();
 
@@ -145,16 +208,23 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
         e.preventDefault();
         if (isSavingQuote) return;
         const normalizedQuoteNumber = normalizeQuoteNumber(newQuote.quote_number);
-        if (!newQuote.client_name || !newQuote.salesperson_name || !normalizedQuoteNumber) {
+        const canonicalSalespersonName = getCanonicalSalespersonName(newQuote.salesperson_name);
+        if (!newQuote.client_name || !canonicalSalespersonName || !normalizedQuoteNumber) {
             alert("Preencha o nome do cliente, o vendedor e o número do orçamento.");
             return;
         }
 
         setIsSavingQuote(true);
         try {
+            const isInternalSalesperson = users.some(u => normalizePersonNameKey(u.name) === normalizePersonNameKey(canonicalSalespersonName));
+            if (!isInternalSalesperson) {
+                await dataService.addExternalSalesperson(canonicalSalespersonName);
+            }
+
             if (newQuote.id) {
                 await dataService.updateQuote(newQuote.id, {
                     ...newQuote,
+                    salesperson_name: canonicalSalespersonName,
                     quote_number: normalizedQuoteNumber
                 });
             } else {
@@ -175,6 +245,7 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
                 await dataService.saveQuote({
                     ...newQuote,
                     quote_number: normalizedQuoteNumber,
+                    salesperson_name: canonicalSalespersonName,
                     client_id: finalClientId
                 });
             }
@@ -213,7 +284,7 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
                 status: SaleStatus.PENDENTE,
                 value: convertingQuote.value,
                 registeredAt: new Date().toISOString(),
-                externalSalesperson: convertingQuote.salesperson_name
+                externalSalesperson: getCanonicalSalespersonName(convertingQuote.salesperson_name)
             });
 
             // 2. Update Quote Status
@@ -237,12 +308,6 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
         }
     };
 
-    const allSalespeopleNames = Array.from(new Set([
-        ...users.map(u => u.name),
-        ...externalSalespeople.map(e => e.name),
-        ...quotes.map(q => q.salesperson_name).filter(Boolean)
-    ])).sort((a, b) => a.localeCompare(b, 'pt-BR'));
-
     const handleExportQuotes = () => {
         if (filteredQuotes.length === 0) {
             alert('Nao ha orcamentos para exportar com os filtros atuais.');
@@ -259,14 +324,16 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
         pdf.text('Relatorio de Orcamentos', 14, 16);
         pdf.setFontSize(9);
         pdf.text(`Gerado em ${today}`, 14, 23);
-        pdf.text(`Registros: ${filteredQuotes.length}`, 14, 28);
-        pdf.text(`Valor em aberto: ${formatCurrency(totalOpenValue)}`, 14, 33);
+        pdf.text(`Periodo: ${dateRange.start || 'inicio'} ate ${dateRange.end || 'hoje'}`, 14, 28);
+        pdf.text(`Registros: ${filteredQuotes.length}`, 14, 33);
+        pdf.text(`Valor em aberto: ${formatCurrency(totalOpenValue)}`, 14, 38);
 
         autoTable(pdf, {
-            startY: 38,
+            startY: 43,
             head: [[
                 'Nº Orçamento',
                 'Cliente',
+                'Data',
                 'Vendedor',
                 'Valor',
                 'Chance',
@@ -276,7 +343,8 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
             body: filteredQuotes.map(quote => ([
                 quote.quote_number,
                 quote.client_name,
-                quote.salesperson_name,
+                new Date(quote.created_at).toLocaleDateString('pt-BR'),
+                getCanonicalSalespersonName(quote.salesperson_name),
                 formatCurrency(Number(quote.value || 0)),
                 `${Number(quote.win_probability || 0)}%`,
                 quote.status,
@@ -294,12 +362,13 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
             },
             columnStyles: {
                 0: { cellWidth: 34 },
-                1: { cellWidth: 55 },
-                2: { cellWidth: 45 },
-                3: { cellWidth: 28, halign: 'right' },
-                4: { cellWidth: 20, halign: 'center' },
-                5: { cellWidth: 24, halign: 'center' },
-                6: { cellWidth: 65 }
+                1: { cellWidth: 48 },
+                2: { cellWidth: 24, halign: 'center' },
+                3: { cellWidth: 40 },
+                4: { cellWidth: 28, halign: 'right' },
+                5: { cellWidth: 20, halign: 'center' },
+                6: { cellWidth: 24, halign: 'center' },
+                7: { cellWidth: 60 }
             },
             alternateRowStyles: {
                 fillColor: [248, 250, 252]
@@ -308,6 +377,29 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
         });
 
         pdf.save(`orcamentos-${today}.pdf`);
+    };
+
+    const applyDatePreset = (preset: 'today' | 'yesterday' | 'last7' | 'month' | 'custom') => {
+        setDatePreset(preset);
+        if (preset === 'custom') return;
+
+        const today = new Date();
+        let start = today;
+        let end = today;
+
+        if (preset === 'yesterday') {
+            start = shiftDate(today, -1);
+            end = shiftDate(today, -1);
+        } else if (preset === 'last7') {
+            start = shiftDate(today, -6);
+        } else if (preset === 'month') {
+            start = getMonthStart(today);
+        }
+
+        setDateRange({
+            start: formatLocalDateInput(start),
+            end: formatLocalDateInput(end)
+        });
     };
 
     return (
@@ -360,8 +452,54 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
             </div>
 
             {/* FILTERS */}
-            <div className="bg-white p-4 rounded-xl border shadow-sm flex flex-wrap gap-4 items-center">
-                <div className="flex-1 min-w-[200px] relative">
+            <div className="bg-white p-4 rounded-xl border shadow-sm space-y-4">
+                <div className="flex flex-wrap gap-2">
+                    {[
+                        { key: 'today', label: 'Hoje' },
+                        { key: 'yesterday', label: 'Ontem' },
+                        { key: 'last7', label: '7 dias' },
+                        { key: 'month', label: 'Este mes' },
+                        { key: 'custom', label: 'Outra data' }
+                    ].map(option => (
+                        <button
+                            key={option.key}
+                            onClick={() => applyDatePreset(option.key as typeof datePreset)}
+                            className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-colors ${datePreset === option.key ? 'bg-slate-900 text-white' : 'bg-slate-50 text-slate-500 border border-slate-200 hover:border-blue-300 hover:text-blue-700'}`}
+                        >
+                            {option.label}
+                        </button>
+                    ))}
+                </div>
+                <div className="flex flex-wrap gap-4 items-center">
+                    <div className="flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2">
+                        <Calendar size={16} className="text-slate-400" />
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">De</span>
+                        <input
+                            type="date"
+                            value={dateRange.start}
+                            onChange={e => {
+                                setDatePreset('custom');
+                                setDateRange(prev => ({ ...prev, start: e.target.value }));
+                            }}
+                            className="bg-transparent outline-none text-sm font-medium text-slate-700"
+                        />
+                    </div>
+                    <div className="flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2">
+                        <Calendar size={16} className="text-slate-400" />
+                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Ate</span>
+                        <input
+                            type="date"
+                            value={dateRange.end}
+                            onChange={e => {
+                                setDatePreset('custom');
+                                setDateRange(prev => ({ ...prev, end: e.target.value }));
+                            }}
+                            className="bg-transparent outline-none text-sm font-medium text-slate-700"
+                        />
+                    </div>
+                </div>
+                <div className="flex flex-wrap gap-4 items-center">
+                    <div className="flex-1 min-w-[200px] relative">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                     <input
                         type="text"
@@ -410,6 +548,7 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
                         <option value="LOW">Chance Baixa (até 39%)</option>
                     </select>
                 </div>
+                </div>
             </div>
 
             {/* TABLE */}
@@ -439,7 +578,7 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
                                     <td className="p-4 font-mono text-sm font-bold text-slate-600">{q.quote_number}</td>
                                     <td className="p-4 font-bold text-slate-800">{q.client_name}</td>
                                     <td className="p-4 text-sm font-semibold text-slate-600">{q.interest_product || 'Não informado'}</td>
-                                    <td className="p-4 text-sm font-medium text-slate-600">{q.salesperson_name}</td>
+                                    <td className="p-4 text-sm font-medium text-slate-600">{getCanonicalSalespersonName(q.salesperson_name)}</td>
                                     <td className="p-4 font-bold text-slate-800">{formatCurrency(q.value)}</td>
                                     <td className="p-4">
                                         <div className="flex items-center gap-2">
@@ -451,7 +590,7 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
                                     </td>
                                     <td className="p-4">{getStatusBadge(q.status)}</td>
                                     <td className="p-4 text-right space-x-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                        <button onClick={() => { setNewQuote(q); setIsModalOpen(true); }} className="p-2 bg-white rounded-lg border shadow-sm hover:text-blue-600 transition-colors" title="Editar"><FileText size={16} /></button>
+                                        <button onClick={() => { setNewQuote({ ...q, salesperson_name: getCanonicalSalespersonName(q.salesperson_name) }); setIsModalOpen(true); }} className="p-2 bg-white rounded-lg border shadow-sm hover:text-blue-600 transition-colors" title="Editar"><FileText size={16} /></button>
                                         {q.status === 'OPEN' && (
                                             <button onClick={() => { setConvertingQuote(q); setIsConverting(true); }} className="p-2 bg-green-50 text-green-600 rounded-lg border border-green-200 shadow-sm hover:bg-green-100 transition-colors" title="Transformar em Venda"><ArrowRight size={16} /></button>
                                         )}
@@ -483,8 +622,8 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
                                     <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Vendedor Responsável</label>
                                     <AutocompleteInput
                                         value={newQuote.salesperson_name || ''}
-                                        onChange={val => setNewQuote({...newQuote, salesperson_name: val})}
-                                        options={allSalespeopleNames.map(n => ({ id: n, label: n }))}
+                                        onChange={val => setNewQuote({...newQuote, salesperson_name: getCanonicalSalespersonName(val)})}
+                                        options={salespersonNameOptions}
                                         placeholder="Nome do vendedor..."
                                         required
                                         className="w-full px-4 py-3 bg-slate-50 border border-slate-200 focus:border-blue-400 focus:ring-4 focus:ring-blue-50 focus:bg-white rounded-xl outline-none transition-all font-bold text-sm text-slate-700 shadow-inner"
@@ -611,4 +750,7 @@ export const Quotes: React.FC<QuotesProps> = ({ user }) => {
         </div>
     );
 };
+
+
+
 

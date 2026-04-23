@@ -3,12 +3,16 @@ import React from 'react';
 import {
     ShoppingBag, Plus, Search, Truck, CheckCircle2,
     MapPin, Tag, X, Save, Loader2, Hash, Zap,
-    TrendingUp, DollarSign, BarChart3, Check,
+    TrendingUp, DollarSign, BarChart3, Check, Download,
     Clock, Filter, Edit2, Trash2, AlertCircle
 } from 'lucide-react';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { dataService } from '../services/dataService';
-import { Sale, SaleCategory, SaleChannel, SaleStatus, User as UserType, UserRole } from '../types';
+import { Sale, SaleCategory, SaleChannel, SaleStatus, User as UserType, UserRole, ExternalSalesperson } from '../types';
 import { CurrencyInput } from '../components/CurrencyInput';
+import { AutocompleteInput } from '../components/AutocompleteInput';
+import { buildPersonNameOptions, findCanonicalPersonName, normalizePersonNameKey } from '../utils/personName';
 
 type SaleFormState = {
     saleNumber: string;
@@ -21,9 +25,32 @@ type SaleFormState = {
     value: number | string;
 };
 
+const formatLocalDateInput = (date = new Date()) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+const parseLocalDate = (value?: string) => {
+    if (!value) return null;
+    const [year, month, day] = value.split('-').map(Number);
+    if (!year || !month || !day) return null;
+    return new Date(year, month - 1, day, 0, 0, 0, 0);
+};
+
+const shiftDate = (base: Date, amount: number) => {
+    const next = new Date(base);
+    next.setDate(next.getDate() + amount);
+    return next;
+};
+
+const getMonthStart = (base = new Date()) => new Date(base.getFullYear(), base.getMonth(), 1);
+
 const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
     const [sales, setSales] = React.useState<Sale[]>([]);
     const [operators, setOperators] = React.useState<UserType[]>([]);
+    const [externalSalespeople, setExternalSalespeople] = React.useState<ExternalSalesperson[]>([]);
     const [clients, setClients] = React.useState<any[]>([]); // Store all clients for search
     const [clientSuggestions, setClientSuggestions] = React.useState<any[]>([]);
     const [showClientSuggestions, setShowClientSuggestions] = React.useState(false);
@@ -42,7 +69,8 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
     const [justification, setJustification] = React.useState({ delayReason: '', note: '' });
 
     // Filros Avançados
-    const [dateRange, setDateRange] = React.useState({ start: '', end: '' });
+    const [dateRange, setDateRange] = React.useState({ start: formatLocalDateInput(), end: formatLocalDateInput() });
+    const [datePreset, setDatePreset] = React.useState<'today' | 'yesterday' | 'last7' | 'month' | 'custom'>('today');
     const [categoryFilter, setCategoryFilter] = React.useState('');
     const [channelFilter, setChannelFilter] = React.useState('');
     const [operatorFilter, setOperatorFilter] = React.useState('');
@@ -60,10 +88,11 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
 
     const loadData = React.useCallback(async () => {
         setIsLoading(true);
-        const [salesResult, usersResult, clientsResult] = await Promise.allSettled([
+        const [salesResult, usersResult, clientsResult, externalSalespeopleResult] = await Promise.allSettled([
             dataService.getSales(),
             dataService.getUsers(),
-            dataService.getClients(true)
+            dataService.getClients(true),
+            dataService.getExternalSalespeople()
         ]);
 
         if (salesResult.status === 'fulfilled') {
@@ -87,10 +116,26 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
             setClients([]);
         }
 
+        if (externalSalespeopleResult.status === 'fulfilled') {
+            setExternalSalespeople(externalSalespeopleResult.value);
+        } else {
+            console.error("Erro ao carregar vendedores externos:", externalSalespeopleResult.reason);
+            setExternalSalespeople([]);
+        }
+
         setIsLoading(false);
     }, []);
 
     React.useEffect(() => { loadData(); }, [loadData]);
+
+    const salespersonNameOptions = React.useMemo(() => buildPersonNameOptions(
+        externalSalespeople.map(s => ({ id: s.id, label: s.name })),
+        operators.map(o => ({ id: o.id, label: o.name })),
+        sales.map(s => s.externalSalesperson).filter(Boolean)
+    ), [externalSalespeople, operators, sales]);
+
+    const getCanonicalSalespersonName = (name?: string) =>
+        findCanonicalPersonName(name, salespersonNameOptions);
 
     const triggerToast = (msg: string) => {
         setToastMessage(msg);
@@ -130,7 +175,7 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
             const saleData = {
                 ...newSale,
                 clientId: finalClientId,
-                externalSalesperson: newSale.externalSalesperson.trim(),
+                externalSalesperson: getCanonicalSalespersonName(newSale.externalSalesperson),
                 value: isNaN(saleValue) ? 0 : saleValue,
                 operatorId: editingSaleId ? undefined : user.id // Maintain original operator on edit
             };
@@ -170,7 +215,7 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
             clientName: sale.clientName,
             clientId: sale.clientId || '',
             address: sale.address,
-            externalSalesperson: sale.externalSalesperson || '',
+            externalSalesperson: getCanonicalSalespersonName(sale.externalSalesperson) || '',
             category: sale.category,
             channel: sale.channel,
             value: String(sale.value)
@@ -253,13 +298,17 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
         // Filtros de Data
         let matchesDate = true;
         if (dateRange.start) {
-            matchesDate = matchesDate && new Date(s.registeredAt) >= new Date(dateRange.start);
+            const startDate = parseLocalDate(dateRange.start);
+            if (startDate) {
+                matchesDate = matchesDate && new Date(s.registeredAt) >= startDate;
+            }
         }
         if (dateRange.end) {
-            // Ajuste para incluir o final do dia selecionado
-            const endDate = new Date(dateRange.end);
-            endDate.setHours(23, 59, 59, 999);
-            matchesDate = matchesDate && new Date(s.registeredAt) <= endDate;
+            const endDate = parseLocalDate(dateRange.end);
+            if (endDate) {
+                endDate.setHours(23, 59, 59, 999);
+                matchesDate = matchesDate && new Date(s.registeredAt) <= endDate;
+            }
         }
 
         // Outros Filtros
@@ -279,7 +328,7 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
     };
 
     const getSaleResponsibleLabel = (sale: Sale) => {
-        if (sale.externalSalesperson?.trim()) return sale.externalSalesperson.trim();
+        if (normalizePersonNameKey(sale.externalSalesperson)) return getCanonicalSalespersonName(sale.externalSalesperson);
         const operator = operators.find(o => o.id === sale.operatorId);
         if (operator?.username) return `@${operator.username}`;
         if (operator?.name) return operator.name;
@@ -291,6 +340,99 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
         const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
         const diffHours = Math.floor((diffTime % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
         return `${diffDays}d ${diffHours}h`;
+    };
+
+    const handleExportSalesPdf = () => {
+        if (filteredSales.length === 0) {
+            alert('Nao ha vendas para exportar com os filtros atuais.');
+            return;
+        }
+
+        const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+        const today = formatLocalDateInput();
+
+        pdf.setFontSize(16);
+        pdf.text('Relatorio de Vendas', 14, 16);
+        pdf.setFontSize(9);
+        pdf.text(`Gerado em ${today}`, 14, 23);
+        pdf.text(`Periodo: ${dateRange.start || 'inicio'} ate ${dateRange.end || 'hoje'}`, 14, 28);
+        pdf.text(`Registros: ${filteredSales.length}`, 14, 33);
+        pdf.text(`Volume total: ${formatCurrency(totalVolume)}`, 14, 38);
+        pdf.text(`Entregues: ${formatCurrency(deliveredVolume)}`, 90, 38);
+        pdf.text(`Pendentes: ${formatCurrency(pendingVolume)}`, 166, 38);
+
+        autoTable(pdf, {
+            startY: 43,
+            head: [[
+                'Pedido',
+                'Data',
+                'Cliente',
+                'Responsavel',
+                'Categoria',
+                'Canal',
+                'Status',
+                'Valor'
+            ]],
+            body: filteredSales.map(sale => ([
+                sale.saleNumber,
+                new Date(sale.registeredAt).toLocaleDateString('pt-BR'),
+                sale.clientName,
+                getSaleResponsibleLabel(sale),
+                sale.category,
+                sale.channel,
+                sale.status,
+                formatCurrency(Number(sale.value) || 0)
+            ])),
+            styles: {
+                fontSize: 8,
+                cellPadding: 2.5,
+                valign: 'middle'
+            },
+            headStyles: {
+                fillColor: [15, 23, 42],
+                textColor: [255, 255, 255],
+                fontStyle: 'bold'
+            },
+            columnStyles: {
+                0: { cellWidth: 24 },
+                1: { cellWidth: 22, halign: 'center' },
+                2: { cellWidth: 55 },
+                3: { cellWidth: 42 },
+                4: { cellWidth: 28 },
+                5: { cellWidth: 28 },
+                6: { cellWidth: 26, halign: 'center' },
+                7: { cellWidth: 24, halign: 'right' }
+            },
+            alternateRowStyles: {
+                fillColor: [248, 250, 252]
+            },
+            margin: { left: 14, right: 14 }
+        });
+
+        pdf.save(`vendas-${today}.pdf`);
+    };
+
+    const applyDatePreset = (preset: 'today' | 'yesterday' | 'last7' | 'month' | 'custom') => {
+        setDatePreset(preset);
+        if (preset === 'custom') return;
+
+        const today = new Date();
+        let start = today;
+        let end = today;
+
+        if (preset === 'yesterday') {
+            start = shiftDate(today, -1);
+            end = shiftDate(today, -1);
+        } else if (preset === 'last7') {
+            start = shiftDate(today, -6);
+        } else if (preset === 'month') {
+            start = getMonthStart(today);
+        }
+
+        setDateRange({
+            start: formatLocalDateInput(start),
+            end: formatLocalDateInput(end)
+        });
     };
 
     return (
@@ -310,25 +452,33 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
                     <h2 className="text-4xl font-black text-slate-800 tracking-tighter uppercase leading-none">Gestão de Vendas Dreon</h2>
                     <p className="text-slate-500 font-bold mt-2">Monitoramento de resultados e confirmação de entregas em tempo real.</p>
                 </div>
-                <button
-                    onClick={() => {
-                        setEditingSaleId(null);
-                        setNewSale({
-                            saleNumber: '',
-                            clientName: '',
-                            clientId: '',
-                            address: '',
-                            externalSalesperson: '',
-                            category: SaleCategory.QUIMICOS,
-                            channel: SaleChannel.WHATSAPP,
-                            value: ''
-                        });
-                        setIsModalOpen(true);
-                    }}
-                    className="bg-slate-900 text-white px-10 py-5 rounded-[28px] font-black uppercase tracking-widest text-[11px] shadow-2xl flex items-center gap-3 hover:bg-slate-800 active:scale-95 transition-all"
-                >
-                    <Plus size={20} /> Registrar Venda
-                </button>
+                <div className="flex flex-wrap items-center gap-3">
+                    <button
+                        onClick={handleExportSalesPdf}
+                        className="bg-white text-slate-700 px-8 py-5 rounded-[28px] font-black uppercase tracking-widest text-[11px] shadow-sm border border-slate-200 flex items-center gap-3 hover:border-blue-300 hover:text-blue-700 transition-all"
+                    >
+                        <Download size={18} /> Exportar PDF
+                    </button>
+                    <button
+                        onClick={() => {
+                            setEditingSaleId(null);
+                            setNewSale({
+                                saleNumber: '',
+                                clientName: '',
+                                clientId: '',
+                                address: '',
+                                externalSalesperson: '',
+                                category: SaleCategory.QUIMICOS,
+                                channel: SaleChannel.WHATSAPP,
+                                value: ''
+                            });
+                            setIsModalOpen(true);
+                        }}
+                        className="bg-slate-900 text-white px-10 py-5 rounded-[28px] font-black uppercase tracking-widest text-[11px] shadow-2xl flex items-center gap-3 hover:bg-slate-800 active:scale-95 transition-all"
+                    >
+                        <Plus size={20} /> Registrar Venda
+                    </button>
+                </div>
             </header>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -395,12 +545,32 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
 
                     {/* Linha Inferior: Filtros Avançados */}
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div className="md:col-span-2 lg:col-span-4 flex flex-wrap gap-2">
+                            {[
+                                { key: 'today', label: 'Hoje' },
+                                { key: 'yesterday', label: 'Ontem' },
+                                { key: 'last7', label: '7 dias' },
+                                { key: 'month', label: 'Este mês' },
+                                { key: 'custom', label: 'Outra data' }
+                            ].map(option => (
+                                <button
+                                    key={option.key}
+                                    onClick={() => applyDatePreset(option.key as typeof datePreset)}
+                                    className={`px-4 py-3 rounded-[20px] text-[10px] font-black uppercase tracking-widest transition-all ${datePreset === option.key ? 'bg-slate-900 text-white shadow-lg' : 'bg-white text-slate-500 border border-slate-100 shadow-sm hover:bg-slate-50'}`}
+                                >
+                                    {option.label}
+                                </button>
+                            ))}
+                        </div>
                         <div className="bg-white p-2 rounded-[24px] border border-slate-100 shadow-sm flex items-center gap-2 px-4">
                             <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">De:</span>
                             <input
                                 type="date"
                                 value={dateRange.start}
-                                onChange={e => setDateRange({ ...dateRange, start: e.target.value })}
+                                onChange={e => {
+                                    setDatePreset('custom');
+                                    setDateRange({ ...dateRange, start: e.target.value });
+                                }}
                                 className="bg-transparent border-none outline-none text-xs font-bold text-slate-700 w-full"
                             />
                         </div>
@@ -409,7 +579,10 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
                             <input
                                 type="date"
                                 value={dateRange.end}
-                                onChange={e => setDateRange({ ...dateRange, end: e.target.value })}
+                                onChange={e => {
+                                    setDatePreset('custom');
+                                    setDateRange({ ...dateRange, end: e.target.value });
+                                }}
                                 className="bg-transparent border-none outline-none text-xs font-bold text-slate-700 w-full"
                             />
                         </div>
@@ -633,10 +806,10 @@ const SalesView: React.FC<{ user: UserType }> = ({ user }) => {
 
                                 <div className="space-y-2">
                                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Vendedor Responsável</label>
-                                    <input
-                                        type="text"
+                                    <AutocompleteInput
                                         value={newSale.externalSalesperson}
-                                        onChange={e => setNewSale({ ...newSale, externalSalesperson: e.target.value })}
+                                        onChange={value => setNewSale({ ...newSale, externalSalesperson: getCanonicalSalespersonName(value) })}
+                                        options={salespersonNameOptions}
                                         className="w-full p-5 bg-slate-50 border border-slate-200 rounded-3xl font-bold outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
                                         placeholder="Ex: Stefani, Jessica, Vendedor Externo..."
                                     />

@@ -13,6 +13,7 @@ import Admin from './views/Admin';
 import Protocols from './views/Protocols';
 import Reports from './views/Reports';
 import Calendar from './views/Calendar';
+import Repiques from './views/Repiques';
 import RoutesView from './views/Routes';
 import WhatsAppDashboard from './views/WhatsAppDashboard';
 import { ScraperView } from './views/Scraper/ScraperView';
@@ -50,6 +51,7 @@ const AuthenticatedApp: React.FC<{
               user.role === UserRole.ADMIN ? <Admin user={user} /> : <Navigate to="/" />
             } />
             <Route path="/calendar" element={<Calendar user={user} />} />
+            <Route path="/repiques" element={<Repiques user={user} />} />
             <Route path="/routes" element={<RoutesView user={user} />} />
             <Route path="/whatsapp" element={<WhatsAppDashboard user={user} />} />
             <Route path="/scraper" element={<ScraperView user={user} />} />

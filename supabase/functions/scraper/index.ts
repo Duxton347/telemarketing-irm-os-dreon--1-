@@ -76,6 +76,47 @@ serve(async (req) => {
             });
         }
 
+        if (action === 'places-nearby') {
+            const { lat, lng, radius, keyword, nextPageToken } = payload;
+            const params = new URLSearchParams({
+                location: `${lat},${lng}`,
+                radius: String(radius),
+                keyword: String(keyword),
+                key: GOOGLE_MAPS_KEY
+            });
+
+            if (nextPageToken) {
+                params.set('pagetoken', String(nextPageToken));
+            }
+
+            const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?${params.toString()}`;
+            const res = await fetch(url);
+            const data = await res.json();
+
+            return new Response(JSON.stringify(data), {
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+                status: res.ok ? 200 : 502
+            });
+        }
+
+        if (action === 'place-details') {
+            const { placeId } = payload;
+            const params = new URLSearchParams({
+                place_id: String(placeId),
+                fields: 'name,formatted_address,formatted_phone_number,website,business_status',
+                key: GOOGLE_MAPS_KEY
+            });
+
+            const url = `https://maps.googleapis.com/maps/api/place/details/json?${params.toString()}`;
+            const res = await fetch(url);
+            const data = await res.json();
+
+            return new Response(JSON.stringify(data), {
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+                status: res.ok ? 200 : 502
+            });
+        }
+
         // --- 2. EXECUTE RUN ---
         if (action === 'run') {
             const { processId, userId } = payload;

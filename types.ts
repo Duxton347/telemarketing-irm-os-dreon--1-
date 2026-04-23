@@ -374,6 +374,8 @@ export interface CallSchedule {
   scheduleReason?: string;
   approvalReason?: string;
   resolutionChannel?: string;
+  requestedByName?: string;
+  assignedOperatorName?: string;
 
   // New fields for Repique
   skipReason?: string;

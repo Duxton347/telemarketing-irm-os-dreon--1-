@@ -10,6 +10,7 @@ import { Visit, Client, User as UserType, CallType, SaleStatus, ExternalSalesper
 import { exportToExcel, exportToPDF } from '../utils/RouteExport';
 import { normalizePhone } from '../lib/supabase';
 import { CurrencyInput } from '../components/CurrencyInput';
+import { findCanonicalPersonName, normalizePersonNameKey } from '../utils/personName';
 
 const Routes: React.FC<{ user: UserType }> = ({ user }) => {
     // --- STATE ---
@@ -158,6 +159,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
     const confirmCreateRoute = async (externalName: string) => {
         setIsProcessing(true);
         try {
+            const canonicalExternalName = findCanonicalPersonName(externalName, externalSalespeople.map(s => s.name));
             for (let i = 0; i < selectedCandidates.length; i++) {
                 const c = selectedCandidates[i];
                 await dataService.saveVisit({
@@ -170,7 +172,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                     scheduledDate: new Date(`${builderFilters.date}T09:00:00`).toISOString(),
                     status: 'PENDING',
                     orderIndex: visits.length + i,
-                    externalSalesperson: externalName,
+                    externalSalesperson: canonicalExternalName,
                     isIndication: c.type === 'CALL' || c.type === 'MANUAL' || c.type === 'WHATSAPP',
                     originType: c.type,
                     originId: c.id,
@@ -246,7 +248,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
     const handleAddSalesperson = async () => {
         if (!newSalespersonName) return;
         try {
-            await dataService.addExternalSalesperson(newSalespersonName);
+            await dataService.addExternalSalesperson(findCanonicalPersonName(newSalespersonName, externalSalespeople.map(s => s.name)));
             setNewSalespersonName('');
             // Refresh external list
             const updated = await dataService.getExternalSalespeople();
@@ -263,6 +265,9 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
             setExternalSalespeople(updated);
         } catch (e) { alert("Erro ao remover."); }
     }
+
+    const getCanonicalExternalSalespersonName = (name?: string) =>
+        findCanonicalPersonName(name, externalSalespeople.map(s => s.name));
 
     // --- EXECUTION ACTIONS ---
     const moveVisit = async (visitId: string, direction: -1 | 1) => {
@@ -407,6 +412,8 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                 });
 
             } else {
+                const canonicalSaleExternal = findCanonicalPersonName(finalizeData.saleExternal, externalSalespeople.map(s => s.name));
+
                 // Mark as Completed
                 await dataService.updateVisit(activeVisit.id, {
                     status: 'COMPLETED',
@@ -425,7 +432,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                         channel: SaleChannel.PROSPECCAO,
                         operatorId: user.id, // Current user is the registrar
                         value: Number(finalizeData.saleValue),
-                        externalSalesperson: finalizeData.saleExternal // New field linked
+                        externalSalesperson: canonicalSaleExternal // New field linked
                     });
                 }
 
@@ -435,7 +442,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                         quote_number: finalizeData.quoteNumber,
                         client_name: finalizeData.newName,
                         client_id: activeVisit.clientId,
-                        salesperson_name: finalizeData.saleExternal || user.name,
+                        salesperson_name: canonicalSaleExternal || user.name,
                         value: Number(finalizeData.quoteValue),
                         win_probability: Number(finalizeData.quoteWinProb),
                         status: 'OPEN',
@@ -459,16 +466,20 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
 
     // --- DERIVED STATE ---
     const callsToRender = visits.filter(v => {
+        const visitSalespersonKey = normalizePersonNameKey(v.externalSalesperson);
+        const historySalespersonKey = normalizePersonNameKey(historyFilters.externalSalesperson);
+        const executionSalespersonKey = normalizePersonNameKey(executionFilters.externalSalesperson);
+
         if (activeTab === 'HISTORY') {
             const vDate = new Date(v.scheduledDate).toISOString().split('T')[0];
             return v.status === 'COMPLETED' &&
                 vDate >= historyFilters.startDate &&
                 vDate <= historyFilters.endDate &&
-                (!historyFilters.externalSalesperson || v.externalSalesperson === historyFilters.externalSalesperson);
+                (!historyFilters.externalSalesperson || visitSalespersonKey === historySalespersonKey);
         } else {
             // Execution view
             if (v.status !== 'PENDING') return false;
-            if (executionFilters.externalSalesperson && v.externalSalesperson !== executionFilters.externalSalesperson) return false;
+            if (executionFilters.externalSalesperson && visitSalespersonKey !== executionSalespersonKey) return false;
             return true;
         }
     });
@@ -697,7 +708,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                                     )}
                                 </div>
                                 <div className="text-[10px] uppercase text-slate-400 font-bold border-t border-slate-100 pt-3 mt-2 flex justify-between">
-                                    <span>Vendedor: {visit.externalSalesperson || 'N/A'}</span>
+                                    <span>Vendedor: {getCanonicalExternalSalespersonName(visit.externalSalesperson) || 'N/A'}</span>
                                     <span>#{index + 1}</span>
                                 </div>
                             </div>
@@ -741,7 +752,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                                             <p className="text-xs text-slate-500 truncate max-w-[200px]">{visit.address}</p>
                                         </td>
                                         <td className="p-4">
-                                            <p className="font-bold text-sm text-slate-700">{visit.externalSalesperson || 'N/A'}</p>
+                                            <p className="font-bold text-sm text-slate-700">{getCanonicalExternalSalespersonName(visit.externalSalesperson) || 'N/A'}</p>
                                             <p className="text-[10px] text-slate-400 uppercase">Interno: {visit.salespersonName}</p>
                                         </td>
                                         <td className="p-4">
