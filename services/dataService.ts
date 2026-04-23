@@ -2233,6 +2233,165 @@ const buildClientHistorySummary = (calls: CallRecord[], protocols: Protocol[]): 
   )
 });
 
+const collectClientHistoryPhoneKeys = (...clients: Array<Partial<Client> | any | null | undefined>) => {
+  const phones = new Set<string>();
+
+  for (const client of clients) {
+    if (!client) continue;
+
+    [
+      client.phone,
+      client.phone_secondary,
+      client.responsible_phone
+    ].forEach(rawPhone => {
+      const normalizedPhone = normalizePhone(String(rawPhone || ''));
+      if (normalizedPhone) phones.add(normalizedPhone);
+
+      extractCandidatePhonesFromCombined(rawPhone)
+        .map(candidate => normalizePhone(String(candidate || '')))
+        .filter(Boolean)
+        .forEach(candidate => phones.add(candidate));
+    });
+  }
+
+  return Array.from(phones);
+};
+
+const resolveClientHistoryClientIds = async (clientId: string): Promise<string[]> => {
+  const ids = new Set<string>([clientId]);
+  const { data: currentClient, error } = await supabase
+    .from('clients')
+    .select('id, phone, phone_secondary, responsible_phone, external_id')
+    .eq('id', clientId)
+    .maybeSingle();
+
+  if (error) throw error;
+
+  const phoneKeys = collectClientHistoryPhoneKeys(currentClient);
+  const relatedQueries: PromiseLike<any>[] = [];
+
+  if (phoneKeys.length > 0) {
+    relatedQueries.push(
+      supabase.from('clients').select('id, invalid').in('phone', phoneKeys),
+      supabase.from('clients').select('id, invalid').in('phone_secondary', phoneKeys),
+      supabase.from('clients').select('id, invalid').in('responsible_phone', phoneKeys)
+    );
+  }
+
+  if (currentClient?.external_id) {
+    relatedQueries.push(
+      supabase
+        .from('clients')
+        .select('id, invalid')
+        .eq('external_id', currentClient.external_id)
+    );
+  }
+
+  const relatedResults = await Promise.all(relatedQueries);
+  for (const result of relatedResults) {
+    if (result.error) throw result.error;
+    (result.data || [])
+      .filter((client: any) => client?.invalid !== true)
+      .forEach((client: any) => {
+        if (client?.id) ids.add(client.id);
+      });
+  }
+
+  return Array.from(ids);
+};
+
+const mapCallLogRecordToHistory = (call: any, campaignContextMap: Map<string, any>): CallRecord => {
+  const campaignInsights = extractCampaignInsightsFromResponses(call.responses || {});
+  const context = campaignContextMap.get(call.campanha_id) || {};
+  const callProposito = decodeLatin1(call.proposito) || decodeLatin1(context.proposito);
+  const callCampaignName = decodeLatin1(context.campaignName);
+  const callTargetProduct = decodeLatin1(context.targetProduct);
+  const callOfferProduct = decodeLatin1(context.offerProduct);
+  const callPortfolioScope = decodeLatin1(context.portfolioScope);
+  const callCampaignMode = decodeLatin1(context.campaignMode);
+
+  return {
+    id: call.id,
+    taskId: call.task_id,
+    operatorId: call.operator_id,
+    clientId: call.client_id,
+    startTime: call.start_time,
+    endTime: call.end_time,
+    duration: call.duration || 0,
+    reportTime: call.report_time || 0,
+    responses: call.responses || {},
+    type: mapStoredCallTypeToApp(call.call_type),
+    protocolId: call.protocol_id,
+    proposito: callProposito,
+    campanha_id: call.campanha_id,
+    campaignName: callCampaignName,
+    targetProduct: call.responses?.target_product || callTargetProduct,
+    offerProduct: call.responses?.offer_product || callOfferProduct,
+    portfolioScope: call.responses?.portfolio_scope || campaignInsights.portfolioScope || callPortfolioScope,
+    campaignMode: call.responses?.campaign_mode || callCampaignMode,
+    offerInterestLevel: call.responses?.offer_interest_level || campaignInsights.offerInterestLevel,
+    offerBlockerReason: call.responses?.offer_blocker_reason || campaignInsights.offerBlockerReason
+  };
+};
+
+const mapWhatsAppTaskToHistory = (task: any): CallRecord => {
+  const timestamp = task.completed_at || task.updated_at || task.started_at || task.created_at || new Date().toISOString();
+  const responses = task.responses || {};
+  const fallbackReport = responses.written_report
+    || responses.questionnaire_text_summary
+    || task.skip_note
+    || task.skip_reason
+    || (task.status === 'skipped' ? 'Atendimento WhatsApp pulado.' : 'Atendimento WhatsApp registrado.');
+
+  return {
+    id: `whatsapp-${task.id}`,
+    taskId: task.id,
+    operatorId: task.assigned_to,
+    clientId: task.client_id,
+    startTime: task.started_at || task.created_at || timestamp,
+    endTime: timestamp,
+    duration: 0,
+    reportTime: 0,
+    responses: {
+      ...responses,
+      written_report: fallbackReport,
+      note: responses.note || task.skip_note || task.skip_reason,
+      source_kind: 'whatsapp_task'
+    },
+    type: CallType.WHATSAPP,
+    proposito: decodeLatin1(task.proposito) || responses.call_purpose,
+    targetProduct: responses.target_product,
+    offerProduct: responses.offer_product,
+    portfolioScope: responses.portfolio_scope,
+    campaignMode: responses.campaign_mode,
+    offerInterestLevel: responses.offer_interest_level,
+    offerBlockerReason: responses.offer_blocker_reason
+  };
+};
+
+const mapSkippedVoiceTaskToHistory = (task: any): CallRecord => {
+  const timestamp = task.updated_at || task.scheduled_for || task.created_at || new Date().toISOString();
+  const skipReason = task.skip_reason || 'Tentativa de contato sem relatorio.';
+
+  return {
+    id: `task-${task.id}`,
+    taskId: task.id,
+    operatorId: task.assigned_to,
+    clientId: task.client_id,
+    startTime: timestamp,
+    endTime: timestamp,
+    duration: 0,
+    reportTime: 0,
+    responses: {
+      written_report: skipReason,
+      note: skipReason,
+      source_kind: 'voice_task'
+    },
+    type: mapStoredCallTypeToApp(task.type),
+    proposito: decodeLatin1(task.proposito) || task.schedule_reason
+  };
+};
+
 const INTERNAL_TASK_DONE_STATUSES = ['CONCLUIDO', 'CANCELADO', 'ARQUIVADO'];
 
 const parseJsonValue = (value: any) => {
@@ -4703,59 +4862,86 @@ export const dataService = {
 
   getClientHistory: async (clientId: string): Promise<ClientHistoryData> => {
     try {
-      // Fetch Call Logs
-      const { data: callsData, error: callsError } = await supabase
-        .from('call_logs')
-        .select('*')
-        .eq('client_id', clientId)
-        .order('start_time', { ascending: false });
+      const relatedClientIds = await resolveClientHistoryClientIds(clientId);
+      const [
+        callsResult,
+        protocolsResult,
+        whatsAppResult,
+        skippedTasksResult,
+        skippedSchedulesResult
+      ] = await Promise.all([
+        supabase
+          .from('call_logs')
+          .select('*')
+          .in('client_id', relatedClientIds)
+          .order('start_time', { ascending: false }),
+        supabase
+          .from('protocols')
+          .select('*')
+          .in('client_id', relatedClientIds)
+          .order('opened_at', { ascending: false }),
+        supabase
+          .from('whatsapp_tasks')
+          .select('id, client_id, assigned_to, type, status, skip_reason, skip_note, responses, started_at, completed_at, updated_at, created_at')
+          .in('client_id', relatedClientIds)
+          .in('status', ['completed', 'skipped'])
+          .order('completed_at', { ascending: false, nullsFirst: false })
+          .order('updated_at', { ascending: false }),
+        supabase
+          .from('tasks')
+          .select('*')
+          .in('client_id', relatedClientIds)
+          .eq('status', 'skipped')
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('call_schedules')
+          .select('id, customer_id, assigned_operator_id, call_type, status, skip_reason, schedule_reason, scheduled_for, updated_at, created_at')
+          .in('customer_id', relatedClientIds)
+          .eq('status', 'CANCELADO')
+          .order('created_at', { ascending: false })
+      ]);
 
-      if (callsError) throw callsError;
+      if (callsResult.error) throw callsResult.error;
+      if (protocolsResult.error) throw protocolsResult.error;
+      if (whatsAppResult.error) throw whatsAppResult.error;
+      if (skippedTasksResult.error) throw skippedTasksResult.error;
+      if (skippedSchedulesResult.error) throw skippedSchedulesResult.error;
 
-      // Fetch Protocols
-      const { data: protocolsData, error: protocolsError } = await supabase
-        .from('protocols')
-        .select('*')
-        .eq('client_id', clientId)
-        .order('opened_at', { ascending: false });
-
-      if (protocolsError) throw protocolsError;
+      const callsData = callsResult.data || [];
+      const protocolsData = protocolsResult.data || [];
 
       const campaignContextMap = await loadCampaignContextMap((callsData || []).map((call: any) => call.campanha_id).filter(Boolean));
 
-      const mappedCalls: CallRecord[] = (callsData || []).map(c => {
-        const campaignInsights = extractCampaignInsightsFromResponses(c.responses || {});
-        const context = campaignContextMap.get(c.campanha_id) || {};
-        const callProposito = decodeLatin1(c.proposito) || decodeLatin1(context.proposito);
-        const callCampaignName = decodeLatin1(context.campaignName);
-        const callTargetProduct = decodeLatin1(context.targetProduct);
-        const callOfferProduct = decodeLatin1(context.offerProduct);
-        const callPortfolioScope = decodeLatin1(context.portfolioScope);
-        const callCampaignMode = decodeLatin1(context.campaignMode);
+      const mappedCalls: CallRecord[] = (callsData || []).map(c => mapCallLogRecordToHistory(c, campaignContextMap));
+      const loggedTaskIds = new Set(mappedCalls.map(call => call.taskId).filter(Boolean));
+      const mappedWhatsAppCalls: CallRecord[] = (whatsAppResult.data || []).map(mapWhatsAppTaskToHistory);
+      const mappedSkippedTasks: CallRecord[] = (skippedTasksResult.data || [])
+        .filter((task: any) => task?.skip_reason !== 'recent_communication_block')
+        .filter((task: any) => !loggedTaskIds.has(task.id))
+        .map(mapSkippedVoiceTaskToHistory);
+      const mappedSkippedSchedules: CallRecord[] = (skippedSchedulesResult.data || [])
+        .filter((schedule: any) => schedule?.skip_reason)
+        .filter((schedule: any) => !loggedTaskIds.has(schedule.id))
+        .map((schedule: any) => mapSkippedVoiceTaskToHistory({
+          id: schedule.id,
+          client_id: schedule.customer_id,
+          assigned_to: schedule.assigned_operator_id,
+          type: schedule.call_type,
+          skip_reason: schedule.skip_reason,
+          schedule_reason: schedule.schedule_reason,
+          scheduled_for: schedule.scheduled_for,
+          updated_at: schedule.updated_at,
+          created_at: schedule.created_at
+        }));
 
-        return {
-          id: c.id,
-          taskId: c.task_id,
-          operatorId: c.operator_id,
-          clientId: c.client_id,
-          startTime: c.start_time,
-          endTime: c.end_time,
-          duration: c.duration,
-          reportTime: c.report_time,
-          responses: c.responses || {},
-          type: mapStoredCallTypeToApp(c.call_type),
-          protocolId: c.protocol_id,
-          proposito: callProposito,
-          campanha_id: c.campanha_id,
-          campaignName: callCampaignName,
-          targetProduct: c.responses?.target_product || callTargetProduct,
-          offerProduct: c.responses?.offer_product || callOfferProduct,
-          portfolioScope: c.responses?.portfolio_scope || campaignInsights.portfolioScope || callPortfolioScope,
-          campaignMode: c.responses?.campaign_mode || callCampaignMode,
-          offerInterestLevel: c.responses?.offer_interest_level || campaignInsights.offerInterestLevel,
-          offerBlockerReason: c.responses?.offer_blocker_reason || campaignInsights.offerBlockerReason
-        };
-      });
+      const contactHistory = [
+        ...mappedCalls,
+        ...mappedWhatsAppCalls,
+        ...mappedSkippedTasks,
+        ...mappedSkippedSchedules
+      ].sort((left, right) =>
+        new Date(right.startTime || right.endTime || 0).getTime() - new Date(left.startTime || left.endTime || 0).getTime()
+      );
 
       const mappedProtocols: Protocol[] = (protocolsData || []).map(p => ({
         id: p.id,
@@ -4781,9 +4967,9 @@ export const dataService = {
       }));
 
       return {
-        calls: mappedCalls,
+        calls: contactHistory,
         protocols: mappedProtocols,
-        summary: buildClientHistorySummary(mappedCalls, mappedProtocols)
+        summary: buildClientHistorySummary(contactHistory, mappedProtocols)
       };
     } catch (e) {
       console.error("Error getting client history:", e);

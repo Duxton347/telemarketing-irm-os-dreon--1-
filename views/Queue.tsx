@@ -42,6 +42,13 @@ const EMPTY_CLIENT_HISTORY: ClientHistoryData = {
   }
 };
 
+const FUNNEL_STAGE_ORDER = ['NEW', 'CONTACT_ATTEMPT', 'CONTACT_MADE', 'QUALIFIED', 'PROPOSAL_SENT', 'PHYSICAL_VISIT'];
+
+const getFunnelStageIndex = (stage?: string) => {
+  const index = FUNNEL_STAGE_ORDER.indexOf(stage || 'NEW');
+  return index >= 0 ? index : 0;
+};
+
 const getWebsiteUrl = (website?: string) => {
   const value = String(website || '').trim();
   if (!value) return '';
@@ -713,6 +720,34 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
 
     setIsProcessing(true);
     try {
+      const initialFunnelStatus = client.funnel_status || 'NEW';
+      const selectedFunnelStatus = (crmStatus || initialFunnelStatus) as Client['funnel_status'];
+      const selectedInterestProduct = interestProduct.trim();
+      const hasManualFunnelChange = Boolean(
+        client.status === 'LEAD'
+        && selectedFunnelStatus
+        && selectedFunnelStatus !== initialFunnelStatus
+      );
+      const hasManualInterestProductChange = Boolean(
+        client.status === 'LEAD'
+        && selectedInterestProduct
+        && selectedInterestProduct !== (client.interest_product || '')
+      );
+      const hasUpsellSignal = Boolean(
+        campaignFeedback.offerInterestLevel
+        || campaignFeedback.offerBlockerReason
+        || responses.offer_interest_level
+        || responses.upsell_interesse_produto
+        || responses.upsell_offer
+      );
+      const shouldApplyAttemptFallback = Boolean(
+        client.status === 'LEAD'
+        && !hasManualFunnelChange
+        && !hasManualInterestProductChange
+        && !hasUpsellSignal
+        && getFunnelStageIndex(initialFunnelStatus) <= getFunnelStageIndex('CONTACT_ATTEMPT')
+      );
+
       // 1. Protocol Logic
       if (needsProtocol) {
         const slaHours = PROTOCOL_SLA[protoData.priority] || 48;
@@ -754,6 +789,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
         {
           ...responses,
           call_type: currentTask.type,
+          interest_product: selectedInterestProduct || responses.interest_product,
           target_product: currentTask.targetProduct,
           offer_product: currentTask.offerProduct,
           portfolio_scope: campaignFeedback.portfolioScope || currentTask.portfolioScope,
@@ -805,6 +841,20 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
 
       // Mark task as completed so it leaves the queue
       await dataService.updateTask(currentTask.id, { status: 'completed' });
+
+      const clientCrmUpdates: Partial<Client> = {};
+      if (hasManualFunnelChange) {
+        clientCrmUpdates.funnel_status = selectedFunnelStatus;
+      } else if (shouldApplyAttemptFallback) {
+        clientCrmUpdates.funnel_status = 'CONTACT_ATTEMPT';
+      }
+      if (hasManualInterestProductChange) {
+        clientCrmUpdates.interest_product = selectedInterestProduct;
+      }
+      if (Object.keys(clientCrmUpdates).length > 0) {
+        await dataService.updateClientFields(client.id, clientCrmUpdates);
+      }
+
       await dataService.logOperatorEvent(user.id, OperatorEventType.FINALIZAR_ATENDIMENTO, currentTask.id);
       await fetchQueue();
 
