@@ -1,600 +1,963 @@
-
-import React, { useMemo } from 'react';
+import React from 'react';
 import {
-    Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, MapPin, Phone, User, CheckCircle2,
-    Plus, X, Save, Trash2, Edit2, Loader2, FileText, AlertCircle, MessageCircle, Filter, Search
+  AlertCircle,
+  CalendarDays,
+  CheckCircle2,
+  Inbox,
+  ListChecks,
+  Loader2,
+  Sparkles,
+  Star,
+  Target,
+  UserCircle2
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
-import { Task, Visit, User as UserType, CallRecord, Client, Question, CallType, UserRole, CallScheduleWithClient, OperatorEventType } from '../types';
-import { QuestionnaireForm } from '../components/QuestionnaireForm';
-import { ManualScheduleModal } from '../components/ManualScheduleModal';
+import { publishAgendaRefresh, subscribeAgendaRefresh } from '../utils/agendaEvents';
+import {
+  TaskInstance,
+  TaskList,
+  TaskPriority,
+  TaskRecurrenceType,
+  User as AppUser
+} from '../types';
+import { getTaskAssignableUsers } from '../utils/taskAssignment';
+import {
+  canUserSeeTaskInstance,
+  collapseSharedTaskCollection,
+  getTaskAssignMode,
+  getTaskScopeLabel,
+  isManagerUser
+} from '../utils/taskAccess';
+import { QuickAddTask } from '../components/tasks/QuickAddTask';
+import { TaskDetailsDrawer } from '../components/tasks/TaskDetailsDrawer';
+import { TaskFiltersBar } from '../components/tasks/TaskFiltersBar';
+import { TasksHeader } from '../components/tasks/TasksHeader';
+import { TasksList } from '../components/tasks/TasksList';
+import { TasksSidebar } from '../components/tasks/TasksSidebar';
+import type {
+  QuickTaskFormState,
+  TaskFilterMode,
+  TaskManagerTask,
+  TaskManagerViewKey,
+  TaskSidebarItem,
+  TaskSortMode
+} from '../components/tasks/types';
 
-const Calendar: React.FC<{ user: UserType }> = ({ user }: { user: UserType }) => {
-    const [date, setDate] = React.useState(new Date());
-    const [tasks, setTasks] = React.useState<Task[]>([]);
-    const [schedules, setSchedules] = React.useState<CallScheduleWithClient[]>([]);
-    const [visits, setVisits] = React.useState<Visit[]>([]);
-    const [calls, setCalls] = React.useState<CallRecord[]>([]);
-    const [clients, setClients] = React.useState<Client[]>([]);
-    const [questions, setQuestions] = React.useState<Question[]>([]);
-    const [operators, setOperators] = React.useState<UserType[]>([]); // New state for operators
+type CalendarProps = {
+  user: AppUser;
+};
 
-    const [isLoading, setIsLoading] = React.useState(true);
-    const [isProcessing, setIsProcessing] = React.useState(false);
-    const [selectedDate, setSelectedDate] = React.useState<string | null>(new Date().toISOString().split('T')[0]);
-    const [activeTab, setActiveTab] = React.useState<'pending' | 'scheduled' | 'visits'>('pending');
+const ACTIVE_VIEW_STORAGE_PREFIX = 'dreon:tasks:active-view:';
 
-    // Manual Schedule Modal State
-    const [isManualScheduleModalOpen, setIsManualScheduleModalOpen] = React.useState(false);
+const SMART_VIEW_CONFIG: Record<Exclude<TaskManagerViewKey, `custom:${string}` | 'personal' | 'team' | 'created-by-me'>, {
+  title: string;
+  subtitle: string;
+  icon: typeof Inbox;
+  emptyTitle: string;
+  emptyDescription: string;
+}> = {
+  all: {
+    title: 'Todas',
+    subtitle: 'Tudo o que ainda esta em andamento, sem excesso de painel ou formulario.',
+    icon: Inbox,
+    emptyTitle: 'Nada por aqui',
+    emptyDescription: 'Quando novas tarefas chegarem, elas vao aparecer nesta lista.'
+  },
+  'my-day': {
+    title: 'Meu dia',
+    subtitle: 'Use esse marcador para separar o que precisa de foco imediato.',
+    icon: Sparkles,
+    emptyTitle: 'Seu dia esta livre',
+    emptyDescription: 'Marque tarefas em Meu dia para montar um foco rapido sem alterar os prazos.'
+  },
+  important: {
+    title: 'Importantes',
+    subtitle: 'Tudo o que foi marcado com estrela para nao se perder no meio do fluxo.',
+    icon: Star,
+    emptyTitle: 'Nenhuma prioridade marcada',
+    emptyDescription: 'Marque uma tarefa como importante para ela aparecer aqui.'
+  },
+  planned: {
+    title: 'Planejado',
+    subtitle: 'Somente tarefas que tem prazo definido entram nessa visao.',
+    icon: CalendarDays,
+    emptyTitle: 'Nenhum prazo definido',
+    emptyDescription: 'Defina uma data em qualquer tarefa e ela passa a aparecer nesta lista.'
+  },
+  'assigned-to-me': {
+    title: 'Atribuidas a mim',
+    subtitle: 'Demandas enviadas por outras pessoas diretamente para voce.',
+    icon: UserCircle2,
+    emptyTitle: 'Nada atribuido a voce',
+    emptyDescription: 'As tarefas que outros gestores ou usuarios enviarem para voce vao aparecer aqui.'
+  },
+  completed: {
+    title: 'Concluidas',
+    subtitle: 'Historico das entregas que ja foram fechadas.',
+    icon: CheckCircle2,
+    emptyTitle: 'Nenhuma tarefa concluida',
+    emptyDescription: 'Quando uma tarefa for concluida, ela fica guardada aqui.'
+  }
+};
 
-    // --- Data Loading ---
-    const loadData = React.useCallback(async () => {
-        setIsLoading(true);
-        try {
-            const [allTasks, allSchedules, allVisits, allCalls, allClients, allQuestions, allUsers] = await Promise.all([
-                dataService.getTasks(),
-                dataService.getSchedules(),
-                dataService.getVisits(),
-                dataService.getCalls(),
-                dataService.getClients(),
-                dataService.getQuestions(),
-                dataService.getUsers() // Fetch users
-            ]);
+const SOURCE_VIEW_CONFIG: Record<'personal' | 'team' | 'created-by-me', {
+  title: string;
+  subtitle: string;
+  icon: typeof Target;
+  emptyTitle: string;
+  emptyDescription: string;
+  label: string;
+}> = {
+  personal: {
+    title: 'Minhas tarefas',
+    subtitle: 'Tudo o que nasceu para voce executar, com ou sem prazo.',
+    icon: Target,
+    emptyTitle: 'Nenhuma tarefa pessoal',
+    emptyDescription: 'Crie tarefas simples aqui mesmo e acompanhe tudo em uma lista limpa.',
+    label: 'Minhas tarefas'
+  },
+  team: {
+    title: 'Demandas do setor',
+    subtitle: 'Pedidos compartilhados entre a equipe, sem misturar com agenda operacional.',
+    icon: ListChecks,
+    emptyTitle: 'Sem demandas de equipe',
+    emptyDescription: 'Quando surgirem demandas coletivas, elas ficam centralizadas aqui.',
+    label: 'Demandas do setor'
+  },
+  'created-by-me': {
+    title: 'Atribuidas',
+    subtitle: 'O que voce delegou para outras pessoas e ainda esta em acompanhamento.',
+    icon: AlertCircle,
+    emptyTitle: 'Voce ainda nao atribuiu tarefas',
+    emptyDescription: 'Quando voce delegar algo para outra pessoa, acompanhe por esta lista.',
+    label: 'Atribuidas'
+  }
+};
 
-            setTasks(allTasks);
-            setSchedules(allSchedules);
-            setVisits(allVisits);
-            setCalls(allCalls);
-            setClients(allClients);
-            setQuestions(allQuestions);
-            setOperators(allUsers.filter(u => u.role === UserRole.OPERATOR || u.role === UserRole.SUPERVISOR)); // Filter operators
-        } catch (e) {
-            console.error(e);
-        } finally {
-            setIsLoading(false);
-        }
-    }, []);
+const DEFAULT_PRIORITY: TaskPriority = 'LOW';
+const DEFAULT_RECURRENCE: TaskRecurrenceType = 'NONE';
 
-    React.useEffect(() => { loadData(); }, [loadData]);
+const readStoredActiveView = (userId: string): TaskManagerViewKey | null => {
+  if (typeof window === 'undefined') return null;
 
+  try {
+    const stored = window.localStorage.getItem(`${ACTIVE_VIEW_STORAGE_PREFIX}${userId}`);
+    if (!stored) return null;
+    return stored as TaskManagerViewKey;
+  } catch {
+    return null;
+  }
+};
 
-    // --- Derived State ---
-    const daySchedules = useMemo(() => {
-        if (!selectedDate) return [];
-        return schedules.filter(s => s.scheduledFor.startsWith(selectedDate));
-    }, [schedules, selectedDate]);
+const storeActiveView = (userId: string, view: TaskManagerViewKey) => {
+  if (typeof window === 'undefined') return;
 
-    const pendingSchedules = useMemo(() => {
-        let pending = schedules.filter(s => s.status === 'PENDENTE_APROVACAO');
-        if (selectedDate) {
-            pending = pending.filter(s => s.scheduledFor.startsWith(selectedDate));
-        }
-        return pending.sort((a, b) => new Date(a.scheduledFor).getTime() - new Date(b.scheduledFor).getTime());
-    }, [schedules, selectedDate]);
+  try {
+    window.localStorage.setItem(`${ACTIVE_VIEW_STORAGE_PREFIX}${userId}`, view);
+  } catch {
+    // Ignora falha de persistencia local.
+  }
+};
 
-    const scheduledTasks = useMemo(() => {
-        if (!selectedDate) return [];
-        return tasks.filter(t => t.scheduledFor && t.scheduledFor.startsWith(selectedDate));
-    }, [tasks, selectedDate]);
+const isCompletedStatus = (status: TaskInstance['status']) => status === 'CONCLUIDO';
+const isDeletedStatus = (status: TaskInstance['status']) => status === 'CANCELADO' || status === 'ARQUIVADO';
 
-    const scheduledVisits = useMemo(() => {
-        if (!selectedDate) return [];
-        return visits.filter(v => v.scheduledDate && v.scheduledDate.startsWith(selectedDate));
-    }, [visits, selectedDate]);
+const buildQuickTaskDefaults = (activeView: TaskManagerViewKey, canAssignOthers: boolean): QuickTaskFormState => ({
+  title: '',
+  description: '',
+  ownership: canAssignOthers
+    ? (activeView === 'team' ? 'TEAM' : (activeView === 'created-by-me' ? 'ASSIGNED' : 'PERSONAL'))
+    : 'PERSONAL',
+  listId: activeView.startsWith('custom:') ? activeView.replace('custom:', '') : '',
+  dueDate: activeView === 'planned' ? new Date().toISOString().slice(0, 10) : '',
+  dueTime: '',
+  reminderDate: '',
+  reminderTime: '',
+  recurrenceType: DEFAULT_RECURRENCE,
+  weeklyDays: ['MON'],
+  assignedUserId: '',
+  priority: DEFAULT_PRIORITY,
+  inMyDay: activeView === 'my-day',
+  isImportant: activeView === 'important'
+});
 
+const toLocalTime = (value?: string | null) => (value ? new Date(value).toISOString().slice(11, 16) : '');
 
-    // --- Calendar helpers ---
-    const getDaysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate();
-    const daysInMonth = getDaysInMonth(date.getFullYear(), date.getMonth());
-    const firstDayOfMonth = new Date(date.getFullYear(), date.getMonth(), 1).getDay();
-    const days = Array(firstDayOfMonth).fill(null).concat(Array.from({ length: daysInMonth }, (_, i) => new Date(date.getFullYear(), date.getMonth(), i + 1)));
+const buildDateTimeIso = (date: string, time: string, fallbackTime: string): string | null => {
+  if (!date) return null;
+  return new Date(`${date}T${time || fallbackTime}:00`).toISOString();
+};
 
-    const prevMonth = () => setDate(new Date(date.getFullYear(), date.getMonth() - 1, 1));
-    const nextMonth = () => setDate(new Date(date.getFullYear(), date.getMonth() + 1, 1));
+const buildTaskManagerTask = (
+  task: TaskInstance,
+  currentUser: AppUser,
+  taskListsMap: Map<string, TaskList>
+): TaskManagerTask => {
+  const metadata = task.metadata || {};
+  const list = task.listId ? taskListsMap.get(task.listId) || null : null;
+  const assignMode = getTaskAssignMode(task);
+  const taskScopeLabel = getTaskScopeLabel(task);
+  const wasAssignedByOtherUser = Boolean(task.assignedTo === currentUser.id && task.assignedBy && task.assignedBy !== currentUser.id);
+  const wasAssignedByCurrentUser = Boolean(task.assignedBy === currentUser.id && task.assignedTo && task.assignedTo !== currentUser.id);
+  const isCompleted = isCompletedStatus(task.status);
+  const isDeleted = isDeletedStatus(task.status);
+  const isOverdue = Boolean(!isCompleted && !isDeleted && task.dueAt && new Date(task.dueAt).getTime() < Date.now());
+  const isSpecificDelegation = assignMode === 'SPECIFIC' && Boolean(task.assignedTo && task.assignedBy && task.assignedTo !== task.assignedBy);
+  const fallbackListLabel = taskScopeLabel === 'SETOR'
+    ? (isSpecificDelegation
+      ? (wasAssignedByCurrentUser ? 'Atribuidas' : 'Atribuidas a mim')
+      : 'Demandas do setor')
+    : 'Minhas tarefas';
 
-    // --- Handlers ---
+  return {
+    ...task,
+    list,
+    listLabel: list?.name || task.listName || fallbackListLabel,
+    taskScopeLabel,
+    isCompleted,
+    isDeleted,
+    isOverdue,
+    isPlanned: Boolean(task.dueAt),
+    wasAssignedByOtherUser,
+    wasAssignedByCurrentUser,
+    canEdit: isManagerUser(currentUser) || task.assignedTo === currentUser.id || task.assignedBy === currentUser.id,
+    canAssign: isManagerUser(currentUser),
+    canComplete: !isCompleted && !isDeleted,
+    requiresCommentOnCompletion: Boolean(task.metadata?.requiresCommentOnCompletion || task.template?.requiresCommentOnCompletion),
+    recurrenceType: (task.metadata?.recurrenceType || task.template?.recurrenceType || 'NONE') as TaskRecurrenceType,
+    recurrenceWeekdays: Array.isArray(task.metadata?.recurrenceWeekdays)
+      ? task.metadata?.recurrenceWeekdays
+      : (Array.isArray(task.template?.recurrenceConfig?.weekdays) ? task.template?.recurrenceConfig?.weekdays : []),
+    explicitTime: Boolean(task.metadata?.explicitDueTime || (task.dueAt && toLocalTime(task.dueAt) !== '00:00'))
+  };
+};
 
-    // Approval Modal
-    const [isApproveModalOpen, setIsApproveModalOpen] = React.useState(false);
-    const [approvingItem, setApprovingItem] = React.useState<CallScheduleWithClient | null>(null);
-    const [approveForm, setApproveForm] = React.useState<{ date: string, time: string, operatorId: string, type: CallType }>({
-        date: '', time: '', operatorId: '', type: CallType.POS_VENDA
-    });
+const filterTasksByView = (
+  tasks: TaskManagerTask[],
+  activeView: TaskManagerViewKey,
+  user: AppUser
+) => {
+  if (activeView.startsWith('custom:')) {
+    const customId = activeView.replace('custom:', '');
+    return tasks.filter(task => task.listId === customId);
+  }
 
-    // Reschedule Modal
-    const [isRescheduleModalOpen, setIsRescheduleModalOpen] = React.useState(false);
-    const [reschedulingItem, setReschedulingItem] = React.useState<CallScheduleWithClient | null>(null);
-    const [rescheduleForm, setRescheduleForm] = React.useState<{ date: string, time: string }>({
-        date: '', time: ''
-    });
+  switch (activeView) {
+    case 'all':
+      return tasks;
+    case 'my-day':
+      return tasks.filter(task => task.inMyDay);
+    case 'important':
+      return tasks.filter(task => task.isImportant);
+    case 'planned':
+      return tasks.filter(task => task.isPlanned);
+    case 'assigned-to-me':
+      return tasks.filter(task =>
+        task.assignedTo === user.id
+        && task.wasAssignedByOtherUser
+        && getTaskAssignMode(task) === 'SPECIFIC'
+      );
+    case 'completed':
+      return tasks.filter(task => task.isCompleted);
+    case 'personal':
+      return tasks.filter(task =>
+        task.taskScopeLabel === 'PESSOAL'
+        && task.assignedTo === user.id
+      );
+    case 'team':
+      return tasks.filter(task => task.taskScopeLabel === 'SETOR' && getTaskAssignMode(task) !== 'SPECIFIC');
+    case 'created-by-me':
+      return tasks.filter(task => task.wasAssignedByCurrentUser && getTaskAssignMode(task) === 'SPECIFIC');
+    default:
+      return tasks;
+  }
+};
 
-    const openApproveModal = (item: CallScheduleWithClient) => {
-        const d = new Date(item.scheduledFor);
-        setApprovingItem(item);
-        setApproveForm({
-            date: d.toISOString().split('T')[0],
-            time: d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            operatorId: item.assignedOperatorId,
-            type: item.callType // Pre-fill with existing type
-        });
-        setIsApproveModalOpen(true);
-    };
+const sortTasks = (tasks: TaskManagerTask[], sortMode: TaskSortMode) => {
+  const items = [...tasks];
 
-    const handleConfirmApprove = async () => {
-        if (!approvingItem || !approveForm.date || !approveForm.time || !approveForm.operatorId) return;
-        setIsProcessing(true);
-        try {
-            const newDateTime = `${approveForm.date}T${approveForm.time}:00`;
-            const operatorName = operators.find(o => o.id === approveForm.operatorId)?.name || 'Operador';
+  items.sort((left, right) => {
+    if (sortMode === 'created') {
+      return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+    }
 
-            // 1. Update Schedule Status to CONCLUIDO
-            await dataService.updateSchedule(approvingItem.id, {
-                status: 'CONCLUIDO',
-                scheduledFor: new Date(newDateTime).toISOString(),
-                assignedOperatorId: approveForm.operatorId,
-                callType: approveForm.type, // Update type if changed
-                approvedByAdminId: user.id,
-                approvalReason: 'Aprovado pelo Gestor'
-            }, user.id);
+    if (sortMode === 'due') {
+      const leftDue = left.dueAt ? new Date(left.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
+      const rightDue = right.dueAt ? new Date(right.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
+      if (leftDue !== rightDue) return leftDue - rightDue;
+      return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+    }
 
-            if (!approvingItem.customerId) {
-                alert("Erro: Este agendamento não possui um cliente vinculado. Não é possível gerar a tarefa.");
-                return;
-            }
-
-            // 2. Create Task in Queue (TARGET: WORK QUEUE)
-            await dataService.createTask({
-                clientId: approvingItem.customerId,
-                type: approveForm.type, // Use selected type
-                assignedTo: approveForm.operatorId, // Use selected operator
-                status: 'pending', // This puts it in the queue
-                scheduledFor: new Date(newDateTime).toISOString(),
-                scheduleReason: `Repique Aprovado: ${approvingItem.scheduleReason}`
-            });
-
-            await dataService.logOperatorEvent(user.id, OperatorEventType.ADMIN_APROVAR, undefined, `Aprovou repique para ${approvingItem.clientName} -> ${operatorName} (${approveForm.type})`);
-
-            await loadData();
-            setIsApproveModalOpen(false);
-            setApprovingItem(null);
-            alert("Agendamento aprovado e enviado para a fila de trabalho!");
-        } catch (e) {
-            console.error(e);
-            alert("Erro ao aprovar.");
-        } finally {
-            setIsProcessing(false);
-        }
-    };
-
-    const openRescheduleModal = (item: CallScheduleWithClient) => {
-        const d = new Date(item.scheduledFor);
-        setReschedulingItem(item);
-        setRescheduleForm({
-            date: d.toISOString().split('T')[0],
-            time: d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        });
-        setIsRescheduleModalOpen(true);
-    };
-
-    const handleConfirmReschedule = async () => {
-        if (!reschedulingItem || !rescheduleForm.date || !rescheduleForm.time) return;
-        setIsProcessing(true);
-        try {
-            const newDateTime = `${rescheduleForm.date}T${rescheduleForm.time}:00`;
-
-            await dataService.updateSchedule(reschedulingItem.id, {
-                scheduledFor: new Date(newDateTime).toISOString(),
-            }, user.id);
-
-            await dataService.logOperatorEvent(user.id, OperatorEventType.ADMIN_REAGENDAR, undefined, `Reagendou retorno para ${reschedulingItem.clientName}`);
-
-            await loadData();
-            setIsRescheduleModalOpen(false);
-            setReschedulingItem(null);
-            alert("Agendamento reprogramado com sucesso!");
-        } catch (e) {
-            console.error(e);
-            alert("Erro ao reagendar.");
-        } finally {
-            setIsProcessing(false);
-        }
-    };
-
-    const handleReject = async (id: string) => {
-        if (!confirm("Tem certeza que deseja EXCLUIR este agendamento?")) return;
-        setIsProcessing(true);
-        try {
-            await dataService.updateSchedule(id, {
-                status: 'CANCELADO',
-            }, user.id);
-
-            await dataService.logOperatorEvent(user.id, OperatorEventType.ADMIN_REJEITAR, undefined, `Rejeitou agendamento ${id}`);
-
-            await loadData();
-        } catch (e) {
-            alert("Erro ao excluir.");
-        } finally {
-            setIsProcessing(false);
-        }
-    };
-
-    return (
-        <div className="flex h-screen bg-slate-50 overflow-hidden">
-            {/* Left Sidebar - Calendar */}
-            <div className="w-80 bg-white border-r border-slate-200 flex flex-col">
-                <div className="p-6 border-b border-slate-100">
-                    <h1 className="text-2xl font-black text-slate-800 tracking-tight flex items-center gap-2">
-                        <CalendarIcon className="text-orange-500" /> Agenda
-                    </h1>
-                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">Gestão de Retornos</p>
-                </div>
-
-                <div className="p-4">
-                    <div className="flex items-center justify-between mb-4 px-2">
-                        <button onClick={prevMonth} className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-orange-600 transition-colors">
-                            <ChevronLeft size={20} />
-                        </button>
-                        <span className="font-black text-slate-700 uppercase tracking-widest text-sm">
-                            {date.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}
-                        </span>
-                        <button onClick={nextMonth} className="p-2 hover:bg-slate-100 rounded-full text-slate-400 hover:text-orange-600 transition-colors">
-                            <ChevronRight size={20} />
-                        </button>
-                    </div>
-                    <div className="grid grid-cols-7 gap-1 mb-2">
-                        {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map(d => (
-                            <div key={d} className="h-8 flex items-center justify-center text-[10px] font-black text-slate-300">
-                                {d}
-                            </div>
-                        ))}
-                    </div>
-                    <div className="grid grid-cols-7 gap-1">
-                        {days.map((d, i) => {
-                            if (!d) return <div key={i} />;
-                            const dStr = d.toISOString().split('T')[0];
-                            const isSelected = selectedDate === dStr;
-                            const isToday = dStr === new Date().toISOString().split('T')[0];
-
-                            const hasPending = schedules.some(s => s.scheduledFor.startsWith(dStr) && s.status === 'PENDENTE_APROVACAO');
-                            const hasTask = tasks.some(t => t.scheduledFor && t.scheduledFor.startsWith(dStr));
-
-                            return (
-                                <button
-                                    key={i}
-                                    onClick={() => setSelectedDate(dStr)}
-                                    className={`
-                                        h-10 rounded-xl flex flex-col items-center justify-center relative transition-all
-                                        ${isSelected ? 'bg-orange-500 text-white shadow-lg shadow-orange-200 scale-105' : 'hover:bg-slate-50 text-slate-600'}
-                                        ${isToday && !isSelected ? 'ring-2 ring-orange-100' : ''}
-                                    `}
-                                >
-                                    <span className="text-xs font-bold">{d.getDate()}</span>
-                                    <div className="flex gap-0.5 mt-0.5">
-                                        {hasPending && <div className={`w-1 h-1 rounded-full ${isSelected ? 'bg-white' : 'bg-red-500'}`} />}
-                                        {hasTask && <div className={`w-1 h-1 rounded-full ${isSelected ? 'bg-white/50' : 'bg-emerald-500'}`} />}
-                                    </div>
-                                </button>
-                            );
-                        })}
-                    </div>
-                </div>
-
-                <div className="mt-auto p-4 bg-slate-50 border-t border-slate-100">
-                    <div className="space-y-2">
-                        <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
-                            <div className="w-2 h-2 rounded-full bg-red-500" /> Pendentes
-                        </div>
-                        <div className="flex items-center gap-2 text-xs font-bold text-slate-500">
-                            <div className="w-2 h-2 rounded-full bg-emerald-500" /> Agendados
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            {/* Right Content */}
-            <div className="flex-1 flex flex-col overflow-hidden">
-                <div className="h-20 bg-white border-b border-slate-200 flex items-center px-8 justify-between shrink-0">
-                    <div className="flex gap-2 p-1 bg-slate-100 rounded-2xl">
-                        <button
-                            onClick={() => setActiveTab('pending')}
-                            className={`px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'pending'
-                                ? 'bg-white text-orange-600 shadow-sm'
-                                : 'text-slate-400 hover:text-slate-600'
-                                }`}
-                        >
-                            <div className="flex items-center gap-2">
-                                <AlertCircle size={14} />
-                                Pendentes ({pendingSchedules.length})
-                            </div>
-                        </button>
-                        <button
-                            onClick={() => setActiveTab('scheduled')}
-                            className={`px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'scheduled'
-                                ? 'bg-white text-emerald-600 shadow-sm'
-                                : 'text-slate-400 hover:text-slate-600'
-                                }`}
-                        >
-                            <div className="flex items-center gap-2">
-                                <CheckCircle2 size={14} />
-                                Agendados ({selectedDate ? scheduledTasks.length : tasks.length})
-                            </div>
-                        </button>
-                    </div>
-
-                    <div className="flex items-center gap-4">
-                        <button
-                            onClick={() => setIsManualScheduleModalOpen(true)}
-                            className="px-4 py-2 bg-orange-600 text-white rounded-xl font-bold text-xs uppercase tracking-wider shadow-lg shadow-orange-600/20 active:scale-95 transition-all flex items-center gap-2 hover:bg-orange-500"
-                        >
-                            <Plus size={16} /> Novo Agendamento
-                        </button>
-                        <div className="text-right">
-                            <h2 className="text-lg font-black text-slate-800 tracking-tight">
-                                {selectedDate ? new Date(selectedDate + 'T12:00:00').toLocaleDateString('pt-BR', { day: 'numeric', month: 'long', weekday: 'long' }) : 'Todos os dias'}
-                            </h2>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="flex-1 overflow-auto p-8">
-                    {activeTab === 'pending' && (
-                        <div className="space-y-4 max-w-4xl mx-auto">
-                            {pendingSchedules.length === 0 ? (
-                                <div className="text-center py-20 opacity-50">
-                                    <CheckCircle2 size={64} className="mx-auto mb-4 text-slate-300" />
-                                    <h3 className="text-xl font-black text-slate-400 uppercase tracking-widest">Tudo limpo!</h3>
-                                    <p className="text-slate-400 font-medium">Nenhum repique pendente de aprovação.</p>
-                                </div>
-                            ) : (
-                                pendingSchedules.map(item => (
-                                    <div key={item.id} className="bg-white rounded-[24px] p-6 shadow-sm border border-slate-100 hover:shadow-md transition-all flex items-start gap-6 group">
-                                        {/* Date Box */}
-                                        <div className="bg-orange-50 rounded-2xl p-4 text-center min-w-[100px] shrink-0">
-                                            <span className="block text-2xl font-black text-orange-600">
-                                                {new Date(item.scheduledFor).getDate()}
-                                            </span>
-                                            <span className="block text-xs font-bold text-orange-400 uppercase tracking-wider">
-                                                {new Date(item.scheduledFor).toLocaleDateString('pt-BR', { month: 'short' }).replace('.', '')}
-                                            </span>
-                                            <div className="mt-2 text-[10px] font-bold text-orange-300 bg-orange-100/50 py-1 px-2 rounded-lg inline-block">
-                                                {new Date(item.scheduledFor).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                            </div>
-                                        </div>
-
-                                        {/* Details */}
-                                        <div className="flex-1 min-w-0">
-                                            <div className="flex items-start justify-between mb-2">
-                                                <div>
-                                                    <h3 className="text-lg font-black text-slate-800 truncate">{item.clientName || 'Cliente Desconhecido'}</h3>
-                                                    <div className="flex items-center gap-2 text-xs font-bold text-slate-400 mt-1">
-                                                        <Phone size={12} /> {item.clientPhone || 'Sem telefone'}
-                                                    </div>
-                                                </div>
-                                                <div className="flex items-center gap-2">
-                                                    {item.whatsappSent && (
-                                                        <div className="bg-emerald-100 text-emerald-700 px-2 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest flex items-center gap-1">
-                                                            <MessageCircle size={12} fill="currentColor" /> WhatsApp
-                                                        </div>
-                                                    )}
-                                                    <div className="bg-slate-100 text-slate-500 px-2 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest">
-                                                        {item.callType}
-                                                    </div>
-                                                </div>
-                                            </div>
-
-                                            <div className="bg-slate-50 rounded-xl p-4 mb-4">
-                                                <p className="text-sm font-medium text-slate-600 leading-relaxed">
-                                                    <span className="text-slate-400 text-xs font-bold uppercase tracking-wider block mb-1">Motivo do Pulo/Repique:</span>
-                                                    {item.skipReason || item.scheduleReason || "Sem motivo especificado"}
-                                                </p>
-                                                {item.whatsappNote && (
-                                                    <div className="mt-2 pt-2 border-t border-slate-200">
-                                                        <span className="text-emerald-500 text-xs font-bold uppercase tracking-wider block mb-1">Nota WhatsApp:</span>
-                                                        <span className="text-slate-600 text-sm">{item.whatsappNote}</span>
-                                                    </div>
-                                                )}
-                                            </div>
-
-                                            <div className="flex items-center justify-between">
-                                                <div className="flex items-center gap-2">
-                                                    <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-600 font-bold text-xs uppercase">
-                                                        {user.username?.substring(0, 2) || 'OP'}
-                                                    </div>
-                                                    <span className="text-xs font-bold text-slate-400">Solicitado por {operators.find(o => o.id === item.requestedByOperatorId)?.name || item.requestedByOperatorId.substring(0, 8) + '...'}</span>
-                                                </div>
-
-                                                <div className="flex gap-2">
-                                                    <button
-                                                        onClick={() => handleReject(item.id)}
-                                                        className="px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider text-red-500 hover:bg-red-50 transition-colors"
-                                                    >
-                                                        Excluir
-                                                    </button>
-                                                    <button
-                                                        onClick={() => openRescheduleModal(item)}
-                                                        className="px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider text-slate-500 hover:bg-slate-100 transition-colors"
-                                                    >
-                                                        Reagendar
-                                                    </button>
-                                                    <button
-                                                        onClick={() => openApproveModal(item)}
-                                                        className="px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest bg-slate-900 text-white hover:bg-orange-600 hover:shadow-lg hover:-translate-y-0.5 transition-all shadow-md"
-                                                    >
-                                                        Review & Aprovar
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))
-                            )}
-                        </div>
-                    )}
-
-                    {activeTab === 'scheduled' && (
-                        <div className="space-y-4 max-w-4xl mx-auto">
-                            {scheduledTasks.length === 0 ? (
-                                <div className="text-center py-20 opacity-50">
-                                    <Clock size={64} className="mx-auto mb-4 text-slate-300" />
-                                    <p className="text-slate-400 font-medium">Nenhum agendamento para este dia.</p>
-                                </div>
-                            ) : (
-                                scheduledTasks.map(task => (
-                                    <div key={task.id} className="bg-white rounded-[24px] p-6 shadow-sm border border-slate-100 flex items-center justify-between">
-                                        <div>
-                                            <span className="text-[10px] font-bold uppercase text-emerald-500 tracking-widest mb-1 block">
-                                                {new Date(task.scheduledFor!).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                            </span>
-                                            <h3 className="text-lg font-black text-slate-800">{task.clientId}</h3>
-                                            <div className="flex gap-2 mt-1">
-                                                <span className="text-xs font-bold text-slate-400 bg-slate-100 px-2 py-0.5 rounded-lg">{task.type}</span>
-                                                <span className="text-xs font-bold text-slate-400 bg-indigo-50 text-indigo-500 px-2 py-0.5 rounded-lg">
-                                                    {operators.find(u => u.id === task.assignedTo)?.name || 'Operador'}
-                                                </span>
-                                            </div>
-                                            <p className="text-sm text-slate-500 mt-2">{task.scheduleReason}</p>
-                                        </div>
-                                        <div className="px-4 py-2 bg-emerald-50 text-emerald-600 rounded-xl text-xs font-bold uppercase tracking-widest">
-                                            Na Fila
-                                        </div>
-                                    </div>
-                                ))
-                            )}
-                        </div>
-                    )}
-                </div>
-            </div>
-
-            {/* Manual Schedule Modal */}
-            {isManualScheduleModalOpen && (
-                <ManualScheduleModal
-                    onClose={() => setIsManualScheduleModalOpen(false)}
-                    onSuccess={loadData}
-                    user={user}
-                />
-            )}
-
-            {/* Approval Modal */}
-            {isApproveModalOpen && approvingItem && (
-                <div className="fixed inset-0 z-[200] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
-                    <div className="bg-white w-full max-w-md rounded-[32px] p-8 shadow-2xl animate-in zoom-in duration-200">
-                        <h3 className="text-2xl font-black text-slate-800 text-center mb-6 uppercase tracking-tight">Confirmar e Enviar para Fila</h3>
-
-                        <div className="space-y-4 mb-8">
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Data</label>
-                                    <input
-                                        type="date"
-                                        value={approveForm.date}
-                                        onChange={e => setApproveForm({ ...approveForm, date: e.target.value })}
-                                        className="w-full h-12 rounded-xl border-2 border-slate-100 px-4 font-bold text-slate-700 focus:border-orange-500 outline-none transition-colors"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Horário</label>
-                                    <input
-                                        type="time"
-                                        value={approveForm.time}
-                                        onChange={e => setApproveForm({ ...approveForm, time: e.target.value })}
-                                        className="w-full h-12 rounded-xl border-2 border-slate-100 px-4 font-bold text-slate-700 focus:border-orange-500 outline-none transition-colors"
-                                    />
-                                </div>
-                            </div>
-
-                            <div>
-                                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Tipo de Chamada</label>
-                                <select
-                                    value={approveForm.type}
-                                    onChange={e => setApproveForm({ ...approveForm, type: e.target.value as CallType })}
-                                    className="w-full h-12 rounded-xl border-2 border-slate-100 px-4 font-bold text-slate-700 focus:border-orange-500 outline-none transition-colors appearance-none bg-white"
-                                >
-                                    {Object.values(CallType).filter(t => t !== CallType.WHATSAPP).map(t => (
-                                        <option key={t} value={t}>{t}</option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <div>
-                                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Atribuir para Operador</label>
-                                <select
-                                    value={approveForm.operatorId}
-                                    onChange={e => setApproveForm({ ...approveForm, operatorId: e.target.value })}
-                                    className="w-full h-12 rounded-xl border-2 border-slate-100 px-4 font-bold text-slate-700 focus:border-orange-500 outline-none transition-colors appearance-none bg-white"
-                                >
-                                    {operators.map(op => (
-                                        <option key={op.id} value={op.id}>{op.name}</option>
-                                    ))}
-                                </select>
-                            </div>
-                        </div>
-
-                        <div className="flex gap-4">
-                            <button
-                                onClick={() => setIsApproveModalOpen(false)}
-                                className="flex-1 py-4 rounded-xl font-bold text-slate-400 hover:bg-slate-50 uppercase text-xs tracking-widest transition-colors"
-                            >
-                                Cancelar
-                            </button>
-                            <button
-                                onClick={handleConfirmApprove}
-                                disabled={isProcessing}
-                                className="flex-1 py-4 rounded-xl font-black text-white bg-orange-600 hover:bg-orange-500 shadow-lg shadow-orange-200 uppercase text-xs tracking-widest transition-all active:scale-95 disabled:opacity-50"
-                            >
-                                {isProcessing ? 'Confirmando...' : 'Aprovar e Agendar'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* Reschedule Modal */}
-            {isRescheduleModalOpen && reschedulingItem && (
-                <div className="fixed inset-0 z-[200] bg-slate-900/80 backdrop-blur-sm flex items-center justify-center p-4">
-                    <div className="bg-white w-full max-w-sm rounded-[32px] p-8 shadow-2xl animate-in zoom-in duration-200">
-                        <h3 className="text-xl font-black text-slate-800 text-center mb-6 uppercase tracking-tight">Reagendar Retorno</h3>
-
-                        <div className="space-y-4 mb-8">
-                            <div>
-                                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Nova Data</label>
-                                <input
-                                    type="date"
-                                    value={rescheduleForm.date}
-                                    onChange={e => setRescheduleForm({ ...rescheduleForm, date: e.target.value })}
-                                    className="w-full h-12 rounded-xl border-2 border-slate-100 px-4 font-bold text-slate-700 focus:border-orange-500 outline-none transition-colors"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Novo Horário</label>
-                                <input
-                                    type="time"
-                                    value={rescheduleForm.time}
-                                    onChange={e => setRescheduleForm({ ...rescheduleForm, time: e.target.value })}
-                                    className="w-full h-12 rounded-xl border-2 border-slate-100 px-4 font-bold text-slate-700 focus:border-orange-500 outline-none transition-colors"
-                                />
-                            </div>
-                        </div>
-
-                        <div className="flex gap-4">
-                            <button
-                                onClick={() => setIsRescheduleModalOpen(false)}
-                                className="flex-1 py-4 rounded-xl font-bold text-slate-400 hover:bg-slate-50 uppercase text-xs tracking-widest transition-colors"
-                            >
-                                Cancelar
-                            </button>
-                            <button
-                                onClick={handleConfirmReschedule}
-                                disabled={isProcessing}
-                                className="flex-1 py-4 rounded-xl font-black text-white bg-orange-600 hover:bg-orange-500 shadow-lg shadow-orange-200 uppercase text-xs tracking-widest transition-all active:scale-95 disabled:opacity-50"
-                            >
-                                {isProcessing ? 'Carregando...' : 'Reagendar'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-        </div>
+    const smartScore = (task: TaskManagerTask) => (
+      Number(task.isOverdue) * 16
+      + Number(task.isImportant) * 8
+      + Number(task.inMyDay) * 4
+      + Number(task.wasAssignedByOtherUser) * 2
+      + Number(task.priority === 'CRITICAL') * 8
+      + Number(task.priority === 'HIGH') * 4
+      + Number(task.priority === 'MEDIUM') * 2
     );
+
+    const leftScore = smartScore(left);
+    const rightScore = smartScore(right);
+    if (leftScore !== rightScore) return rightScore - leftScore;
+
+    if (left.dueAt || right.dueAt) {
+      const leftDue = left.dueAt ? new Date(left.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
+      const rightDue = right.dueAt ? new Date(right.dueAt).getTime() : Number.MAX_SAFE_INTEGER;
+      if (leftDue !== rightDue) return leftDue - rightDue;
+    }
+
+    return new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+  });
+
+  return items;
+};
+
+const Calendar: React.FC<CalendarProps> = ({ user }) => {
+  const initialView = React.useMemo(() => readStoredActiveView(user.id) || 'all', [user.id]);
+  const [loading, setLoading] = React.useState(true);
+  const [savingTask, setSavingTask] = React.useState(false);
+  const [quickSubmitting, setQuickSubmitting] = React.useState(false);
+  const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+  const [activeView, setActiveView] = React.useState<TaskManagerViewKey>(initialView);
+  const [tasks, setTasks] = React.useState<TaskInstance[]>([]);
+  const [taskLists, setTaskLists] = React.useState<TaskList[]>([]);
+  const [users, setUsers] = React.useState<AppUser[]>([]);
+  const [searchValue, setSearchValue] = React.useState('');
+  const deferredSearch = React.useDeferredValue(searchValue);
+  const [filterMode, setFilterMode] = React.useState<TaskFilterMode>('active');
+  const [sortMode, setSortMode] = React.useState<TaskSortMode>('smart');
+  const [assigneeFilter, setAssigneeFilter] = React.useState('all');
+  const [selectedTaskId, setSelectedTaskId] = React.useState<string | null>(null);
+  const [quickAddExpanded, setQuickAddExpanded] = React.useState(false);
+  const [quickTaskForm, setQuickTaskForm] = React.useState<QuickTaskFormState>(() => buildQuickTaskDefaults(initialView, isManagerUser(user)));
+  const taskListsMap = React.useMemo(() => new Map(taskLists.map(list => [list.id, list])), [taskLists]);
+  const canAssignOthers = isManagerUser(user);
+  const assignableUsers = React.useMemo(
+    () => getTaskAssignableUsers(users.filter(candidate => candidate.id !== user.id || canAssignOthers)),
+    [users, user.id, canAssignOthers]
+  );
+
+  const loadData = React.useCallback(async (preserveTaskId?: string | null) => {
+    setLoading(true);
+    setErrorMessage(null);
+
+    try {
+      const [loadedTasks, loadedLists, loadedUsers] = await Promise.all([
+        dataService.getTaskInstances({ includeArchived: false }),
+        dataService.getTaskLists(user.id),
+        dataService.getUsers()
+      ]);
+
+      setTasks(loadedTasks);
+      setTaskLists(loadedLists);
+      setUsers(loadedUsers);
+      setSelectedTaskId(current => {
+        const targetId = preserveTaskId ?? current;
+        if (!targetId) return null;
+        return loadedTasks.some(task => task.id === targetId) ? targetId : null;
+      });
+    } catch (error: any) {
+      console.error('Erro ao carregar tarefas.', error);
+      setErrorMessage(error?.message || 'Nao foi possivel carregar as tarefas agora.');
+    } finally {
+      setLoading(false);
+    }
+  }, [user.id]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    const syncAndLoad = async () => {
+      try {
+        await dataService.syncTaskRecurringInstances();
+      } catch (error) {
+        console.error('Nao foi possivel sincronizar recorrencias.', error);
+      }
+
+      if (!cancelled) {
+        await loadData();
+      }
+    };
+
+    void syncAndLoad();
+
+    const unsubscribe = subscribeAgendaRefresh(payload => {
+      if (payload.source === 'tasks-manager' || payload.source === 'tasks-list-delete') {
+        return;
+      }
+
+      if (!payload.entity || payload.entity === 'task_instance' || payload.entity === 'task_list') {
+        void loadData(selectedTaskId);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [loadData, selectedTaskId]);
+
+  React.useEffect(() => {
+    storeActiveView(user.id, activeView);
+    setQuickTaskForm(buildQuickTaskDefaults(activeView, canAssignOthers));
+    setQuickAddExpanded(false);
+    setSearchValue('');
+    setFilterMode(activeView === 'completed' ? 'all' : 'active');
+    setAssigneeFilter('all');
+  }, [activeView, canAssignOthers, user.id]);
+
+  React.useEffect(() => {
+    if (activeView.startsWith('custom:')) {
+      const customId = activeView.replace('custom:', '');
+      if (!taskLists.some(list => list.id === customId)) {
+        setActiveView('all');
+      }
+    }
+  }, [activeView, taskLists]);
+
+  const visibleTasks = React.useMemo(() => {
+    const accessibleTasks = tasks.filter(task => canUserSeeTaskInstance(task, user));
+    const collapsedTasks = collapseSharedTaskCollection(accessibleTasks, user.id);
+    return collapsedTasks.map(task => buildTaskManagerTask(task, user, taskListsMap));
+  }, [tasks, taskListsMap, user]);
+
+  const sidebarItems = React.useMemo<TaskSidebarItem[]>(() => {
+    const smartIds: Array<Exclude<TaskManagerViewKey, `custom:${string}` | 'personal' | 'team' | 'created-by-me'>> = [
+      'all',
+      'my-day',
+      'important',
+      'planned',
+      'assigned-to-me',
+      'completed'
+    ];
+
+    const smartItems = smartIds.map(viewId => ({
+      id: viewId,
+      label: SMART_VIEW_CONFIG[viewId].title,
+      count: filterTasksByView(visibleTasks, viewId, user).filter(task => viewId === 'completed' ? task.isCompleted : !task.isCompleted).length,
+      icon: SMART_VIEW_CONFIG[viewId].icon,
+      kind: 'smart' as const
+    }));
+
+    const sourceIds: Array<'personal' | 'team' | 'created-by-me'> = ['personal', 'team', 'created-by-me'];
+    const sourceItems = sourceIds
+      .filter(viewId => viewId !== 'created-by-me' || canAssignOthers)
+      .map(viewId => ({
+        id: viewId,
+        label: SOURCE_VIEW_CONFIG[viewId].label,
+        count: filterTasksByView(visibleTasks, viewId, user).filter(task => !task.isCompleted).length,
+        icon: SOURCE_VIEW_CONFIG[viewId].icon,
+        kind: 'source' as const
+      }));
+
+    const customItems = taskLists.map(list => ({
+      id: `custom:${list.id}` as TaskManagerViewKey,
+      label: list.name,
+      count: visibleTasks.filter(task => task.listId === list.id && !task.isCompleted).length,
+      icon: ListChecks,
+      kind: 'custom' as const,
+      list
+    }));
+
+    return [...smartItems, ...sourceItems, ...customItems];
+  }, [visibleTasks, taskLists, user, canAssignOthers]);
+
+  const baseViewTasks = React.useMemo(
+    () => filterTasksByView(visibleTasks.filter(task => !task.isDeleted), activeView, user),
+    [visibleTasks, activeView, user]
+  );
+
+  const filteredTasks = React.useMemo(() => {
+    let items = [...baseViewTasks];
+
+    if (activeView === 'completed') {
+      items = items.filter(task => task.isCompleted);
+    } else if (filterMode === 'active') {
+      items = items.filter(task => !task.isCompleted);
+    }
+
+    if (assigneeFilter !== 'all') {
+      items = items.filter(task => task.assignedTo === assigneeFilter);
+    }
+
+    const normalizedSearch = deferredSearch.trim().toLowerCase();
+    if (normalizedSearch) {
+      items = items.filter(task =>
+        task.title.toLowerCase().includes(normalizedSearch)
+        || (task.description || '').toLowerCase().includes(normalizedSearch)
+        || (task.assignedUser?.name || '').toLowerCase().includes(normalizedSearch)
+        || (task.listLabel || '').toLowerCase().includes(normalizedSearch)
+        || (task.category || '').toLowerCase().includes(normalizedSearch)
+      );
+    }
+
+    return sortTasks(items, sortMode);
+  }, [baseViewTasks, activeView, assigneeFilter, deferredSearch, filterMode, sortMode]);
+
+  const selectedTask = React.useMemo(
+    () => visibleTasks.find(task => task.id === selectedTaskId) || null,
+    [selectedTaskId, visibleTasks]
+  );
+
+  const activeViewMeta = React.useMemo(() => {
+    if (activeView.startsWith('custom:')) {
+      const customId = activeView.replace('custom:', '');
+      const list = taskLists.find(candidate => candidate.id === customId);
+
+      return {
+        title: list?.name || 'Lista personalizada',
+        subtitle: 'Uma lista customizada para agrupar tarefas sem virar formulario.',
+        emptyTitle: 'Esta lista esta vazia',
+        emptyDescription: 'Adicione tarefas simples e mantenha tudo agrupado no mesmo lugar.'
+      };
+    }
+
+    if (activeView in SMART_VIEW_CONFIG) {
+      const meta = SMART_VIEW_CONFIG[activeView as keyof typeof SMART_VIEW_CONFIG];
+      return {
+        title: meta.title,
+        subtitle: meta.subtitle,
+        emptyTitle: meta.emptyTitle,
+        emptyDescription: meta.emptyDescription
+      };
+    }
+
+    const meta = SOURCE_VIEW_CONFIG[activeView as keyof typeof SOURCE_VIEW_CONFIG];
+    return {
+      title: meta.title,
+      subtitle: meta.subtitle,
+      emptyTitle: meta.emptyTitle,
+      emptyDescription: meta.emptyDescription
+    };
+  }, [activeView, taskLists]);
+
+  const pendingCount = React.useMemo(
+    () => filteredTasks.filter(task => !task.isCompleted).length,
+    [filteredTasks]
+  );
+
+  const currentListLabel = React.useMemo(() => {
+    if (activeView.startsWith('custom:')) {
+      return taskLists.find(list => list.id === activeView.replace('custom:', ''))?.name || 'Lista personalizada';
+    }
+
+    if (activeView in SMART_VIEW_CONFIG) {
+      return SMART_VIEW_CONFIG[activeView as keyof typeof SMART_VIEW_CONFIG].title;
+    }
+
+    return SOURCE_VIEW_CONFIG[activeView as keyof typeof SOURCE_VIEW_CONFIG].label;
+  }, [activeView, taskLists]);
+
+  const updateQuickTaskForm = <K extends keyof QuickTaskFormState>(field: K, value: QuickTaskFormState[K]) => {
+    setQuickTaskForm(current => ({ ...current, [field]: value }));
+  };
+
+  const refreshAfterMutation = async (preserveTaskId?: string | null) => {
+    await loadData(preserveTaskId);
+    publishAgendaRefresh({ source: 'tasks-manager', entity: 'task_instance', entityId: preserveTaskId || undefined });
+  };
+
+  const handleCreateList = async (name: string) => {
+    try {
+      const createdList = await dataService.createTaskList({
+        name,
+        ownerUserId: user.id,
+        createdBy: user.id
+      });
+      await loadData();
+      setActiveView(`custom:${createdList.id}`);
+    } catch (error: any) {
+      console.error('Erro ao criar lista.', error);
+      alert(error?.message || 'Nao foi possivel criar a lista agora.');
+    }
+  };
+
+  const handleDeleteList = async (viewId: TaskManagerViewKey) => {
+    if (!viewId.startsWith('custom:')) return;
+
+    const listId = viewId.replace('custom:', '');
+    const list = taskLists.find(candidate => candidate.id === listId);
+    if (!list) return;
+
+    const confirmed = window.confirm(`Excluir a lista "${list.name}"? As tarefas continuam existindo, mas saem dessa lista.`);
+    if (!confirmed) return;
+
+    try {
+      const linkedTasks = visibleTasks.filter(task => task.listId === listId);
+
+      await dataService.archiveTaskList(listId);
+
+      await Promise.allSettled(linkedTasks.map(task => {
+        const nextMetadata = {
+          ...(task.metadata || {})
+        };
+        delete nextMetadata.taskListId;
+        delete nextMetadata.taskListName;
+
+        return dataService.updateTaskInstance(task.id, {
+          metadata: nextMetadata,
+          listId: null,
+          listName: null
+        }, user.id, 'Lista removida da tarefa.');
+      }));
+
+      await loadData();
+      if (activeView === viewId) {
+        setActiveView('all');
+      }
+      publishAgendaRefresh({ source: 'tasks-list-delete', entity: 'task_list', entityId: listId });
+    } catch (error: any) {
+      console.error('Erro ao excluir lista.', error);
+      alert(error?.message || 'Nao foi possivel excluir a lista agora.');
+    }
+  };
+
+  const handleQuickTaskSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!quickTaskForm.title.trim()) return;
+
+    if (quickTaskForm.ownership === 'ASSIGNED' && !quickTaskForm.assignedUserId) {
+      alert('Selecione o responsavel da tarefa.');
+      return;
+    }
+
+    if (quickTaskForm.recurrenceType === 'WEEKLY' && quickTaskForm.weeklyDays.length === 0) {
+      alert('Escolha pelo menos um dia da semana para a recorrencia.');
+      return;
+    }
+
+    setQuickSubmitting(true);
+    try {
+      const selectedList = taskLists.find(list => list.id === quickTaskForm.listId) || null;
+      const dueAt = buildDateTimeIso(quickTaskForm.dueDate, quickTaskForm.dueTime, '23:59');
+      const reminderAt = buildDateTimeIso(quickTaskForm.reminderDate, quickTaskForm.reminderTime, '09:00');
+      const metadata = {
+        taskListId: selectedList?.id || null,
+        taskListName: selectedList?.name || null,
+        reminderAt,
+        isImportant: quickTaskForm.isImportant,
+        inMyDay: quickTaskForm.inMyDay,
+        recurrenceType: quickTaskForm.recurrenceType,
+        recurrenceWeekdays: quickTaskForm.weeklyDays,
+        explicitDueTime: Boolean(quickTaskForm.dueDate && quickTaskForm.dueTime)
+      };
+      const category = selectedList?.name
+        || (quickTaskForm.ownership === 'TEAM'
+          ? 'Demandas do setor'
+          : (quickTaskForm.ownership === 'ASSIGNED' ? 'Atribuidas' : 'Minhas tarefas'));
+
+      if (quickTaskForm.recurrenceType !== 'NONE') {
+        await dataService.saveTaskTemplate({
+          title: quickTaskForm.title.trim(),
+          description: quickTaskForm.description.trim() || null,
+          category,
+          taskScope: quickTaskForm.ownership === 'PERSONAL' ? 'PESSOAL' : 'SETOR',
+          recurrenceType: quickTaskForm.recurrenceType,
+          recurrenceConfig: {
+            start_date: quickTaskForm.dueDate || new Date().toISOString().slice(0, 10),
+            weekdays: quickTaskForm.recurrenceType === 'WEEKLY' ? quickTaskForm.weeklyDays : undefined,
+            day_of_month: quickTaskForm.recurrenceType === 'MONTHLY' && quickTaskForm.dueDate
+              ? Number(quickTaskForm.dueDate.slice(-2))
+              : undefined,
+            reminderAt,
+            taskListId: selectedList?.id || null,
+            taskListName: selectedList?.name || null,
+            inMyDay: quickTaskForm.inMyDay,
+            isImportant: quickTaskForm.isImportant,
+            explicitDueTime: Boolean(quickTaskForm.dueDate && quickTaskForm.dueTime)
+          },
+          defaultPriority: quickTaskForm.priority,
+          defaultDueTime: quickTaskForm.dueTime || null,
+          createdBy: user.id,
+          isActive: true,
+          assignMode: quickTaskForm.ownership === 'TEAM' ? 'ALL' : 'SPECIFIC',
+          assignConfig: quickTaskForm.ownership === 'ASSIGNED'
+            ? { userIds: [quickTaskForm.assignedUserId] }
+            : quickTaskForm.ownership === 'TEAM'
+              ? {}
+              : { userIds: [user.id] }
+        });
+        await dataService.syncTaskRecurringInstances();
+      } else {
+        await dataService.createInternalTasks({
+          title: quickTaskForm.title.trim(),
+          description: quickTaskForm.description.trim() || undefined,
+          category,
+          priority: quickTaskForm.priority,
+          dueAt,
+          startsAt: dueAt,
+          assignedBy: user.id,
+          taskScope: quickTaskForm.ownership === 'PERSONAL' ? 'PESSOAL' : 'SETOR',
+          assignMode: quickTaskForm.ownership === 'TEAM' ? 'ALL' : 'SPECIFIC',
+          assignedToIds: quickTaskForm.ownership === 'ASSIGNED'
+            ? [quickTaskForm.assignedUserId]
+            : quickTaskForm.ownership === 'PERSONAL'
+              ? [user.id]
+              : undefined,
+          metadata
+        });
+      }
+
+      setQuickTaskForm(buildQuickTaskDefaults(activeView, canAssignOthers));
+      setQuickAddExpanded(false);
+      await refreshAfterMutation();
+    } catch (error: any) {
+      console.error('Erro ao criar tarefa.', error);
+      alert(error?.message || 'Nao foi possivel criar a tarefa agora.');
+    } finally {
+      setQuickSubmitting(false);
+    }
+  };
+
+  const handleToggleTaskCompletion = async (task: TaskManagerTask) => {
+    try {
+      if (task.isCompleted) {
+        await dataService.updateTaskInstance(task.id, {
+          status: task.dueAt && new Date(task.dueAt).getTime() < Date.now() ? 'ATRASADO' : 'PENDENTE',
+          completedAt: null
+        }, user.id, 'Tarefa reaberta.');
+      } else {
+        const completionNote = task.requiresCommentOnCompletion
+          ? window.prompt('Essa tarefa exige um comentario de conclusao. Escreva um resumo curto:')
+          : undefined;
+
+        if (task.requiresCommentOnCompletion && !completionNote?.trim()) {
+          return;
+        }
+
+        await dataService.completeTaskInstance(task.id, user.id, completionNote || undefined);
+      }
+
+      await refreshAfterMutation();
+    } catch (error: any) {
+      console.error('Erro ao alterar conclusao da tarefa.', error);
+      alert(error?.message || 'Nao foi possivel atualizar essa tarefa agora.');
+    }
+  };
+
+  const handleToggleImportant = async (task: TaskManagerTask) => {
+    try {
+      await dataService.updateTaskInstance(task.id, {
+        metadata: {
+          ...(task.metadata || {}),
+          isImportant: !task.isImportant
+        }
+      }, user.id, 'Importancia da tarefa atualizada.');
+      await refreshAfterMutation();
+    } catch (error: any) {
+      console.error('Erro ao atualizar importancia.', error);
+      alert(error?.message || 'Nao foi possivel atualizar a importancia agora.');
+    }
+  };
+
+  const handleToggleMyDay = async (task: TaskManagerTask) => {
+    try {
+      await dataService.updateTaskInstance(task.id, {
+        metadata: {
+          ...(task.metadata || {}),
+          inMyDay: !task.inMyDay
+        }
+      }, user.id, 'Marcador Meu dia atualizado.');
+      await refreshAfterMutation();
+    } catch (error: any) {
+      console.error('Erro ao atualizar Meu dia.', error);
+      alert(error?.message || 'Nao foi possivel atualizar Meu dia agora.');
+    }
+  };
+
+  const handleDuplicateTask = async (task: TaskManagerTask) => {
+    try {
+      await dataService.duplicateTaskInstance(task.id, user.id);
+      await refreshAfterMutation();
+    } catch (error: any) {
+      console.error('Erro ao duplicar tarefa.', error);
+      alert(error?.message || 'Nao foi possivel duplicar a tarefa agora.');
+    }
+  };
+
+  const handleDeleteTask = async (task: TaskManagerTask) => {
+    const confirmed = window.confirm(`Excluir a tarefa "${task.title}"?`);
+    if (!confirmed) return;
+
+    try {
+      await dataService.cancelTaskInstance(task.id, user.id, 'Tarefa removida pela interface de tarefas.');
+      await refreshAfterMutation();
+    } catch (error: any) {
+      console.error('Erro ao excluir tarefa.', error);
+      alert(error?.message || 'Nao foi possivel excluir a tarefa agora.');
+    }
+  };
+
+  const handleSaveTaskDetails = async (
+    task: TaskManagerTask,
+    draft: {
+      title: string;
+      description: string;
+      listId: string;
+      assignedUserId: string;
+      priority: TaskPriority;
+      dueDate: string;
+      dueTime: string;
+      reminderDate: string;
+      reminderTime: string;
+      recurrenceType: TaskRecurrenceType;
+      weeklyDays: string[];
+      isImportant: boolean;
+      inMyDay: boolean;
+    }
+  ) => {
+    setSavingTask(true);
+    try {
+      const selectedList = taskLists.find(list => list.id === draft.listId) || null;
+      const dueAt = buildDateTimeIso(draft.dueDate, draft.dueTime, '23:59');
+      const reminderAt = buildDateTimeIso(draft.reminderDate, draft.reminderTime, '09:00');
+
+      await dataService.updateTaskInstance(task.id, {
+        title: draft.title.trim(),
+        description: draft.description.trim() || null,
+        category: selectedList?.name || task.category,
+        priority: draft.priority,
+        dueAt,
+        assignedTo: canAssignOthers ? (draft.assignedUserId || null) : task.assignedTo,
+        metadata: {
+          ...(task.metadata || {}),
+          taskListId: selectedList?.id || null,
+          taskListName: selectedList?.name || null,
+          reminderAt,
+          isImportant: draft.isImportant,
+          inMyDay: draft.inMyDay,
+          recurrenceType: draft.recurrenceType,
+          recurrenceWeekdays: draft.weeklyDays,
+          explicitDueTime: Boolean(draft.dueDate && draft.dueTime)
+        }
+      }, user.id, 'Tarefa atualizada pelo gerenciador.');
+
+      await refreshAfterMutation(task.id);
+    } catch (error: any) {
+      console.error('Erro ao salvar tarefa.', error);
+      alert(error?.message || 'Nao foi possivel salvar as alteracoes agora.');
+    } finally {
+      setSavingTask(false);
+    }
+  };
+
+  return (
+    <div className="pb-10">
+      <div className="relative overflow-hidden rounded-[28px] border border-slate-200/80 bg-white shadow-[0_18px_44px_-38px_rgba(15,23,42,0.35)]">
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-28 bg-[radial-gradient(circle_at_top_left,_rgba(241,245,249,0.95),_transparent_44%),radial-gradient(circle_at_top_right,_rgba(236,253,245,0.7),_transparent_30%)]" />
+
+        <div className={`relative grid min-h-[calc(100vh-10rem)] grid-cols-1 ${selectedTask ? 'xl:grid-cols-[248px_minmax(0,1fr)_360px]' : 'xl:grid-cols-[248px_minmax(0,1fr)]'}`}>
+          <TasksSidebar
+            items={sidebarItems}
+            activeView={activeView}
+            onSelect={setActiveView}
+            onCreateList={handleCreateList}
+            onDeleteList={handleDeleteList}
+          />
+
+          <main className="min-w-0 bg-[linear-gradient(180deg,rgba(248,250,252,0.72)_0%,rgba(255,255,255,1)_180px)]">
+            <div className="mx-auto flex h-full max-w-6xl flex-col gap-4 px-4 py-4 xl:px-6 xl:py-5">
+              <TasksHeader
+                title={activeViewMeta.title}
+                subtitle={activeViewMeta.subtitle}
+                pendingCount={pendingCount}
+                searchValue={searchValue}
+                onSearchChange={setSearchValue}
+              />
+
+              {activeView !== 'completed' ? (
+                <QuickAddTask
+                  form={quickTaskForm}
+                  expanded={quickAddExpanded}
+                  submitting={quickSubmitting}
+                  currentListLabel={currentListLabel}
+                  availableLists={taskLists}
+                  assignableUsers={assignableUsers}
+                  canAssignOthers={canAssignOthers}
+                  onExpandChange={setQuickAddExpanded}
+                  onChange={updateQuickTaskForm}
+                  onToggleWeekday={weekday => {
+                    setQuickTaskForm(current => ({
+                      ...current,
+                      weeklyDays: current.weeklyDays.includes(weekday)
+                        ? current.weeklyDays.filter(currentDay => currentDay !== weekday)
+                        : [...current.weeklyDays, weekday]
+                    }));
+                  }}
+                  onSubmit={handleQuickTaskSubmit}
+                />
+              ) : null}
+
+              <TaskFiltersBar
+                filterMode={filterMode}
+                onFilterModeChange={setFilterMode}
+                sortMode={sortMode}
+                onSortModeChange={setSortMode}
+                assigneeFilter={assigneeFilter}
+                onAssigneeFilterChange={setAssigneeFilter}
+                users={assignableUsers}
+                showAssigneeFilter={canAssignOthers && activeView !== 'assigned-to-me'}
+                lockToAll={activeView === 'completed'}
+              />
+
+              <div className="min-h-[260px] flex-1">
+                {loading ? (
+                  <div className="flex h-full min-h-[260px] items-center justify-center rounded-[32px] border border-slate-200 bg-slate-50">
+                    <div className="inline-flex items-center gap-3 rounded-full bg-white px-4 py-3 text-sm font-semibold text-slate-600 shadow-sm shadow-slate-200/50">
+                      <Loader2 size={18} className="animate-spin" />
+                      Carregando tarefas...
+                    </div>
+                  </div>
+                ) : errorMessage ? (
+                  <div className="rounded-[32px] border border-red-200 bg-red-50 px-6 py-10 text-center">
+                    <AlertCircle size={30} className="mx-auto text-red-500" />
+                    <h3 className="mt-4 text-xl font-black tracking-tight text-red-700">Nao foi possivel carregar</h3>
+                    <p className="mx-auto mt-2 max-w-md text-sm text-red-600">{errorMessage}</p>
+                    <button
+                      onClick={() => void loadData(selectedTaskId)}
+                      className="mt-5 rounded-full bg-white px-4 py-2 text-[11px] font-black uppercase tracking-[0.16em] text-red-600 transition-colors hover:bg-red-100"
+                    >
+                      Tentar novamente
+                    </button>
+                  </div>
+                ) : (
+                  <TasksList
+                    tasks={filteredTasks}
+                    selectedTaskId={selectedTaskId}
+                    emptyTitle={activeViewMeta.emptyTitle}
+                    emptyDescription={activeViewMeta.emptyDescription}
+                    onSelect={setSelectedTaskId}
+                    onToggleComplete={handleToggleTaskCompletion}
+                    onToggleImportant={handleToggleImportant}
+                    onToggleMyDay={handleToggleMyDay}
+                    onDuplicate={handleDuplicateTask}
+                    onDelete={handleDeleteTask}
+                  />
+                )}
+              </div>
+            </div>
+          </main>
+
+          {selectedTask ? (
+            <TaskDetailsDrawer
+              task={selectedTask}
+              open={Boolean(selectedTask)}
+              canAssignOthers={canAssignOthers}
+              availableLists={taskLists}
+              assignableUsers={assignableUsers}
+              saving={savingTask}
+              onClose={() => setSelectedTaskId(null)}
+              onSave={handleSaveTaskDetails}
+              onToggleComplete={handleToggleTaskCompletion}
+              onDelete={handleDeleteTask}
+            />
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
 };
 
 export default Calendar;

@@ -59,7 +59,7 @@ export const RunExecution: React.FC = () => {
             <div className="flex justify-between items-center bg-white p-6 rounded-[32px] border border-slate-100 shadow-sm">
                 <div>
                     <h2 className="text-2xl font-black text-slate-800">Histórico de Execuções</h2>
-                    <p className="text-slate-500">Acompanhe o status e custos das buscas realizadas.</p>
+                    <p className="text-slate-500">Acompanhe o status das buscas. "Captados na Busca" mostra tudo que o Google retornou; "Para Revisao" mostra apenas os novos leads pendentes.</p>
                 </div>
                 <button onClick={() => loadRuns()} className="p-2 bg-slate-100 rounded-full text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition-colors">
                     <Activity size={20} />
@@ -102,15 +102,19 @@ export const RunExecution: React.FC = () => {
 
                             <div className="flex gap-8 text-center bg-slate-50 p-4 rounded-2xl border border-slate-100 min-w-[200px]">
                                 <div>
-                                    <p className="text-[10px] uppercase font-black tracking-widest text-slate-400">Encontrados</p>
+                                    <p className="text-[10px] uppercase font-black tracking-widest text-slate-400">Captados na Busca</p>
                                     <p className="text-xl font-black text-slate-800">{run.total_found}</p>
                                 </div>
                                 <div className="w-px bg-slate-200"></div>
                                 <div>
-                                    <p className="text-[10px] uppercase font-black tracking-widest text-slate-400">Novos Leads</p>
+                                    <p className="text-[10px] uppercase font-black tracking-widest text-slate-400">Para Revisao</p>
                                     <p className="text-xl font-black text-emerald-600">{run.total_new}</p>
                                 </div>
                             </div>
+
+                            <p className="text-[11px] text-slate-400 max-w-sm text-center md:text-left">
+                                A diferenÃ§a normalmente Ã© composta por itens jÃ¡ existentes no histÃ³rico/CRM ou resultados repetidos dentro da busca.
+                            </p>
 
                             {/* Error Message Display if FAILED */}
                             {run.status === 'FAILED' && run.error_log && (

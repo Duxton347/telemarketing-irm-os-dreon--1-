@@ -34,7 +34,7 @@ export const ProcessList: React.FC<{ user: any }> = ({ user }) => {
         setRunningIds(prev => new Set(prev).add(process.id!));
         try {
             await scraperService.runProcess(process.id!, user.id);
-            alert("Execução iniciada com sucesso! Verifique a aba 'Execuções'.");
+            alert("Execução concluída com sucesso! Verifique a aba 'Execuções'.");
         } catch (error: any) {
             alert(`Erro ao iniciar: ${error.message}`);
         } finally {

@@ -1,11 +1,10 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
     X, Search, MapPin, Navigation, AlertTriangle, CheckCircle2,
     ArrowRight, Loader2
 } from 'lucide-react';
 import { scraperService, ScraperProcess } from '../../services/scraperService';
-import { dataService } from '../../services/dataService';
 
 interface ProcessFormProps {
     onClose: () => void;
@@ -35,28 +34,7 @@ export const ProcessForm: React.FC<ProcessFormProps> = ({ onClose, onSuccess, us
 
         setIsLoading(true);
         try {
-            // 1. Fetch Key from DB
-            const GOOGLE_MAPS_KEY = await dataService.getSystemSetting('GOOGLE_MAPS_KEY');
-            if (!GOOGLE_MAPS_KEY) {
-                throw new Error("Chave do Google Maps não configurada no Módulo de Gestão.");
-            }
-
-            // 2. Verify Location directly using Frontend API Call via Proxy
-            const googleUrl = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(locationInput)}&key=${GOOGLE_MAPS_KEY}`;
-            const url = `https://corsproxy.io/?${encodeURIComponent(googleUrl)}`;
-            const res = await fetch(url);
-            const data = await res.json();
-
-            if (data.status !== 'OK') {
-                throw new Error(data.error_message || data.status);
-            }
-
-            const result = data.results[0];
-            const resolvedData = {
-                formatted_address: result.formatted_address,
-                location: result.geometry.location,
-                place_id: result.place_id
-            };
+            const resolvedData = await scraperService.verifyLocation(locationInput);
 
             setResolvedLocation(resolvedData);
 

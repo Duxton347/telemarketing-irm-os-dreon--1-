@@ -10,6 +10,8 @@ import { dataService } from '../services/dataService';
 import { UserRole, CallType, ProtocolStatus, User, Protocol, Client, Question, Task, ScheduleStatus } from '../types';
 import { useNavigate } from 'react-router-dom';
 import { RepiqueModal, RepiqueData } from '../components/RepiqueModal';
+import { resolveQuestionnaireEntries } from '../utils/questionnaireInsights';
+import { buildScheduledForValue } from '../utils/scheduleDateTime';
 
 interface DashboardProps {
   user: any;
@@ -51,19 +53,41 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
 
   // Constants for Dashboard View
   const fetchBaseData = React.useCallback(async () => {
-    const [calls, protocols, tasks, allUsers, allQuestions, waTasks] = await Promise.all([
+    const filterId = user?.role === UserRole.OPERATOR ? user.id : selectedFilter;
+    const taskFilter = filterId === 'all' ? undefined : filterId;
+
+    const [callsResult, protocolsResult, tasksResult, usersResult, questionsResult, waTasksResult] = await Promise.allSettled([
       dataService.getCalls(),
       dataService.getProtocols(),
-      dataService.getTasks(),
+      dataService.getTasks(taskFilter),
       dataService.getUsers(),
       dataService.getQuestions(),
-      dataService.getWhatsAppTasks() // Fetch all pending WA tasks
+      dataService.getWhatsAppTasks(taskFilter)
     ]);
+
+    const logDashboardLoadError = (label: string, result: PromiseSettledResult<any>) => {
+      if (result.status === 'rejected') {
+        console.error(`Dashboard: falha ao carregar ${label}`, result.reason);
+      }
+    };
+
+    logDashboardLoadError('ligações', callsResult);
+    logDashboardLoadError('protocolos', protocolsResult);
+    logDashboardLoadError('tarefas', tasksResult);
+    logDashboardLoadError('usuários', usersResult);
+    logDashboardLoadError('questionário', questionsResult);
+    logDashboardLoadError('tarefas de WhatsApp', waTasksResult);
+
+    const calls = callsResult.status === 'fulfilled' ? callsResult.value : [];
+    const protocols = protocolsResult.status === 'fulfilled' ? protocolsResult.value : [];
+    const tasks = tasksResult.status === 'fulfilled' ? tasksResult.value : [];
+    const allUsers = usersResult.status === 'fulfilled' ? usersResult.value : [];
+    const allQuestions = questionsResult.status === 'fulfilled' ? questionsResult.value : [];
+    const waTasks = waTasksResult.status === 'fulfilled' ? waTasksResult.value : [];
 
     setOperators(allUsers.filter(u => u && u.active !== false));
     setQuestions(allQuestions);
     setTasks(tasks);
-    const filterId = user?.role === UserRole.OPERATOR ? user.id : selectedFilter;
 
     const todayStr = new Date().toISOString().split('T')[0];
 
@@ -72,14 +96,20 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
       .filter(c => c.type !== CallType.WHATSAPP);
 
     const now = new Date(); // Current time for filtering
+    const isActionableVoiceTask = (task: Task) =>
+      !!task.assignedTo &&
+      task.status === 'pending' &&
+      (task.approvalStatus === 'APPROVED' || !task.approvalStatus);
+
     const displayTasks = (filterId === 'all'
-      ? tasks.filter(t => t.status === 'pending')
-      : tasks.filter(t => t.assignedTo === filterId && t.status === 'pending'))
+      ? tasks.filter(isActionableVoiceTask)
+      : tasks.filter(t => t.assignedTo === filterId && isActionableVoiceTask(t)))
       .filter(t => !t.scheduledFor || new Date(t.scheduledFor) <= now); // Exclude future tasks
 
+    const isActionableWaTask = (task: any) => !!task.assignedTo && task.status === 'pending';
     const displayWaTasks = filterId === 'all' 
-      ? waTasks.filter(w => w.status === 'pending')
-      : waTasks.filter(w => w.assignedTo === filterId && w.status === 'pending');
+      ? waTasks.filter(isActionableWaTask)
+      : waTasks.filter(w => w.assignedTo === filterId && isActionableWaTask(w));
 
     const totalPending = displayTasks.length + displayWaTasks.length;
 
@@ -129,7 +159,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
   }, [user, selectedFilter]);
 
   React.useEffect(() => {
-    fetchBaseData();
+    void fetchBaseData();
     const interval = setInterval(fetchBaseData, 30000);
     return () => clearInterval(interval);
   }, [fetchBaseData]);
@@ -142,7 +172,9 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
         const data = await dataService.getDetailedCallsToday();
         setDetailedData(data);
       } else if (type === 'queue') {
-        const data = await dataService.getDetailedPendingTasks();
+        const filterId = user?.role === UserRole.OPERATOR ? user.id : selectedFilter;
+        const taskFilter = filterId === 'all' ? undefined : filterId;
+        const data = await dataService.getDetailedPendingTasks(taskFilter);
         setDetailedData(data);
       }
     } catch (e) {
@@ -290,7 +322,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
           {operators.map(op => {
             const now = new Date();
             const opTasks = tasks
-              .filter(t => t.assignedTo === op.id && t.status === 'pending')
+              .filter(t => t.assignedTo === op.id && t.status === 'pending' && (t.approvalStatus === 'APPROVED' || !t.approvalStatus))
               .filter(t => !t.scheduledFor || new Date(t.scheduledFor) <= now);
 
             if (selectedFilter !== 'all' && op.id !== selectedFilter) return null;
@@ -422,18 +454,47 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                                 </div>
                               </td>
                               <td className="py-6 px-4">
-                                <div className="font-black text-slate-900 flex items-center gap-2">
-                                  <Clock size={14} className="text-slate-300" />
-                                  {Math.floor(item.duration / 60)}m {item.duration % 60}s
-                                </div>
+                                {activeModal === 'queue' ? (
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest ${
+                                      item.queueChannel === 'WHATSAPP'
+                                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-100'
+                                        : 'bg-amber-50 text-amber-700 border border-amber-100'
+                                    }`}>
+                                      {item.queueChannel === 'WHATSAPP' ? <MessageCircle size={12} /> : <PhoneCall size={12} />}
+                                      {item.queueChannel === 'WHATSAPP' ? 'WhatsApp' : 'Ligacao'}
+                                    </span>
+                                    <span className="inline-flex items-center px-3 py-2 rounded-xl text-[9px] font-black uppercase tracking-widest bg-slate-100 text-slate-700 border border-slate-200">
+                                      {item.type || 'Sem tipo'}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div className="font-black text-slate-900 flex items-center gap-2">
+                                    <Clock size={14} className="text-slate-300" />
+                                    {Math.floor(item.duration / 60)}m {item.duration % 60}s
+                                  </div>
+                                )}
                               </td>
                               <td className="py-6 px-4">
-                                <button
-                                  onClick={() => setSelectedAuditCall(item)}
-                                  className="flex items-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest shadow-lg active:scale-95 transition-all"
-                                >
-                                  <Eye size={14} /> Ver Auditoria Completa
-                                </button>
+                                {activeModal === 'queue' ? (
+                                  <div className="space-y-1">
+                                    <p className="font-black text-slate-800">
+                                      {item.scheduledFor
+                                        ? new Date(item.scheduledFor).toLocaleString('pt-BR')
+                                        : new Date(item.deadline || item.createdAt).toLocaleString('pt-BR')}
+                                    </p>
+                                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                                      {item.scheduledFor ? 'Agendado para retorno' : 'Entrada original na fila'}
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={() => setSelectedAuditCall(item)}
+                                    className="flex items-center gap-2 bg-slate-900 text-white px-4 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest shadow-lg active:scale-95 transition-all"
+                                  >
+                                    <Eye size={14} /> Ver Auditoria Completa
+                                  </button>
+                                )}
                               </td>
                             </tr>
                           ))}
@@ -483,11 +544,16 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
                   <ClipboardList className="text-indigo-600" size={20} /> Respostas do Questionário
                 </h4>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {Object.entries(selectedAuditCall.responses || {}).filter(([k]) => k !== 'written_report' && k !== 'call_type' && !k.endsWith('_note')).map(([qId, response]: any) => {
-                    const question = questions.find(q => q.id === qId || q.id.toLowerCase() === qId.toLowerCase());
-                    const label = question ? `${question.order}. ${question.text}` : qId.toUpperCase();
+                  {resolveQuestionnaireEntries(
+                    selectedAuditCall.responses || {},
+                    questions,
+                    selectedAuditCall.type,
+                    selectedAuditCall.proposito
+                  ).map((entry: any) => {
+                    const response = String(entry.value);
+                    const label = entry.label;
                     return (
-                      <div key={qId} className="p-6 bg-white border border-slate-100 rounded-[28px] shadow-sm flex flex-col justify-between">
+                      <div key={entry.key} className="p-6 bg-white border border-slate-100 rounded-[28px] shadow-sm flex flex-col justify-between">
                         <p className="text-[10px] font-black text-slate-400 uppercase tracking-tighter mb-4 leading-tight">{label}</p>
                         <span className={`self-start px-4 py-2 rounded-xl text-xs font-black uppercase shadow-sm ${response === 'Ótimo' || response === 'Sim' || response === 'Atendeu' ? 'bg-green-600 text-white' :
                           response === 'Ruim' || response === 'Não' || response === 'Não atendeu' ? 'bg-red-600 text-white' : 'bg-slate-900 text-white'
@@ -558,7 +624,7 @@ const Dashboard: React.FC<DashboardProps> = ({ user }) => {
               customerId: t.clientId,
               requestedByOperatorId: user.id, // Who requested? The logged in user (Admin/Manager)
               assignedOperatorId: t.assignedTo, // Keep assigned to same operator
-              scheduledFor: `${data.date}T${data.time}:00`,
+              scheduledFor: buildScheduledForValue(data.date, data.time),
               callType: t.type,
               status: 'PENDENTE_APROVACAO' as ScheduleStatus, // Always require approval for repicks
               scheduleReason: data.reason,

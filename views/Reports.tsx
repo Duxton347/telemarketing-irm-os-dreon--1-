@@ -12,9 +12,13 @@ import {
    Smile, Meh, Frown, Tag
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
-import { CallRecord, User, Client, Protocol, Question, Task, OperatorEvent, OperatorEventType, Visit, Sale, SaleStatus, WhatsAppTask, CallType, ClientTag } from '../types';
+import { CallRecord, User, Client, Protocol, Question, Task, OperatorEvent, OperatorEventType, Visit, Sale, SaleStatus, WhatsAppTask, CallType, ClientTag, Quote } from '../types';
 import PostSaleRemarketingReport from './PostSaleRemarketingReport';
 import ProspectHistoryDrawer from '../components/ProspectHistoryDrawer';
+import { buildManagementReportInsights, EMPTY_MANAGEMENT_REPORT_INSIGHTS } from '../utils/managementReportInsights';
+import { formatUnknownError } from '../utils/errorFormatting';
+import { resolveQuestionnaireEntries } from '../utils/questionnaireInsights';
+import { buildPersonNameOptions, findCanonicalPersonName } from '../utils/personName';
 
 // --- HELPER COMPONENTS ---
 
@@ -55,18 +59,101 @@ const MetricCard: React.FC<{
    );
 };
 
+const normalizeReportText = (value?: string) =>
+   String(value || '')
+      .toLowerCase()
+      .trim()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+
+const isMeaningfulReportValue = (value: unknown) => {
+   if (value === null || value === undefined) return false;
+   if (typeof value === 'string') return value.trim().length > 0;
+   if (Array.isArray(value)) return value.length > 0;
+   return true;
+};
+
+const formatReportValue = (value: unknown) => {
+   if (Array.isArray(value)) {
+      return value.map(item => String(item)).join(', ');
+   }
+
+   if (typeof value === 'object' && value !== null) {
+      return JSON.stringify(value);
+   }
+
+   return String(value);
+};
+
+const findQuestionByHints = (questions: Question[], hints: string[]) =>
+   questions.find(question => {
+      const haystack = `${question.text} ${question.campo_resposta || ''} ${question.id}`.toLowerCase();
+      return hints.some(hint => haystack.includes(hint.toLowerCase()));
+   });
+
+const collectInteractionResponses = (
+   responses: Record<string, any>,
+   questions: Question[],
+   callType?: string,
+   proposito?: string
+) => {
+   return resolveQuestionnaireEntries(responses || {}, questions, callType, proposito)
+      .map(entry => ({
+         key: entry.key,
+         label: entry.label,
+         value: formatReportValue(entry.value)
+      }));
+};
+
+const getInteractionTypeLabel = (interaction: any) => {
+   const isWhatsApp = interaction?.type === CallType.WHATSAPP || interaction?._type === 'whatsapp';
+   if (isWhatsApp) return 'WhatsApp';
+   return interaction?.type || 'Ligação';
+};
+
+const formatCurrency = (value: number) =>
+   new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(value) || 0);
+
+const formatLocalDateInput = (date = new Date()) => {
+   const year = date.getFullYear();
+   const month = String(date.getMonth() + 1).padStart(2, '0');
+   const day = String(date.getDate()).padStart(2, '0');
+   return `${year}-${month}-${day}`;
+};
+
+const parseLocalDate = (value?: string) => {
+   if (!value) return null;
+   const [year, month, day] = value.split('-').map(Number);
+   if (!year || !month || !day) return null;
+   return new Date(year, month - 1, day, 0, 0, 0, 0);
+};
+
+const formatLocalDateLabel = (value?: string) => {
+   const parsed = parseLocalDate(value);
+   return parsed ? parsed.toLocaleDateString('pt-BR') : '-';
+};
+
+const shiftDate = (base: Date, amount: number) => {
+   const next = new Date(base);
+   next.setDate(next.getDate() + amount);
+   return next;
+};
+
+const getMonthStart = (base = new Date()) => new Date(base.getFullYear(), base.getMonth(), 1);
+
 // --- MAIN COMPONENT ---
 
 const Reports: React.FC<{ user: any }> = ({ user }) => {
    const [isLoading, setIsLoading] = React.useState(true);
-   const [activeTab, setActiveTab] = React.useState<'overview' | 'communications' | 'sales' | 'operators' | 'audit' | 'leads' | 'post_sale'>('overview');
+   const [activeTab, setActiveTab] = React.useState<'overview' | 'management' | 'communications' | 'sales' | 'operators' | 'audit' | 'leads' | 'post_sale' | 'invalid_phones'>('overview');
    const [drawerProspectId, setDrawerProspectId] = React.useState<string | null>(null);
 
    // Custom Date Range
    const [dateRange, setDateRange] = React.useState({
-      start: new Date(new Date().setDate(new Date().getDate() - 30)).toISOString().split('T')[0],
-      end: new Date().toISOString().split('T')[0]
+      start: '2010-01-01',
+      end: formatLocalDateInput()
    });
+   const [datePreset, setDatePreset] = React.useState<'today' | 'yesterday' | 'last7' | 'month' | 'custom'>('today');
 
    // --- FILTER & MODAL STATE ---
    const [searchTerm, setSearchTerm] = React.useState('');
@@ -82,13 +169,16 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
    const [tasks, setTasks] = React.useState<Task[]>([]);
    const [whatsappTasks, setWhatsappTasks] = React.useState<WhatsAppTask[]>([]);
    const [sales, setSales] = React.useState<Sale[]>([]);
+   const [quotes, setQuotes] = React.useState<Quote[]>([]);
    const [operators, setOperators] = React.useState<User[]>([]);
    const [clients, setClients] = React.useState<Client[]>([]);
+   const [invalidClients, setInvalidClients] = React.useState<Client[]>([]);
 
    const [events, setEvents] = React.useState<OperatorEvent[]>([]);
    const [questions, setQuestions] = React.useState<Question[]>([]);
    const [visits, setVisits] = React.useState<Visit[]>([]);
    const [prospects, setProspects] = React.useState<Client[]>([]);
+   const [loadWarnings, setLoadWarnings] = React.useState<string[]>([]);
 
    // Derived Metrics State
    const [metrics, setMetrics] = React.useState<any>({
@@ -111,26 +201,14 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
 
    const loadData = React.useCallback(async () => {
       setIsLoading(true);
+      setLoadWarnings([]);
       try {
-         const [
-            fetchedCalls,
-            fetchedTasks,
-            fetchedWa,
-            fetchedSales,
-            fetchedOps,
-            fetchedClients,
-
-            fetchedEvents,
-            fetchedQuestions,
-            fetchedVisits,
-            fetchedProspects,
-            fetchedTags,
-            fetchedInvalid
-         ] = await Promise.all([
+         const results = await Promise.allSettled([
             dataService.getCalls(dateRange.start, dateRange.end),
             dataService.getTasks(), // Tasks history is tricky, might need filter update in future
             dataService.getWhatsAppTasks(undefined, dateRange.start, dateRange.end),
             dataService.getSales(dateRange.start, dateRange.end),
+            dataService.getQuotes(dateRange.start, dateRange.end),
             dataService.getUsers(),
             dataService.getClients(),
 
@@ -142,12 +220,35 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
             dataService.getInvalidClients()
          ]);
 
+         const warnings: string[] = [];
+         const resolveResult = <T,>(result: PromiseSettledResult<T>, label: string, fallback: T): T => {
+            if (result.status === 'fulfilled') return result.value;
+
+            const message = formatUnknownError(result.reason);
+            console.error(`Failed to load reports source: ${label}`, result.reason);
+            warnings.push(`${label}: ${message}`);
+            return fallback;
+         };
+
+         const fetchedCalls = resolveResult(results[0], 'Ligacoes', [] as CallRecord[]);
+         const fetchedTasks = resolveResult(results[1], 'Tarefas', [] as Task[]);
+         const fetchedWa = resolveResult(results[2], 'WhatsApp', [] as WhatsAppTask[]);
+         const fetchedSales = resolveResult(results[3], 'Vendas', [] as Sale[]);
+         const fetchedQuotes = resolveResult(results[4], 'Orcamentos', [] as Quote[]);
+         const fetchedOps = resolveResult(results[5], 'Usuarios', [] as User[]);
+         const fetchedClients = resolveResult(results[6], 'Clientes', [] as Client[]);
+         const fetchedEvents = resolveResult(results[7], 'Eventos de operador', [] as OperatorEvent[]);
+         const fetchedQuestions = resolveResult(results[8], 'Perguntas', [] as Question[]);
+         const fetchedVisits = resolveResult(results[9], 'Visitas', [] as Visit[]);
+         const fetchedProspects = resolveResult(results[10], 'Prospects', [] as Client[]);
+         const fetchedTags = resolveResult(results[11], 'Tags', [] as ClientTag[]);
+         const fetchedInvalid = resolveResult(results[12], 'Telefones invalidos', [] as Client[]);
+
          setCalls(fetchedCalls);
          setTasks(fetchedTasks); // Note: filter by date if needed for history
          setWhatsappTasks(fetchedWa);
          setSales(fetchedSales);
-         setOperators(fetchedOps);
-         setClients(fetchedClients);
+         setQuotes(fetchedQuotes);
          setOperators(fetchedOps);
          setClients(fetchedClients);
          setEvents(fetchedEvents);
@@ -155,10 +256,11 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
          setVisits(fetchedVisits);
          setProspects(fetchedProspects);
          setInvalidClients(fetchedInvalid);
+         setLoadWarnings(warnings);
 
          // --- CALCULATE BASE METRICS ---
          // Revenue now counts ALL sales except CANCELADA
-         const validSales = fetchedSales.filter(s => s.status !== ('CANCELADA' as any));
+         const validSales = fetchedSales.filter(s => s.status !== SaleStatus.CANCELADO && s.status !== ('CANCELADA' as any));
          const totalRevenue = validSales.reduce((acc, s) => acc + (s.value || 0), 0);
          const totalSalesCount = validSales.length;
 
@@ -245,6 +347,16 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
              speed: { satisfied: 0, total: 0 }
          };
 
+         const npsQuestion = findQuestionByHints(fetchedQuestions, ['nps', 'recomend']);
+         const priceQuestion = findQuestionByHints(fetchedQuestions, ['preco', 'precificacao', 'preço']);
+         const productQuestion = findQuestionByHints(fetchedQuestions, ['produto', 'estoque', 'qualidade']);
+         const speedQuestion = findQuestionByHints(fetchedQuestions, ['velocidade', 'agilidade', 'prazo']);
+
+         const getResolvedInteractionValue = (interaction: any, question?: Question) => {
+             if (!question) return undefined;
+             return dataService.getResponseValue(interaction.responses || {}, question);
+         };
+
          // Analyze all responses from calls and WA tasks within date range
          const allInteractions = [
              ...fetchedCalls,
@@ -255,7 +367,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
              const responses = interaction.responses || {};
              
              // NPS Eval
-             const npsRaw = responses['q_nps'];
+             const npsRaw = getResolvedInteractionValue(interaction, npsQuestion) ?? responses['q_nps'];
              if (npsRaw !== undefined) {
                  const npsScoreRaw = parseInt(npsRaw, 10);
                  if (!isNaN(npsScoreRaw)) {
@@ -280,6 +392,42 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
              checkSatisfaction('q_precificacao', 'price');
              checkSatisfaction('q_produto_estoque', 'product');
              checkSatisfaction('q_velocidade', 'speed');
+         });
+
+         promoters = 0;
+         detractors = 0;
+         npsTotal = 0;
+         satRates.price = { satisfied: 0, total: 0 };
+         satRates.product = { satisfied: 0, total: 0 };
+         satRates.speed = { satisfied: 0, total: 0 };
+
+         allInteractions.forEach((interaction: any) => {
+             const responses = interaction.responses || {};
+             const npsRaw = getResolvedInteractionValue(interaction, npsQuestion) ?? responses['q_nps'];
+
+             if (npsRaw !== undefined) {
+                 const npsScoreRaw = parseInt(String(npsRaw), 10);
+                 if (!isNaN(npsScoreRaw)) {
+                     npsTotal++;
+                     if (npsScoreRaw >= 9) promoters++;
+                     else if (npsScoreRaw <= 6) detractors++;
+                 }
+             }
+
+             const resolvedChecks = [
+                 { value: getResolvedInteractionValue(interaction, priceQuestion) ?? responses['q_precificacao'], category: 'price' as const },
+                 { value: getResolvedInteractionValue(interaction, productQuestion) ?? responses['q_produto_estoque'], category: 'product' as const },
+                 { value: getResolvedInteractionValue(interaction, speedQuestion) ?? responses['q_velocidade'], category: 'speed' as const }
+             ];
+
+             resolvedChecks.forEach(check => {
+                 if (!isMeaningfulReportValue(check.value)) return;
+                 satRates[check.category].total++;
+                 const normalizedVal = normalizeReportText(String(check.value));
+                 if (['otimo', 'bom', 'sim', 'adequado'].some(option => normalizedVal.includes(option))) {
+                     satRates[check.category].satisfied++;
+                 }
+             });
          });
 
          const npsScore = npsTotal > 0 ? Math.round(((promoters - detractors) / npsTotal) * 100) : 0;
@@ -312,12 +460,149 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
 
       } catch (e) {
          console.error("Failed to load reports data", e);
+         setLoadWarnings(['Falha inesperada ao montar o relatorio.']);
       } finally {
          setIsLoading(false);
       }
    }, [dateRange]);
 
    React.useEffect(() => { loadData(); }, [loadData]);
+
+   const managementInsights = React.useMemo(() => {
+      try {
+         return buildManagementReportInsights({
+            calls,
+            whatsappTasks,
+            questions,
+            operators
+         });
+      } catch (error) {
+         console.error('Failed to build management insights', error);
+         return EMPTY_MANAGEMENT_REPORT_INSIGHTS;
+      }
+   }, [calls, whatsappTasks, questions, operators]);
+
+   const salespersonNameOptions = React.useMemo(() => buildPersonNameOptions(
+      sales.map(sale => sale.externalSalesperson).filter(Boolean),
+      operators.map(operator => ({ id: operator.id, label: operator.name }))
+   ), [sales, operators]);
+
+   const salesRanking = React.useMemo(() => {
+      const totals: Record<string, number> = {};
+
+      sales.forEach(sale => {
+         if (sale.status !== SaleStatus.ENTREGUE) return;
+
+         const operatorName = operators.find(operator => operator.id === sale.operatorId)?.name;
+         const name = sale.externalSalesperson
+            ? findCanonicalPersonName(sale.externalSalesperson, salespersonNameOptions)
+            : operatorName || 'N/A';
+
+         totals[name] = (totals[name] || 0) + (sale.value || 0);
+      });
+
+      return Object.entries(totals)
+         .sort(([, a], [, b]) => b - a)
+         .map(([name, value]) => ({ name, value }));
+   }, [sales, operators, salespersonNameOptions]);
+
+   const salesReportMetrics = React.useMemo(() => {
+      const isCanceledSale = (sale: Sale) => sale.status === SaleStatus.CANCELADO || sale.status === ('CANCELADA' as any);
+      const activeSales = sales.filter(sale => !isCanceledSale(sale));
+      const deliveredSales = activeSales.filter(sale => sale.status === SaleStatus.ENTREGUE);
+      const pendingSales = activeSales.filter(sale => sale.status === SaleStatus.PENDENTE);
+      const canceledSales = sales.filter(isCanceledSale);
+
+      const sumSales = (items: Sale[]) => items.reduce((acc, sale) => acc + (Number(sale.value) || 0), 0);
+      const sumQuotes = (items: Quote[]) => items.reduce((acc, quote) => acc + (Number(quote.value) || 0), 0);
+
+      const totalSalesValue = sumSales(activeSales);
+      const deliveredRevenue = sumSales(deliveredSales);
+      const totalQuoteValue = sumQuotes(quotes);
+      const wonQuotes = quotes.filter(quote => quote.status === 'WON');
+      const openQuotes = quotes.filter(quote => quote.status === 'OPEN');
+      const lostQuotes = quotes.filter(quote => quote.status === 'LOST');
+
+      const categoryMap = new Map<string, {
+         name: string;
+         totalCount: number;
+         deliveredCount: number;
+         pendingCount: number;
+         canceledCount: number;
+         totalValue: number;
+         deliveredValue: number;
+      }>();
+
+      sales.forEach(sale => {
+         const name = String(sale.category || 'Sem categoria');
+         const current = categoryMap.get(name) || {
+            name,
+            totalCount: 0,
+            deliveredCount: 0,
+            pendingCount: 0,
+            canceledCount: 0,
+            totalValue: 0,
+            deliveredValue: 0
+         };
+
+         current.totalCount += 1;
+         if (sale.status === SaleStatus.ENTREGUE) {
+            current.deliveredCount += 1;
+            current.deliveredValue += Number(sale.value) || 0;
+         } else if (sale.status === SaleStatus.PENDENTE) {
+            current.pendingCount += 1;
+         } else if (isCanceledSale(sale)) {
+            current.canceledCount += 1;
+         }
+
+         if (!isCanceledSale(sale)) {
+            current.totalValue += Number(sale.value) || 0;
+         }
+
+         categoryMap.set(name, current);
+      });
+
+      const salesCategoryData = Array.from(categoryMap.values())
+         .sort((a, b) => b.totalValue - a.totalValue);
+
+      const quoteStatusData = [
+         { name: 'Em aberto', count: openQuotes.length, value: sumQuotes(openQuotes) },
+         { name: 'Ganhos', count: wonQuotes.length, value: sumQuotes(wonQuotes) },
+         { name: 'Perdidos', count: lostQuotes.length, value: sumQuotes(lostQuotes) }
+      ];
+
+      const quoteProductMap = new Map<string, { name: string; count: number; value: number }>();
+      quotes.forEach(quote => {
+         const name = quote.interest_product || 'Nao informado';
+         const current = quoteProductMap.get(name) || { name, count: 0, value: 0 };
+         current.count += 1;
+         current.value += Number(quote.value) || 0;
+         quoteProductMap.set(name, current);
+      });
+
+      return {
+         totalSalesCount: activeSales.length,
+         deliveredSalesCount: deliveredSales.length,
+         pendingSalesCount: pendingSales.length,
+         canceledSalesCount: canceledSales.length,
+         totalSalesValue,
+         deliveredRevenue,
+         averageSalesTicket: activeSales.length > 0 ? totalSalesValue / activeSales.length : 0,
+         totalQuotesCount: quotes.length,
+         openQuotesCount: openQuotes.length,
+         wonQuotesCount: wonQuotes.length,
+         lostQuotesCount: lostQuotes.length,
+         totalQuoteValue,
+         wonQuoteValue: sumQuotes(wonQuotes),
+         averageQuoteTicket: quotes.length > 0 ? totalQuoteValue / quotes.length : 0,
+         quoteConversionRate: quotes.length > 0 ? (wonQuotes.length / quotes.length) * 100 : 0,
+         salesCategoryData,
+         quoteStatusData,
+         quoteProductData: Array.from(quoteProductMap.values())
+            .sort((a, b) => b.value - a.value)
+            .slice(0, 8)
+      };
+   }, [sales, quotes]);
 
    // --- EXPORT FUNCTION ---
    const handleExport = (type: 'csv' | 'xls') => {
@@ -339,7 +624,9 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
          ...sales.map(s => [
             new Date(s.registeredAt).toLocaleDateString(),
             'VENDA',
-            operators.find(u => u.id === s.operatorId)?.name || 'N/A',
+            s.externalSalesperson
+               ? findCanonicalPersonName(s.externalSalesperson, salespersonNameOptions)
+               : operators.find(u => u.id === s.operatorId)?.name || 'N/A',
             s.clientName,
             s.status,
             s.value,
@@ -390,6 +677,13 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
 
       const isCall = selectedInteraction._type === 'call';
       const isWhatsApp = selectedInteraction.type === CallType.WHATSAPP || selectedInteraction._type === 'whatsapp';
+      const resolvedResponses = collectInteractionResponses(
+         selectedInteraction.responses || {},
+         questions,
+         selectedInteraction.type,
+         selectedInteraction.proposito
+      );
+      const writtenReport = selectedInteraction.responses?.written_report || selectedInteraction.responses?.questionnaire_text_summary;
       const client = clients.find(c => c.id === selectedInteraction.clientId) || prospects.find(p => p.id === selectedInteraction.clientId);
       const op = operators.find(o => o.id === (isCall ? selectedInteraction.operatorId : selectedInteraction.assignedTo));
       const date = new Date(selectedInteraction.date);
@@ -484,27 +778,28 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                         {isCall ? 'Questionário & Respostas' : 'Histórico da Mensagem'}
                      </h4>
 
-                     {isCall ? (
-                        <div className="grid grid-cols-1 gap-4">
-                           {Object.entries(selectedInteraction.responses || {}).map(([key, val]: any) => {
-                              // Find question text
-                              const question = questions.find(q => q.id === key);
-                              const label = question ? question.text : key;
+                     <div className="space-y-4">
+                        {writtenReport && (
+                           <div className="p-5 rounded-2xl bg-slate-50 border border-slate-100">
+                              <p className="text-xs font-bold text-slate-500 uppercase mb-2 leading-relaxed">Resumo do Atendimento</p>
+                              <p className="text-base font-medium text-slate-800 whitespace-pre-wrap">{writtenReport}</p>
+                           </div>
+                        )}
 
-                              return (
-                                 <div key={key} className="p-5 rounded-2xl bg-white border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
-                                    <p className="text-xs font-bold text-slate-500 uppercase mb-2 leading-relaxed">{label}</p>
-                                    <p className="text-base font-medium text-slate-800 bg-slate-50 p-3 rounded-xl border border-slate-100">{String(val)}</p>
-                                 </div>
-                              );
-                           })}
-                           {Object.keys(selectedInteraction.responses || {}).length === 0 && (
+                        <div className="grid grid-cols-1 gap-4">
+                           {resolvedResponses.map(({ key, label, value }) => (
+                              <div key={key} className="p-5 rounded-2xl bg-white border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+                                 <p className="text-xs font-bold text-slate-500 uppercase mb-2 leading-relaxed">{label}</p>
+                                 <p className="text-base font-medium text-slate-800 bg-slate-50 p-3 rounded-xl border border-slate-100">{value}</p>
+                              </div>
+                           ))}
+                           {resolvedResponses.length === 0 && !writtenReport && (
                               <div className="text-center p-8 bg-slate-50 rounded-3xl border border-slate-100 border-dashed">
-                                 <p className="text-sm text-slate-400 font-bold italic">Nenhuma resposta registrada para esta chamada.</p>
+                                 <p className="text-sm text-slate-400 font-bold italic">Nenhuma resposta estruturada registrada para esta interacao.</p>
                               </div>
                            )}
                         </div>
-                     ) : (
+                        {!isCall && (
                         <div className="bg-slate-50 p-6 rounded-3xl border border-slate-100 space-y-4">
                            <div className="flex justify-between items-center border-b border-slate-200 pb-4">
                               <span className="text-sm font-bold text-slate-500">Status da Mensagem</span>
@@ -518,18 +813,19 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                                  <span className="text-sm font-black uppercase">{selectedInteraction.skipReason}</span>
                               </div>
                            )}
-                           {selectedInteraction.whatsappNote && (
+                           {(selectedInteraction.skipNote || selectedInteraction.whatsappNote) && (
                               <div className="pt-2">
                                  <span className="text-xs font-black uppercase text-slate-400 tracking-widest">Observação</span>
-                                 <p className="mt-2 text-sm text-slate-700 bg-white p-3 rounded-xl border border-slate-200">{selectedInteraction.whatsappNote}</p>
+                                 <p className="mt-2 text-sm text-slate-700 bg-white p-3 rounded-xl border border-slate-200">{selectedInteraction.skipNote || selectedInteraction.whatsappNote}</p>
                               </div>
                            )}
                         </div>
-                     )}
+                        )}
                   </div>
                </div>
             </div>
          </div>
+      </div>
       );
    };
 
@@ -620,6 +916,29 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
       return (values[half - 1] + values[half]) / 2.0;
    };
 
+   const applyDatePreset = (preset: 'today' | 'yesterday' | 'last7' | 'month' | 'custom') => {
+      setDatePreset(preset);
+      if (preset === 'custom') return;
+
+      const today = new Date();
+      let start = today;
+      let end = today;
+
+      if (preset === 'yesterday') {
+         start = shiftDate(today, -1);
+         end = shiftDate(today, -1);
+      } else if (preset === 'last7') {
+         start = shiftDate(today, -6);
+      } else if (preset === 'month') {
+         start = getMonthStart(today);
+      }
+
+      setDateRange({
+         start: formatLocalDateInput(start),
+         end: formatLocalDateInput(end)
+      });
+   };
+
    return (
       <div className="space-y-8 pb-20 animate-in fade-in duration-500">
          {/* HEADER & FILTERS */}
@@ -627,24 +946,47 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
             <div>
                <h2 className="text-3xl font-black text-slate-900 tracking-tighter uppercase">Painel de Inteligência</h2>
                <p className="text-slate-500 font-bold text-xs mt-1 uppercase tracking-widest">
-                  {new Date(dateRange.start).toLocaleDateString()} ATÉ {new Date(dateRange.end).toLocaleDateString()}
+                  {formatLocalDateLabel(dateRange.start)} ATE {formatLocalDateLabel(dateRange.end)}
                </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-4">
+               <div className="flex flex-wrap items-center gap-2">
+                  {[
+                     { key: 'today', label: 'Hoje' },
+                     { key: 'yesterday', label: 'Ontem' },
+                     { key: 'last7', label: '7 dias' },
+                     { key: 'month', label: 'Este mes' },
+                     { key: 'custom', label: 'Outra data' }
+                  ].map(option => (
+                     <button
+                        key={option.key}
+                        onClick={() => applyDatePreset(option.key as typeof datePreset)}
+                        className={`px-4 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${datePreset === option.key ? 'bg-slate-900 text-white shadow-lg' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                     >
+                        {option.label}
+                     </button>
+                  ))}
+               </div>
                <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-2xl border border-slate-200">
                   <Calendar size={16} className="text-slate-400 ml-2" />
                   <input
                      type="date"
                      value={dateRange.start}
-                     onChange={e => setDateRange({ ...dateRange, start: e.target.value })}
+                     onChange={e => {
+                        setDatePreset('custom');
+                        setDateRange({ ...dateRange, start: e.target.value });
+                     }}
                      className="bg-transparent text-xs font-black uppercase text-slate-700 outline-none w-28"
                   />
                   <span className="text-slate-300 font-black">/</span>
                   <input
                      type="date"
                      value={dateRange.end}
-                     onChange={e => setDateRange({ ...dateRange, end: e.target.value })}
+                     onChange={e => {
+                        setDatePreset('custom');
+                        setDateRange({ ...dateRange, end: e.target.value });
+                     }}
                      className="bg-transparent text-xs font-black uppercase text-slate-700 outline-none w-28"
                   />
                </div>
@@ -658,6 +1000,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
          {/* TABS */}
          <div className="flex overflow-x-auto no-scrollbar gap-2 pb-2">
             {[
+               { id: 'management', label: 'Gerencial & QA', icon: BarChart3 },
                { id: 'overview', label: 'Visão Geral', icon: Target },
                { id: 'communications', label: 'Comunicações', icon: MessageSquare },
                { id: 'sales', label: 'Vendas & Receita', icon: DollarSign },
@@ -679,6 +1022,17 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                </button>
             ))}
          </div>
+
+         {loadWarnings.length > 0 && (
+            <div className="rounded-[32px] border border-amber-200 bg-amber-50 px-6 py-5 text-amber-900">
+               <p className="text-[10px] font-black uppercase tracking-widest mb-2">Carga Parcial</p>
+               <p className="text-sm font-bold">Algumas fontes falharam, mas os blocos saudaveis continuam carregados.</p>
+               <p className="text-xs font-medium mt-2">
+                  {loadWarnings.slice(0, 4).join(' | ')}
+                  {loadWarnings.length > 4 ? ' | ...' : ''}
+               </p>
+            </div>
+         )}
 
          {isLoading ? (
             <div className="h-96 flex flex-col items-center justify-center text-slate-400">
@@ -936,6 +1290,214 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                            </div>
                         </div>
                      </div>
+
+                  </div>
+               )}
+
+               {/* MANAGEMENT TAB */}
+               {activeTab === 'management' && (
+                  <div className="space-y-8">
+                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                        <MetricCard
+                           title="Interacoes com Questionario"
+                           value={managementInsights.totalQuestionnaireInteractions}
+                           icon={ClipboardList}
+                           color="slate"
+                        />
+                        <MetricCard
+                           title="Taxa de Interesse"
+                           value={`${managementInsights.interestRate.toFixed(1)}%`}
+                           subtitle="Interesse alto/medio por oferta ou produto"
+                           icon={TrendingUp}
+                           color="emerald"
+                        />
+                        <MetricCard
+                           title="Taxa de Objecao"
+                           value={`${managementInsights.objectionRate.toFixed(1)}%`}
+                           subtitle="Baseada nos impeditivos reais do questionario"
+                           icon={AlertCircle}
+                           color="rose"
+                        />
+                        <MetricCard
+                           title="Satisfacao Media"
+                           value={`${managementInsights.averageSatisfactionScore.toFixed(1)} / 100`}
+                           subtitle={`${managementInsights.satisfactionRate.toFixed(1)}% das leituras positivas`}
+                           icon={Smile}
+                           color="blue"
+                        />
+                     </div>
+
+                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm lg:col-span-2">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8">Performance por Produto / Oferta</h4>
+                           <div className="h-[320px]">
+                              <ResponsiveContainer width="100%" height="100%">
+                                 <BarChart data={managementInsights.productInsights.slice(0, 8).map(item => ({
+                                    name: item.label,
+                                    Interesse: item.interestRate,
+                                    Objecao: item.objectionRate,
+                                    Satisfacao: item.satisfactionRate
+                                 }))}>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                    <XAxis dataKey="name" tick={{ fontSize: 10, fontWeight: 700 }} axisLine={false} tickLine={false} interval={0} angle={-18} textAnchor="end" height={80} />
+                                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fill: '#94a3b8' }} domain={[0, 100]} />
+                                    <Tooltip />
+                                    <Legend />
+                                    <Bar dataKey="Interesse" fill="#10b981" radius={[6, 6, 0, 0]} />
+                                    <Bar dataKey="Objecao" fill="#ef4444" radius={[6, 6, 0, 0]} />
+                                    <Bar dataKey="Satisfacao" fill="#3b82f6" radius={[6, 6, 0, 0]} />
+                                 </BarChart>
+                              </ResponsiveContainer>
+                           </div>
+                        </div>
+
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-6">Principais Impeditivos</h4>
+                           <div className="space-y-3">
+                              {managementInsights.blockerBreakdown.length > 0 ? managementInsights.blockerBreakdown.map(item => (
+                                 <div key={item.label} className="p-4 rounded-2xl bg-slate-50 border border-slate-100">
+                                    <div className="flex items-center justify-between gap-3">
+                                       <p className="text-xs font-bold text-slate-700 leading-relaxed">{item.label}</p>
+                                       <span className="text-[10px] font-black uppercase px-2 py-1 rounded-full bg-white border border-slate-200 text-slate-700">{item.percentage.toFixed(1)}%</span>
+                                    </div>
+                                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-2">{item.count} ocorrencias</p>
+                                 </div>
+                              )) : (
+                                 <div className="text-center py-10 bg-slate-50 rounded-[32px] border border-dashed border-slate-200 text-slate-400 text-xs font-bold uppercase tracking-widest">
+                                    Sem impeditivos mapeados no periodo
+                                 </div>
+                              )}
+                           </div>
+                        </div>
+                     </div>
+
+                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8">Equipe / Operadores</h4>
+                           <div className="space-y-4">
+                              {managementInsights.operatorInsights.slice(0, 8).map(item => (
+                                 <div key={item.key} className="p-5 rounded-[28px] bg-slate-50 border border-slate-100">
+                                    <div className="flex items-start justify-between gap-4">
+                                       <div>
+                                          <p className="text-sm font-black text-slate-800">{item.label}</p>
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-1">{item.totalInteractions} interacoes</p>
+                                       </div>
+                                       <div className="text-right">
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Interesse {item.interestRate.toFixed(1)}%</p>
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-rose-500">Objecao {item.objectionRate.toFixed(1)}%</p>
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-blue-500">Satisfacao {item.satisfactionRate.toFixed(1)}%</p>
+                                       </div>
+                                    </div>
+                                 </div>
+                              ))}
+                           </div>
+                        </div>
+
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8">Processos / Propositos</h4>
+                           <div className="space-y-4">
+                              {managementInsights.processInsights.slice(0, 8).map(item => (
+                                 <div key={item.key} className="p-5 rounded-[28px] bg-slate-50 border border-slate-100">
+                                    <div className="flex items-start justify-between gap-4">
+                                       <div>
+                                          <p className="text-sm font-black text-slate-800">{item.label}</p>
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-1">{item.totalInteractions} interacoes</p>
+                                       </div>
+                                       <div className="text-right">
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Interesse {item.interestRate.toFixed(1)}%</p>
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-rose-500">Objecao {item.objectionRate.toFixed(1)}%</p>
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-blue-500">Satisfacao {item.satisfactionRate.toFixed(1)}%</p>
+                                       </div>
+                                    </div>
+                                 </div>
+                              ))}
+                           </div>
+                        </div>
+                     </div>
+
+                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8">Satisfacao por Area</h4>
+                           <div className="space-y-5">
+                              {managementInsights.satisfactionAreas.map(area => (
+                                 <div key={area.key}>
+                                    <div className="flex justify-between text-xs font-bold mb-2">
+                                       <span className="text-slate-600 uppercase">{area.label}</span>
+                                       <span className="text-blue-600 font-black">{area.averageScore.toFixed(1)} / 100</span>
+                                    </div>
+                                    <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                                       <div className="h-full bg-blue-500 rounded-full" style={{ width: `${Math.max(0, Math.min(area.averageScore, 100))}%` }} />
+                                    </div>
+                                    <p className="text-[9px] text-right font-bold text-slate-400 mt-1">{area.totalSignals} sinais considerados</p>
+                                 </div>
+                              ))}
+                           </div>
+                        </div>
+
+                        <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8">Top Respostas por Pergunta</h4>
+                           <div className="space-y-5 max-h-[420px] overflow-y-auto pr-2">
+                              {managementInsights.questionBreakdowns.slice(0, 8).map(question => (
+                                 <div key={question.questionId} className="p-5 rounded-[28px] bg-slate-50 border border-slate-100">
+                                    <div className="flex items-start justify-between gap-4 mb-4">
+                                       <div>
+                                          <p className="text-sm font-black text-slate-800 leading-snug">{question.questionText}</p>
+                                          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-1">{question.totalResponses} respostas</p>
+                                       </div>
+                                       <span className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black uppercase text-slate-600">{question.type}</span>
+                                    </div>
+                                    <div className="space-y-3">
+                                       {question.answers.slice(0, 4).map(answer => (
+                                          <div key={`${question.questionId}-${answer.label}`}>
+                                             <div className="flex justify-between text-xs font-bold mb-1 gap-3">
+                                                <span className="text-slate-600">{answer.label}</span>
+                                                <span className="text-slate-900">{answer.percentage.toFixed(1)}%</span>
+                                             </div>
+                                             <div className="h-2 w-full bg-white rounded-full overflow-hidden border border-slate-100">
+                                                <div className="h-full bg-slate-900 rounded-full" style={{ width: `${answer.percentage}%` }} />
+                                             </div>
+                                          </div>
+                                       ))}
+                                    </div>
+                                 </div>
+                              ))}
+                           </div>
+                        </div>
+                     </div>
+
+                     <div className="bg-white p-8 rounded-[48px] border border-slate-100 shadow-sm">
+                        <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-8">Distribuicao Completa por Pergunta</h4>
+                        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                           {managementInsights.questionBreakdowns.map(question => (
+                              <div key={question.questionId} className="p-6 rounded-[32px] bg-slate-50 border border-slate-100">
+                                 <div className="flex items-start justify-between gap-4 mb-4">
+                                    <div>
+                                       <p className="text-sm font-black text-slate-800 leading-snug">{question.questionText}</p>
+                                       <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-1">
+                                          {question.totalResponses} respostas
+                                          {question.purpose ? ` | ${question.purpose}` : ''}
+                                       </p>
+                                    </div>
+                                    <span className="px-2 py-1 rounded-full bg-white border border-slate-200 text-[10px] font-black uppercase text-slate-600">{question.type}</span>
+                                 </div>
+                                 <div className="space-y-3">
+                                    {question.answers.map(answer => (
+                                       <div key={`${question.questionId}-${answer.label}`}>
+                                          <div className="flex justify-between gap-3 text-xs font-bold mb-1">
+                                             <span className="text-slate-600">{answer.label}</span>
+                                             <span className="text-slate-900">{answer.count} | {answer.percentage.toFixed(1)}%</span>
+                                          </div>
+                                          <div className="h-2 w-full bg-white rounded-full overflow-hidden border border-slate-100">
+                                             <div className="h-full bg-blue-500 rounded-full" style={{ width: `${answer.percentage}%` }} />
+                                          </div>
+                                       </div>
+                                    ))}
+                                 </div>
+                              </div>
+                           ))}
+                        </div>
+                     </div>
+
                   </div>
                )}
 
@@ -986,23 +1548,72 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                            </ResponsiveContainer>
                         </div>
                      </div>
+
                   </div>
                )}
 
                {/* SALES TAB */}
                {activeTab === 'sales' && (
                   <div className="space-y-8">
+                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
+                        <MetricCard
+                           title="Qtd. Total de Vendas"
+                           value={salesReportMetrics.totalSalesCount}
+                           icon={Trophy}
+                           color="blue"
+                           subtitle={`${salesReportMetrics.deliveredSalesCount} entregues | ${salesReportMetrics.pendingSalesCount} pendentes | ${salesReportMetrics.canceledSalesCount} canceladas`}
+                        />
+                        <MetricCard
+                           title="Valor Total de Vendas"
+                           value={formatCurrency(salesReportMetrics.totalSalesValue)}
+                           icon={DollarSign}
+                           color="emerald"
+                           subtitle={`Receita entregue: ${formatCurrency(salesReportMetrics.deliveredRevenue)}`}
+                        />
+                        <MetricCard
+                           title="Qtd. Total de Orçamentos"
+                           value={salesReportMetrics.totalQuotesCount}
+                           icon={FileSpreadsheet}
+                           color="amber"
+                           subtitle={`${salesReportMetrics.openQuotesCount} abertos | ${salesReportMetrics.wonQuotesCount} ganhos | ${salesReportMetrics.lostQuotesCount} perdidos`}
+                        />
+                        <MetricCard
+                           title="Valor Total Orçado"
+                           value={formatCurrency(salesReportMetrics.totalQuoteValue)}
+                           icon={ClipboardList}
+                           color="slate"
+                           subtitle={`Conversao: ${salesReportMetrics.quoteConversionRate.toFixed(1)}% | Ticket: ${formatCurrency(salesReportMetrics.averageQuoteTicket)}`}
+                        />
+                     </div>
+
+                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <MetricCard
+                           title="Ticket Médio de Venda"
+                           value={formatCurrency(salesReportMetrics.averageSalesTicket)}
+                           icon={TrendingUp}
+                           color="emerald"
+                        />
+                        <MetricCard
+                           title="Orçamentos Ganhos"
+                           value={formatCurrency(salesReportMetrics.wonQuoteValue)}
+                           icon={Target}
+                           color="blue"
+                           subtitle={`${salesReportMetrics.wonQuotesCount} orçamentos convertidos`}
+                        />
+                        <MetricCard
+                           title="Período Aplicado"
+                           value={`${formatLocalDateLabel(dateRange.start)} - ${formatLocalDateLabel(dateRange.end)}`}
+                           icon={Calendar}
+                           color="slate"
+                           subtitle="Todos os dados desta aba respeitam este intervalo"
+                        />
+                     </div>
+
                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                         <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm">
                            <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-6">Ranking de Vendedores</h4>
                            <div className="space-y-4">
-                              {Object.entries(sales.reduce((acc: any, sale) => {
-                                 const name = sale.externalSalesperson || operators.find(o => o.id === sale.operatorId)?.name || 'N/A';
-                                 if (sale.status === SaleStatus.ENTREGUE) {
-                                    acc[name] = (acc[name] || 0) + (sale.value || 0);
-                                 }
-                                 return acc;
-                              }, {})).sort(([, a]: any, [, b]: any) => b - a).map(([name, val]: any, i) => (
+                              {salesRanking.map(({ name, value: val }, i) => (
                                  <div key={name} className="flex items-center gap-4 p-4 border border-slate-50 rounded-2xl hover:bg-slate-50 transition-colors">
                                     <div className={`w-8 h-8 rounded-full flex items-center justify-center font-black text-xs ${i === 0 ? 'bg-yellow-100 text-yellow-700' : 'bg-slate-100 text-slate-500'}`}>
                                        {i + 1}
@@ -1010,7 +1621,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                                     <div className="flex-1">
                                        <p className="font-black text-slate-800 text-sm">{name}</p>
                                        <div className="h-1.5 w-full bg-slate-100 rounded-full mt-2 overflow-hidden">
-                                          <div className="h-full bg-blue-500 rounded-full" style={{ width: `${(val / metrics.revenue) * 100}%` }} />
+                                          <div className="h-full bg-blue-500 rounded-full" style={{ width: `${salesReportMetrics.totalSalesValue > 0 ? (val / salesReportMetrics.totalSalesValue) * 100 : 0}%` }} />
                                        </div>
                                     </div>
                                     <p className="font-black text-emerald-600 text-sm">
@@ -1027,18 +1638,17 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                               <ResponsiveContainer width="100%" height="100%">
                                  <PieChart>
                                     <Pie
-                                       data={Object.entries(sales.reduce((acc: any, sale) => {
-                                          if (sale.status === SaleStatus.ENTREGUE) {
-                                             acc[sale.category] = (acc[sale.category] || 0) + 1;
-                                          }
-                                          return acc;
-                                       }, {})).map(([name, value]) => ({ name, value }))}
+                                       data={salesReportMetrics.salesCategoryData.map(item => ({
+                                          name: item.name,
+                                          value: item.totalValue,
+                                          count: item.totalCount
+                                       }))}
                                        innerRadius={80}
                                        outerRadius={120}
                                        paddingAngle={2}
                                        dataKey="value"
                                     >
-                                       {Object.keys(sales).map((_, index) => (
+                                       {salesReportMetrics.salesCategoryData.map((_, index) => (
                                           <Cell key={`cell-${index}`} fill={['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'][index % 5]} />
                                        ))}
                                     </Pie>
@@ -1046,6 +1656,69 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                                     <Legend />
                                  </PieChart>
                               </ResponsiveContainer>
+                           </div>
+                        </div>
+                     </div>
+                     <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+                        <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm overflow-hidden">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-6">Resumo por Categoria de Venda</h4>
+                           <div className="overflow-x-auto">
+                              <table className="w-full text-left">
+                                 <thead className="border-b border-slate-100">
+                                    <tr>
+                                       <th className="pb-4 text-[10px] font-black uppercase text-slate-400 tracking-widest">Categoria</th>
+                                       <th className="pb-4 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">Qtd.</th>
+                                       <th className="pb-4 text-[10px] font-black uppercase text-slate-400 tracking-widest text-center">Entregues</th>
+                                       <th className="pb-4 text-[10px] font-black uppercase text-slate-400 tracking-widest text-right">Valor</th>
+                                    </tr>
+                                 </thead>
+                                 <tbody className="divide-y divide-slate-50">
+                                    {salesReportMetrics.salesCategoryData.map(item => (
+                                       <tr key={item.name}>
+                                          <td className="py-4 text-sm font-black text-slate-700">{item.name}</td>
+                                          <td className="py-4 text-center text-xs font-bold text-slate-600">{item.totalCount}</td>
+                                          <td className="py-4 text-center text-xs font-bold text-emerald-600">{item.deliveredCount}</td>
+                                          <td className="py-4 text-right text-sm font-black text-slate-800">{formatCurrency(item.totalValue)}</td>
+                                       </tr>
+                                    ))}
+                                    {salesReportMetrics.salesCategoryData.length === 0 && (
+                                       <tr>
+                                          <td colSpan={4} className="py-8 text-center text-xs font-bold uppercase tracking-widest text-slate-300">Sem vendas no periodo</td>
+                                       </tr>
+                                    )}
+                                 </tbody>
+                              </table>
+                           </div>
+                        </div>
+
+                        <div className="bg-white p-8 rounded-[40px] border border-slate-100 shadow-sm overflow-hidden">
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mb-6">Orcamentos por Status</h4>
+                           <div className="space-y-4">
+                              {salesReportMetrics.quoteStatusData.map(item => (
+                                 <div key={item.name} className="p-4 rounded-2xl border border-slate-100 bg-slate-50 flex items-center justify-between gap-4">
+                                    <div>
+                                       <p className="text-sm font-black text-slate-800">{item.name}</p>
+                                       <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{item.count} orcamentos</p>
+                                    </div>
+                                    <p className="text-sm font-black text-slate-900">{formatCurrency(item.value)}</p>
+                                 </div>
+                              ))}
+                           </div>
+
+                           <h4 className="text-xs font-black text-slate-400 uppercase tracking-widest mt-8 mb-4">Produtos mais orcados</h4>
+                           <div className="space-y-3 max-h-[260px] overflow-y-auto pr-1">
+                              {salesReportMetrics.quoteProductData.map(item => (
+                                 <div key={item.name} className="flex items-center justify-between gap-4 border-b border-slate-50 pb-3">
+                                    <div className="min-w-0">
+                                       <p className="text-sm font-bold text-slate-700 truncate">{item.name}</p>
+                                       <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">{item.count} registros</p>
+                                    </div>
+                                    <p className="text-sm font-black text-emerald-600 shrink-0">{formatCurrency(item.value)}</p>
+                                 </div>
+                              ))}
+                              {salesReportMetrics.quoteProductData.length === 0 && (
+                                 <p className="py-8 text-center text-xs font-bold uppercase tracking-widest text-slate-300">Sem orcamentos no periodo</p>
+                              )}
                            </div>
                         </div>
                      </div>
@@ -1216,12 +1889,13 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                               </tr>
                            </thead>
                             <tbody className="divide-y divide-slate-50">
-                               {getFilteredAuditData().slice(0, 100).map((item: any, i) => {
+                              {getFilteredAuditData().map((item: any, i) => {
                                  const isCall = item._type === 'call';
                                  const isWhatsApp = item.type === CallType.WHATSAPP || item._type === 'whatsapp';
                                  const date = new Date(isCall ? item.startTime : item.createdAt).toLocaleString();
                                  const opName = operators.find(o => o.id === (isCall ? item.operatorId : item.assignedTo))?.name || 'N/A';
                                  const clientName = item.clientName || clients.find(c => c.id === item.clientId)?.name || prospects.find(p => p.id === item.clientId)?.name || 'N/A';
+                                 const interactionTypeLabel = getInteractionTypeLabel(item);
 
                                  return (
                                     <tr
@@ -1232,8 +1906,13 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                                        <td className="py-4 px-6 text-xs font-bold text-slate-600 pl-8">{date}</td>
                                        <td className="py-4 px-6">
                                           <span className={`px-2 py-1 rounded-md text-[9px] font-black uppercase ${!isWhatsApp ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                                             {!isWhatsApp ? 'Ligação' : 'WhatsApp'}
+                                             {interactionTypeLabel}
                                           </span>
+                                          {item.proposito && (
+                                             <p className="mt-2 text-[10px] font-black uppercase tracking-widest text-slate-400">
+                                                {item.proposito}
+                                             </p>
+                                          )}
                                           {item.relatedVisit ? (
                                              <div>
                                                 <p className="font-bold text-slate-800">Detalhes da Visita</p>
@@ -1437,6 +2116,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                   <PostSaleRemarketingReport
                      user={user}
                      operators={operators}
+                     dateRange={dateRange}
                      onOpenProspect={(id: string) => setDrawerProspectId(id)}
                   />
                )}

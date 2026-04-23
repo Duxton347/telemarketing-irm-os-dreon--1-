@@ -9,16 +9,43 @@ import { dataService } from '../services/dataService';
 import { WhatsAppTask, User as AppUser, UserRole } from '../types';
 import { normalizePhone } from '../lib/supabase';
 import { WhatsAppQuestionnaireModal } from '../components/WhatsAppQuestionnaireModal';
+import { getTaskAssignableUsers } from '../utils/taskAssignment';
 
 interface WhatsAppDashboardProps {
     user: AppUser;
 }
 
+const buildLocalDateKey = (value?: string) => {
+    if (!value) return '';
+
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '';
+
+    const year = parsed.getFullYear();
+    const month = String(parsed.getMonth() + 1).padStart(2, '0');
+    const day = String(parsed.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+const matchesDateRange = (value: string | undefined, start: string, end: string) => {
+    if (!start && !end) return true;
+
+    const dateKey = buildLocalDateKey(value);
+    if (!dateKey) return false;
+    if (start && dateKey < start) return false;
+    if (end && dateKey > end) return false;
+    return true;
+};
+
 const WhatsAppDashboard: React.FC<WhatsAppDashboardProps> = ({ user }) => {
     const [tasks, setTasks] = useState<WhatsAppTask[]>([]);
+    const [effectiveOperatorId, setEffectiveOperatorId] = useState<string>(user.id);
+    const [operators, setOperators] = useState<AppUser[]>([]);
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState<'queue' | 'pending' | 'history'>('queue');
     const [searchTerm, setSearchTerm] = useState('');
+    const [questionnaireDateFrom, setQuestionnaireDateFrom] = useState('');
+    const [questionnaireDateTo, setQuestionnaireDateTo] = useState('');
 
     // Modals state
     const [skipModalOpen, setSkipModalOpen] = useState(false);
@@ -29,15 +56,27 @@ const WhatsAppDashboard: React.FC<WhatsAppDashboardProps> = ({ user }) => {
     const [questionnaireModalOpen, setQuestionnaireModalOpen] = useState(false);
     const [taskToComplete, setTaskToComplete] = useState<WhatsAppTask | null>(null);
 
+    useEffect(() => {
+        if (user.role !== UserRole.ADMIN) {
+            setOperators([]);
+            return;
+        }
+
+        dataService.getUsers()
+            .then(users => {
+                setOperators(
+                    getTaskAssignableUsers(users).filter(operator => operator.id !== user.id)
+                );
+            })
+            .catch(error => console.error('Error fetching assignable users:', error));
+    }, [user.id, user.role]);
+
     const fetchTasks = async () => {
         setLoading(true);
         try {
-            // Admin sees all? For now adhering to "Operator View" requirement mainly, 
-            // but Admin might want to see all.
-            // If Admin, pass undefined to get all. If Operator, pass user.id.
-            const operatorFilter = (user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR)
-                ? undefined
-                : user.id;
+            const operatorFilter = user.role === UserRole.ADMIN
+                ? effectiveOperatorId
+                : (user.role === UserRole.SUPERVISOR ? undefined : user.id);
 
             const data = await dataService.getWhatsAppTasks(operatorFilter);
             setTasks(data);
@@ -52,7 +91,7 @@ const WhatsAppDashboard: React.FC<WhatsAppDashboardProps> = ({ user }) => {
         fetchTasks();
         const interval = setInterval(fetchTasks, 30000); // Poll every 30s
         return () => clearInterval(interval);
-    }, [user.id]);
+    }, [effectiveOperatorId, user.id, user.role]);
 
     const handleStart = async (task: WhatsAppTask) => {
         if (!confirm('Iniciar atendimento via WhatsApp? O cliente irá para a aba "Pendentes de Questionário".')) return;
@@ -112,9 +151,12 @@ const WhatsAppDashboard: React.FC<WhatsAppDashboardProps> = ({ user }) => {
     const filteredTasks = tasks.filter(t => {
         const matchesSearch = (t.clientName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
             t.clientPhone?.includes(searchTerm));
+        const questionnaireContactDate = t.startedAt || t.createdAt;
+        const matchesQuestionnaireDate = activeTab !== 'pending'
+            || matchesDateRange(questionnaireContactDate, questionnaireDateFrom, questionnaireDateTo);
 
         if (activeTab === 'queue') return t.status === 'pending' && matchesSearch;
-        if (activeTab === 'pending') return t.status === 'started' && matchesSearch;
+        if (activeTab === 'pending') return t.status === 'started' && matchesSearch && matchesQuestionnaireDate;
         if (activeTab === 'history') return (t.status === 'completed' || t.status === 'skipped') && matchesSearch;
         return false;
     });
@@ -137,6 +179,27 @@ const WhatsAppDashboard: React.FC<WhatsAppDashboardProps> = ({ user }) => {
                     <p className="text-slate-500 font-medium">Gerencie suas comunicações digitais</p>
                 </div>
             </header>
+
+            {user.role === UserRole.ADMIN && (
+                <div className="mb-8 bg-white rounded-[28px] border border-slate-100 shadow-sm p-5 flex items-center gap-4">
+                    <div className="p-3 bg-blue-100 text-blue-600 rounded-2xl">
+                        <User size={22} />
+                    </div>
+                    <div className="flex-1">
+                        <p className="text-[10px] uppercase tracking-widest font-black text-slate-400 mb-1">Visualizar Atendimento por Usuário</p>
+                        <select
+                            value={effectiveOperatorId}
+                            onChange={e => setEffectiveOperatorId(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm font-bold text-slate-700 outline-none hover:bg-slate-100 transition-colors cursor-pointer"
+                        >
+                            <option value={user.id}>Eu mesmo (Admin)</option>
+                            {operators.map(operator => (
+                                <option key={operator.id} value={operator.id}>{operator.name} (@{operator.username})</option>
+                            ))}
+                        </select>
+                    </div>
+                </div>
+            )}
 
             {/* Tabs */}
             <div className="flex items-center gap-2 mb-8 border-b border-slate-200">
@@ -170,7 +233,7 @@ const WhatsAppDashboard: React.FC<WhatsAppDashboardProps> = ({ user }) => {
                 ) : (
                     <div>
                         {/* Toolbar */}
-                        <div className="p-6 border-b border-slate-100 flex items-center gap-4">
+                        <div className="p-6 border-b border-slate-100 flex flex-col xl:flex-row xl:items-center gap-4">
                             <div className="relative flex-1 max-w-md">
                                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                                 <input
@@ -181,6 +244,47 @@ const WhatsAppDashboard: React.FC<WhatsAppDashboardProps> = ({ user }) => {
                                     onChange={e => setSearchTerm(e.target.value)}
                                 />
                             </div>
+
+                            {activeTab === 'pending' && (
+                                <div className="flex flex-col sm:flex-row gap-3 w-full xl:w-auto">
+                                    <div className="flex items-center gap-2 px-4 py-3 bg-amber-50 border border-amber-100 rounded-xl">
+                                        <Calendar size={16} className="text-amber-600 shrink-0" />
+                                        <div className="flex flex-col">
+                                            <span className="text-[10px] font-black uppercase tracking-widest text-amber-600">Data do Contato</span>
+                                            <span className="text-[11px] text-amber-800">Filtra os questionarios pela data em que o atendimento foi iniciado.</span>
+                                        </div>
+                                    </div>
+
+                                    <input
+                                        type="date"
+                                        value={questionnaireDateFrom}
+                                        onChange={e => setQuestionnaireDateFrom(e.target.value)}
+                                        className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-amber-500/20"
+                                        aria-label="Data inicial do contato"
+                                    />
+
+                                    <input
+                                        type="date"
+                                        value={questionnaireDateTo}
+                                        onChange={e => setQuestionnaireDateTo(e.target.value)}
+                                        className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-amber-500/20"
+                                        aria-label="Data final do contato"
+                                    />
+
+                                    {(questionnaireDateFrom || questionnaireDateTo) && (
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                setQuestionnaireDateFrom('');
+                                                setQuestionnaireDateTo('');
+                                            }}
+                                            className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl font-bold text-xs uppercase tracking-wider transition-colors"
+                                        >
+                                            Limpar Periodo
+                                        </button>
+                                    )}
+                                </div>
+                            )}
                         </div>
 
                         {/* List */}
@@ -190,6 +294,11 @@ const WhatsAppDashboard: React.FC<WhatsAppDashboardProps> = ({ user }) => {
                             </div>
                         ) : (
                             <div className="divide-y divide-slate-100">
+                                {activeTab === 'pending' && (
+                                    <div className="px-6 py-3 bg-amber-50/70 border-b border-amber-100 text-[11px] font-bold text-amber-800 uppercase tracking-wider">
+                                        Exibindo {filteredTasks.length} questionario(s) pendente(s) para resposta.
+                                    </div>
+                                )}
                                 {filteredTasks.map(task => (
                                     <div key={task.id} className="p-6 hover:bg-slate-50 transition-colors flex items-center justify-between gap-6 group">
                                         <div className="flex-1">

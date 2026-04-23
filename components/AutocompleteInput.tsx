@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { normalizePersonNameKey } from '../utils/personName';
 
 interface AutocompleteInputProps extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'onChange'> {
   value: string;
@@ -22,8 +23,9 @@ export function AutocompleteInput({ value, onChange, options, ...props }: Autoco
     };
   }, []);
 
+  const normalizedValue = normalizePersonNameKey(value);
   const filteredOptions = options.filter(option =>
-    option.label.toLowerCase().includes((value || '').toLowerCase())
+    normalizePersonNameKey(option.label).includes(normalizedValue)
   );
 
   return (

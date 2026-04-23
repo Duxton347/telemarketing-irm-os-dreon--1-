@@ -1,18 +1,30 @@
 import React from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
     MapPin, Plus, Calendar, User, Search, Navigation,
     MoreVertical, CheckCircle2, Clock, X, Save, Loader2,
     Filter, ArrowUp, ArrowDown, FileText, Download, TrendingUp, Users, Trash2, History, ArrowRight, Edit
 } from 'lucide-react';
 import { dataService } from '../services/dataService';
-import { Visit, Client, User as UserType, CallType, SaleStatus, ExternalSalesperson, SaleCategory, SaleChannel } from '../types';
+import { Visit, Client, User as UserType, CallType, SaleStatus, ExternalSalesperson, SaleCategory, SaleChannel, UserRole } from '../types';
 import { exportToExcel, exportToPDF } from '../utils/RouteExport';
 import { normalizePhone } from '../lib/supabase';
 import { CurrencyInput } from '../components/CurrencyInput';
+import { findCanonicalPersonName, normalizePersonNameKey } from '../utils/personName';
 
 const Routes: React.FC<{ user: UserType }> = ({ user }) => {
     // --- STATE ---
-    const [activeTab, setActiveTab] = React.useState<'BUILDER' | 'EXECUTION' | 'HISTORY'>('EXECUTION');
+    const [searchParams, setSearchParams] = useSearchParams();
+    const canBuildRoutes = user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR || user.role === UserRole.OPERATOR;
+    const canManageSalespeople = user.role === UserRole.ADMIN || user.role === UserRole.SUPERVISOR;
+    const requestedTab = searchParams.get('tab') as 'BUILDER' | 'EXECUTION' | 'HISTORY' | null;
+    const focusedVisitId = searchParams.get('visitId');
+    const requestedAction = searchParams.get('action');
+    const [activeTab, setActiveTab] = React.useState<'BUILDER' | 'EXECUTION' | 'HISTORY'>(
+        requestedTab && ['BUILDER', 'EXECUTION', 'HISTORY'].includes(requestedTab)
+            ? requestedTab
+            : (user.role === UserRole.OPERATOR ? 'BUILDER' : 'EXECUTION')
+    );
 
     // Data State
     const [visits, setVisits] = React.useState<Visit[]>([]);
@@ -23,7 +35,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
 
     // Filters
     const [builderFilters, setBuilderFilters] = React.useState({
-        operatorId: '',
+        operatorId: user.role === UserRole.OPERATOR ? user.id : '',
         date: new Date().toISOString().split('T')[0],
         type: 'ALL'
     });
@@ -103,6 +115,26 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
 
     React.useEffect(() => { loadData(); }, [loadData]);
 
+    React.useEffect(() => {
+        if (requestedTab && ['BUILDER', 'EXECUTION', 'HISTORY'].includes(requestedTab)) {
+            setActiveTab(requestedTab);
+        }
+    }, [requestedTab]);
+
+    const syncRouteSearchParams = React.useCallback((updates: Record<string, string | null>) => {
+        const nextParams = new URLSearchParams(searchParams);
+
+        Object.entries(updates).forEach(([key, value]) => {
+            if (value) {
+                nextParams.set(key, value);
+            } else {
+                nextParams.delete(key);
+            }
+        });
+
+        setSearchParams(nextParams, { replace: true });
+    }, [searchParams, setSearchParams]);
+
     // --- BUILDER ACTIONS ---
     const handleSearchCandidates = async () => {
         setIsLoading(true);
@@ -127,6 +159,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
     const confirmCreateRoute = async (externalName: string) => {
         setIsProcessing(true);
         try {
+            const canonicalExternalName = findCanonicalPersonName(externalName, externalSalespeople.map(s => s.name));
             for (let i = 0; i < selectedCandidates.length; i++) {
                 const c = selectedCandidates[i];
                 await dataService.saveVisit({
@@ -139,7 +172,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                     scheduledDate: new Date(`${builderFilters.date}T09:00:00`).toISOString(),
                     status: 'PENDING',
                     orderIndex: visits.length + i,
-                    externalSalesperson: externalName,
+                    externalSalesperson: canonicalExternalName,
                     isIndication: c.type === 'CALL' || c.type === 'MANUAL' || c.type === 'WHATSAPP',
                     originType: c.type,
                     originId: c.id,
@@ -160,13 +193,18 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
     }
 
     // --- MANUAL ADDITION ---
-    const handleSearchManualClient = async () => {
-        if (manualClientSearch.length < 2) return; // Lowered to 2 for better UX
+    const handleSearchManualClient = async (searchValue?: string) => {
+        const term = (searchValue ?? manualClientSearch).trim();
+        if (term.length < 2) {
+            setManualClients([]);
+            return;
+        }
         // Fetch all clients (including LEADS) then filter locally for responsiveness
         const res = await dataService.getClients(true); 
         const filtered = res.filter(c =>
-            c.name.toLowerCase().includes(manualClientSearch.toLowerCase()) ||
-            (c.phone && c.phone.includes(manualClientSearch))
+            c.name.toLowerCase().includes(term.toLowerCase()) ||
+            (c.phone && c.phone.includes(term)) ||
+            (c.phone_secondary && c.phone_secondary.includes(term))
         ).slice(0, 10); // Limit to top 10 matches
         setManualClients(filtered);
     };
@@ -210,7 +248,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
     const handleAddSalesperson = async () => {
         if (!newSalespersonName) return;
         try {
-            await dataService.addExternalSalesperson(newSalespersonName);
+            await dataService.addExternalSalesperson(findCanonicalPersonName(newSalespersonName, externalSalespeople.map(s => s.name)));
             setNewSalespersonName('');
             // Refresh external list
             const updated = await dataService.getExternalSalespeople();
@@ -227,6 +265,9 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
             setExternalSalespeople(updated);
         } catch (e) { alert("Erro ao remover."); }
     }
+
+    const getCanonicalExternalSalespersonName = (name?: string) =>
+        findCanonicalPersonName(name, externalSalespeople.map(s => s.name));
 
     // --- EXECUTION ACTIONS ---
     const moveVisit = async (visitId: string, direction: -1 | 1) => {
@@ -295,6 +336,11 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
 
     // --- FINALIZATION ---
     const openFinalizeModal = (visit: Visit) => {
+        syncRouteSearchParams({
+            tab: 'EXECUTION',
+            visitId: visit.id,
+            action: 'finalize'
+        });
         setActiveVisit(visit);
         setFinalizeData({
             outcome: 'REALIZED',
@@ -315,6 +361,16 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
         setModalType('FINALIZE');
         setIsModalOpen(true);
     };
+
+    React.useEffect(() => {
+        if (!focusedVisitId || visits.length === 0) return;
+        const targetVisit = visits.find(visit => visit.id === focusedVisitId);
+        if (!targetVisit) return;
+
+        if (requestedAction === 'finalize') {
+            openFinalizeModal(targetVisit);
+        }
+    }, [focusedVisitId, requestedAction, visits]);
 
     const handleFinalize = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -356,6 +412,8 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                 });
 
             } else {
+                const canonicalSaleExternal = findCanonicalPersonName(finalizeData.saleExternal, externalSalespeople.map(s => s.name));
+
                 // Mark as Completed
                 await dataService.updateVisit(activeVisit.id, {
                     status: 'COMPLETED',
@@ -374,7 +432,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                         channel: SaleChannel.PROSPECCAO,
                         operatorId: user.id, // Current user is the registrar
                         value: Number(finalizeData.saleValue),
-                        externalSalesperson: finalizeData.saleExternal // New field linked
+                        externalSalesperson: canonicalSaleExternal // New field linked
                     });
                 }
 
@@ -384,7 +442,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                         quote_number: finalizeData.quoteNumber,
                         client_name: finalizeData.newName,
                         client_id: activeVisit.clientId,
-                        salesperson_name: finalizeData.saleExternal || user.name,
+                        salesperson_name: canonicalSaleExternal || user.name,
                         value: Number(finalizeData.quoteValue),
                         win_probability: Number(finalizeData.quoteWinProb),
                         status: 'OPEN',
@@ -396,6 +454,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
 
             setIsModalOpen(false);
             setModalType(null);
+            syncRouteSearchParams({ visitId: null, action: null });
             loadData();
             alert("Visita finalizada com sucesso!");
         } catch (e: any) {
@@ -407,16 +466,20 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
 
     // --- DERIVED STATE ---
     const callsToRender = visits.filter(v => {
+        const visitSalespersonKey = normalizePersonNameKey(v.externalSalesperson);
+        const historySalespersonKey = normalizePersonNameKey(historyFilters.externalSalesperson);
+        const executionSalespersonKey = normalizePersonNameKey(executionFilters.externalSalesperson);
+
         if (activeTab === 'HISTORY') {
             const vDate = new Date(v.scheduledDate).toISOString().split('T')[0];
             return v.status === 'COMPLETED' &&
                 vDate >= historyFilters.startDate &&
                 vDate <= historyFilters.endDate &&
-                (!historyFilters.externalSalesperson || v.externalSalesperson === historyFilters.externalSalesperson);
+                (!historyFilters.externalSalesperson || visitSalespersonKey === historySalespersonKey);
         } else {
             // Execution view
             if (v.status !== 'PENDING') return false;
-            if (executionFilters.externalSalesperson && v.externalSalesperson !== executionFilters.externalSalesperson) return false;
+            if (executionFilters.externalSalesperson && visitSalespersonKey !== executionSalespersonKey) return false;
             return true;
         }
     });
@@ -434,7 +497,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                     >
                         Em Andamento
                     </button>
-                    {(user.role === 'ADMIN' || user.role === 'SUPERVISOR') && (
+                    {canBuildRoutes && (
                         <button
                             onClick={() => setActiveTab('BUILDER')}
                             className={`px-6 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'BUILDER' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-600'}`}
@@ -491,9 +554,16 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                     <div className="lg:col-span-8 space-y-6">
                         {/* Filters Card */}
                         <div className="bg-white p-6 rounded-[32px] border border-slate-100 flex flex-wrap gap-4 items-center">
-                            <select className="p-3 bg-slate-50 rounded-xl font-bold text-sm outline-none" value={builderFilters.operatorId} onChange={e => setBuilderFilters({ ...builderFilters, operatorId: e.target.value })}>
-                                <option value="">Todos Operadores</option>
-                                {operators.map(op => <option key={op.id} value={op.id}>{op.name}</option>)}
+                            <select
+                                className="p-3 bg-slate-50 rounded-xl font-bold text-sm outline-none disabled:opacity-70"
+                                value={builderFilters.operatorId}
+                                onChange={e => setBuilderFilters({ ...builderFilters, operatorId: e.target.value })}
+                                disabled={user.role === UserRole.OPERATOR}
+                            >
+                                {user.role !== UserRole.OPERATOR && <option value="">Todos Operadores</option>}
+                                {operators
+                                    .filter(op => user.role !== UserRole.OPERATOR || op.id === user.id)
+                                    .map(op => <option key={op.id} value={op.id}>{op.name}</option>)}
                             </select>
                             <input type="date" className="p-3 bg-slate-50 rounded-xl font-bold text-sm outline-none" value={builderFilters.date} onChange={e => setBuilderFilters({ ...builderFilters, date: e.target.value })} />
                             <select className="p-3 bg-slate-50 rounded-xl font-bold text-sm outline-none" value={builderFilters.type} onChange={e => setBuilderFilters({ ...builderFilters, type: e.target.value })}>
@@ -506,7 +576,9 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                             <div className="h-8 w-px bg-slate-200 mx-2"></div>
 
                             <button onClick={() => { setModalType('MANUAL_ADD'); setIsModalOpen(true); }} className="flex items-center gap-2 px-4 py-3 bg-slate-900 text-white rounded-xl font-black uppercase text-xs tracking-wider hover:bg-slate-800 transition-colors"><Plus size={16} /> Manual</button>
-                            <button onClick={() => { setModalType('MANAGE_SALESPEOPLE'); setIsModalOpen(true); }} className="flex items-center gap-2 px-4 py-3 bg-slate-100 text-slate-600 rounded-xl font-black uppercase text-xs tracking-wider hover:bg-slate-200 transition-colors"><Users size={16} /> Vendedores</button>
+                            {canManageSalespeople && (
+                                <button onClick={() => { setModalType('MANAGE_SALESPEOPLE'); setIsModalOpen(true); }} className="flex items-center gap-2 px-4 py-3 bg-slate-100 text-slate-600 rounded-xl font-black uppercase text-xs tracking-wider hover:bg-slate-200 transition-colors"><Users size={16} /> Vendedores</button>
+                            )}
                         </div>
 
                         {/* Candidates List */}
@@ -636,7 +708,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                                     )}
                                 </div>
                                 <div className="text-[10px] uppercase text-slate-400 font-bold border-t border-slate-100 pt-3 mt-2 flex justify-between">
-                                    <span>Vendedor: {visit.externalSalesperson || 'N/A'}</span>
+                                    <span>Vendedor: {getCanonicalExternalSalespersonName(visit.externalSalesperson) || 'N/A'}</span>
                                     <span>#{index + 1}</span>
                                 </div>
                             </div>
@@ -680,7 +752,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                                             <p className="text-xs text-slate-500 truncate max-w-[200px]">{visit.address}</p>
                                         </td>
                                         <td className="p-4">
-                                            <p className="font-bold text-sm text-slate-700">{visit.externalSalesperson || 'N/A'}</p>
+                                            <p className="font-bold text-sm text-slate-700">{getCanonicalExternalSalespersonName(visit.externalSalesperson) || 'N/A'}</p>
                                             <p className="text-[10px] text-slate-400 uppercase">Interno: {visit.salespersonName}</p>
                                         </td>
                                         <td className="p-4">
@@ -793,14 +865,18 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                             <h3 className="text-xl font-black uppercase mb-6 text-slate-800 flex items-center gap-2"><Plus size={24} className="text-blue-600" /> Adicionar Manualmente</h3>
                             <div className="space-y-4">
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Buscar ou Digitar Cliente</label>
+                                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Buscar ou Digitar Cliente/Lead</label>
                                     <div className="relative">
                                         <Search className="absolute left-4 top-3.5 text-slate-400" size={18} />
                                         <input
                                             type="text"
-                                            placeholder="Digite para buscar..."
+                                            placeholder="Digite nome, telefone ou lead..."
                                             value={manualClientSearch}
-                                            onChange={e => { setManualClientSearch(e.target.value); handleSearchManualClient(); }}
+                                            onChange={e => {
+                                                const value = e.target.value;
+                                                setManualClientSearch(value);
+                                                handleSearchManualClient(value);
+                                            }}
                                             className="w-full p-3 pl-11 bg-slate-50 border border-slate-200 rounded-xl font-bold text-sm outline-none focus:ring-2 focus:ring-blue-500"
                                         />
                                         {manualClients.length > 0 && (
@@ -895,7 +971,7 @@ const Routes: React.FC<{ user: UserType }> = ({ user }) => {
                         <div className="bg-white w-full max-w-lg rounded-[48px] shadow-2xl p-8 max-h-[90vh] overflow-y-auto animate-in zoom-in-50 duration-200 custom-scrollbar">
                             <div className="flex justify-between items-center mb-6">
                                 <h3 className="text-xl font-black uppercase text-slate-800">Finalizar Visita</h3>
-                                <button onClick={() => setIsModalOpen(false)} className="p-2 bg-slate-100 rounded-full text-slate-400 hover:bg-slate-200"><X size={20} /></button>
+                                <button onClick={() => { setIsModalOpen(false); syncRouteSearchParams({ visitId: null, action: null }); }} className="p-2 bg-slate-100 rounded-full text-slate-400 hover:bg-slate-200"><X size={20} /></button>
                             </div>
 
                             <form onSubmit={handleFinalize} className="space-y-6">

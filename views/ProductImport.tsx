@@ -66,7 +66,7 @@ export const ProductImport: React.FC = () => {
 
           // 3. Process rows and find matches in DB
           // Fetch all clients to match locally for speed (assuming base is not millions, else we'd batch query)
-          const { data: allClients } = await supabase.from('clients').select('id, name');
+          const { data: allClients } = await supabase.from('clients').select('id, name').neq('invalid', true);
           const clientMap = new Map<string, string>();
           
           if (allClients) {

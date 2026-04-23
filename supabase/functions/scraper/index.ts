@@ -7,6 +7,10 @@ const corsHeaders = {
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+const GOOGLE_NEARBY_MAX_RADIUS_METERS = 50000;
+const GOOGLE_NEARBY_MIN_RADIUS_METERS = 100;
+const GRID_RADIUS_OVERLAP_FACTOR = 1.1;
+
 serve(async (req) => {
     if (req.method === 'OPTIONS') {
         return new Response('ok', { headers: corsHeaders })
@@ -72,6 +76,47 @@ serve(async (req) => {
             });
         }
 
+        if (action === 'places-nearby') {
+            const { lat, lng, radius, keyword, nextPageToken } = payload;
+            const params = new URLSearchParams({
+                location: `${lat},${lng}`,
+                radius: String(radius),
+                keyword: String(keyword),
+                key: GOOGLE_MAPS_KEY
+            });
+
+            if (nextPageToken) {
+                params.set('pagetoken', String(nextPageToken));
+            }
+
+            const url = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?${params.toString()}`;
+            const res = await fetch(url);
+            const data = await res.json();
+
+            return new Response(JSON.stringify(data), {
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+                status: res.ok ? 200 : 502
+            });
+        }
+
+        if (action === 'place-details') {
+            const { placeId } = payload;
+            const params = new URLSearchParams({
+                place_id: String(placeId),
+                fields: 'name,formatted_address,formatted_phone_number,website,business_status',
+                key: GOOGLE_MAPS_KEY
+            });
+
+            const url = `https://maps.googleapis.com/maps/api/place/details/json?${params.toString()}`;
+            const res = await fetch(url);
+            const data = await res.json();
+
+            return new Response(JSON.stringify(data), {
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+                status: res.ok ? 200 : 502
+            });
+        }
+
         // --- 2. EXECUTE RUN ---
         if (action === 'run') {
             const { processId, userId } = payload;
@@ -101,12 +146,14 @@ serve(async (req) => {
 
             // 3. GENERATE GRID
             const gridSize = process.grid_size || 1;
+            const searchRadiusMeters = getSearchRadiusMetersForGrid(process.radius_km, gridSize);
             const points = generateGridPoints(process.resolved_lat, process.resolved_lng, process.radius_km, gridSize);
 
             // 4. SCRAPE LOOP
             let totalFound = 0;
             let totalNew = 0;
             let errors = [];
+            const seenPlaceIds = new Set<string>();
 
             for (const point of points) {
                 try {
@@ -115,7 +162,7 @@ serve(async (req) => {
                     let pages = 0;
 
                     do {
-                        const searchUrl = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${point.lat},${point.lng}&radius=${process.radius_km * 1000}&keyword=${encodeURIComponent(process.keyword)}&key=${GOOGLE_MAPS_KEY}${nextPageToken ? `&pagetoken=${nextPageToken}` : ''}`;
+                        const searchUrl = `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${point.lat},${point.lng}&radius=${searchRadiusMeters}&keyword=${encodeURIComponent(process.keyword)}&key=${GOOGLE_MAPS_KEY}${nextPageToken ? `&pagetoken=${nextPageToken}` : ''}`;
                         const searchRes = await fetch(searchUrl);
                         const searchData = await searchRes.json();
 
@@ -123,9 +170,19 @@ serve(async (req) => {
                             throw new Error(`Maps API Error: ${searchData.status}`);
                         }
 
-                        const places = searchData.results || [];
+                        const places = (searchData.results || []).filter((place: any) => {
+                            const placeId = place?.place_id;
+                            if (!placeId || seenPlaceIds.has(placeId)) {
+                                return false;
+                            }
+
+                            seenPlaceIds.add(placeId);
+                            return true;
+                        });
 
                         for (const place of places) {
+                            totalFound++;
+
                             // Check deduplication (place_id)
                             const { count } = await supabase
                                 .from('scraper_results')
@@ -162,7 +219,6 @@ serve(async (req) => {
                                 });
                                 totalNew++;
                             }
-                            totalFound++;
                         }
 
                         nextPageToken = searchData.next_page_token;
@@ -224,19 +280,31 @@ function kmToDegLng(km: number, latDeg: number): number {
     return km / (111.0 * Math.cos(latRad));
 }
 
+function clampSearchRadiusMeters(radiusMeters: number): number {
+    return Math.max(
+        GOOGLE_NEARBY_MIN_RADIUS_METERS,
+        Math.min(GOOGLE_NEARBY_MAX_RADIUS_METERS, Math.round(radiusMeters))
+    );
+}
+
+function getSearchRadiusMetersForGrid(radiusKm: number, gridSize: number): number {
+    if (gridSize <= 1) return clampSearchRadiusMeters(radiusKm * 1000);
+
+    const cellSizeKm = (radiusKm * 2) / gridSize;
+    const cellCoverRadiusKm = (Math.sqrt(2) * cellSizeKm) / 2;
+    return clampSearchRadiusMeters(Math.min(radiusKm, cellCoverRadiusKm * GRID_RADIUS_OVERLAP_FACTOR) * 1000);
+}
+
 function generateGridPoints(centerLat: number, centerLng: number, radiusKm: number, gridSize: number): { lat: number, lng: number }[] {
     if (gridSize <= 1) return [{ lat: centerLat, lng: centerLng }];
 
-    // In Python script: step_km = (2 * radius) / (grid_size - 1) is used if we treat radius as "half_span"
-    // The Python script uses: half_span_km = radius_km
-    const halfSpanKm = radiusKm;
-    const stepKm = (2 * halfSpanKm) / (gridSize - 1);
+    const cellSizeKm = (2 * radiusKm) / gridSize;
     const points = [];
 
     for (let i = 0; i < gridSize; i++) {
         for (let j = 0; j < gridSize; j++) {
-            const offsetLatKm = -halfSpanKm + i * stepKm;
-            const offsetLngKm = -halfSpanKm + j * stepKm;
+            const offsetLatKm = -radiusKm + (i + 0.5) * cellSizeKm;
+            const offsetLngKm = -radiusKm + (j + 0.5) * cellSizeKm;
             const dlat = kmToDegLat(offsetLatKm);
             const dlng = kmToDegLng(offsetLngKm, centerLat);
             points.push({ lat: centerLat + dlat, lng: centerLng + dlng });

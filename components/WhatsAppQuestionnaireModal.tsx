@@ -1,9 +1,9 @@
-
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { X, Save, MessageSquare, Loader2 } from 'lucide-react';
 import { QuestionnaireForm } from './QuestionnaireForm';
 import { dataService } from '../services/dataService';
-import { WhatsAppTask, Question } from '../types';
+import { WhatsAppTask, Question, Client } from '../types';
+import { buildQuestionnaireTextSummary, enrichQuestionnaireResponses } from '../utils/questionnaireInsights';
 
 interface WhatsAppQuestionnaireModalProps {
     task: WhatsAppTask;
@@ -11,38 +11,83 @@ interface WhatsAppQuestionnaireModalProps {
     onComplete: (responses: any) => void;
 }
 
+const hasMeaningfulValue = (value: unknown) => {
+    if (value === null || value === undefined) return false;
+    if (typeof value === 'string') return value.trim().length > 0;
+    if (Array.isArray(value)) return value.length > 0;
+    return true;
+};
+
 export const WhatsAppQuestionnaireModal: React.FC<WhatsAppQuestionnaireModalProps> = ({ task, onClose, onComplete }) => {
     const [questions, setQuestions] = useState<Question[]>([]);
     const [responses, setResponses] = useState<Record<string, any>>({});
+    const [clientContext, setClientContext] = useState<Client | null>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
 
     useEffect(() => {
         const loadData = async () => {
             try {
-                const allQuestions = await dataService.getQuestions();
-                setQuestions(allQuestions);
+                const loadedClient = await dataService.getClientById(task.clientId).catch(() => null);
+                setClientContext(loadedClient);
+                const loadedQuestions = await dataService.getQuestions(
+                    task.type,
+                    task.proposito || undefined,
+                    { clientContext: loadedClient || undefined }
+                );
+                setQuestions(loadedQuestions);
+                setResponses(task.responses || {});
             } catch (error) {
-                console.error("Error loading questions:", error);
+                console.error('Error loading questions:', error);
             } finally {
                 setLoading(false);
             }
         };
+
         loadData();
-    }, []);
+    }, [task.id, task.proposito, task.responses, task.type]);
 
     const handleSave = async () => {
-        if (!responses['written_report'] || !responses['written_report'].trim()) {
-            alert("O Relatório Escrito do Operador é obrigatório.");
+        const normalizedBaseResponses = enrichQuestionnaireResponses(
+            {
+                ...responses,
+                call_type: task.type,
+                call_purpose: task.proposito
+            },
+            questions,
+            task.type,
+            task.proposito,
+            { clientContext: clientContext || undefined, responses }
+        );
+
+        const questionnaireTextSummary = buildQuestionnaireTextSummary(
+            normalizedBaseResponses,
+            questions,
+            task.type,
+            task.proposito
+        );
+
+        const hasQuestionnaireAnswers = questions.some(question => {
+            const key = question.campo_resposta || question.id;
+            return hasMeaningfulValue(normalizedBaseResponses[key]);
+        });
+
+        const manualReport = String(responses.written_report || '').trim();
+        if (!hasQuestionnaireAnswers && !manualReport) {
+            alert('Preencha ao menos uma resposta do questionario ou informe um resumo do atendimento.');
             return;
         }
 
-        if (!confirm("Confirmar finalização do atendimento?")) return;
+        if (!confirm('Confirmar finalizacao do atendimento?')) return;
 
         setSaving(true);
-        // Pass responses back to parent to handle saving (or save here if preferred, but parent has the logic in my previous thought)
-        // Actually, looking at the Dashboard code I planned, the Dashboard handles the saving via dataService.completeWhatsAppTask
-        onComplete(responses);
+
+        const finalWrittenReport = manualReport || questionnaireTextSummary || '';
+        onComplete({
+            ...normalizedBaseResponses,
+            written_report: finalWrittenReport || undefined,
+            questionnaire_text_summary: questionnaireTextSummary || undefined
+        });
     };
 
     return (
@@ -56,6 +101,7 @@ export const WhatsAppQuestionnaireModal: React.FC<WhatsAppQuestionnaireModalProp
                         <div>
                             <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Finalizando Atendimento</p>
                             <h3 className="text-xl font-black uppercase tracking-tighter">{task.clientName}</h3>
+                            <p className="text-xs font-bold text-slate-400 mt-1">{task.type}{task.proposito ? ` | ${task.proposito}` : ''}</p>
                         </div>
                     </div>
                     <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
@@ -68,22 +114,30 @@ export const WhatsAppQuestionnaireModal: React.FC<WhatsAppQuestionnaireModalProp
                         <div className="flex justify-center p-10"><Loader2 className="animate-spin text-slate-400" /></div>
                     ) : (
                         <div className="space-y-8">
+                            <div className="rounded-[24px] border border-blue-100 bg-blue-50 px-5 py-4">
+                                <p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Preenchimento assinado pelo operador</p>
+                                <p className="text-sm font-bold text-blue-900 mt-2">
+                                    Registre as respostas recebidas pelo cliente no WhatsApp. Se nao houver texto livre, o sistema monta um resumo automatico com base nas respostas.
+                                </p>
+                            </div>
+
                             <QuestionnaireForm
-                                questions={questions}
-                                responses={responses}
-                                onResponseChange={(qId, val) => setResponses(prev => ({ ...prev, [qId]: val }))}
-                                type={task.type}
-                                proposito={(task as any).proposito}
-                            />
+            questions={questions}
+            responses={responses}
+            onResponseChange={(qId, val) => setResponses(prev => ({ ...prev, [qId]: val }))}
+            type={task.type}
+            proposito={task.proposito}
+            clientContext={clientContext || undefined}
+        />
 
                             <div className="space-y-4 pt-6 border-t border-slate-200">
                                 <label className="text-xs font-black text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                                    <MessageSquare size={14} /> Relatório Escrito do Operador <span className="text-red-500">*</span>
+                                    <MessageSquare size={14} /> Resumo do Operador
                                 </label>
                                 <textarea
-                                    value={responses['written_report'] || ''}
+                                    value={responses.written_report || ''}
                                     onChange={e => setResponses(prev => ({ ...prev, written_report: e.target.value }))}
-                                    placeholder="Descreva os detalhes do atendimento..."
+                                    placeholder="Opcional: descreva contexto, prazo prometido ou observacoes complementares."
                                     className="w-full p-4 bg-white border border-slate-200 rounded-2xl outline-none focus:ring-4 focus:ring-green-500/10 transition-all font-medium text-slate-700 min-h-[120px] resize-none"
                                 />
                             </div>
