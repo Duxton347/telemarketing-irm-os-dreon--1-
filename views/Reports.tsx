@@ -141,6 +141,51 @@ const shiftDate = (base: Date, amount: number) => {
 
 const getMonthStart = (base = new Date()) => new Date(base.getFullYear(), base.getMonth(), 1);
 
+const isWhatsAppReportNote = (note?: string) => normalizeReportText(note).includes('whatsapp');
+
+const isInvalidPhoneReportNote = (note?: string) => normalizeReportText(note).includes('invalido');
+
+const getWhatsAppReportTimestamp = (
+   task: Pick<WhatsAppTask, 'completedAt' | 'startedAt' | 'updatedAt' | 'createdAt'>
+) => task.completedAt || task.startedAt || task.updatedAt || task.createdAt;
+
+const buildCommunicationSnapshot = (
+   calls: CallRecord[],
+   whatsappTasks: WhatsAppTask[],
+   events: OperatorEvent[]
+) => {
+   const voiceCompletedCalls = calls.filter(call => call.type !== CallType.WHATSAPP);
+   const legacyWhatsAppCalls = calls.filter(call => call.type === CallType.WHATSAPP);
+   const voiceSkipEvents = events.filter(event =>
+      event.eventType === OperatorEventType.PULAR_ATENDIMENTO && !isWhatsAppReportNote(event.note)
+   );
+   const voiceInvalidSkips = voiceSkipEvents.filter(event => isInvalidPhoneReportNote(event.note));
+   const voiceDirectSkips = voiceSkipEvents.filter(event => !isInvalidPhoneReportNote(event.note));
+   const completedWhatsAppTasks = whatsappTasks.filter(task => task.status === 'completed');
+   const skippedWhatsAppTasks = whatsappTasks.filter(task => task.status === 'skipped' && task.skipReason !== 'moved_to_voice');
+   const linkedLegacyWhatsAppTaskIds = new Set(
+      legacyWhatsAppCalls
+         .map(call => call.taskId)
+         .filter((taskId): taskId is string => Boolean(taskId))
+   );
+   const uniqueCompletedWhatsAppTasks = completedWhatsAppTasks.filter(task =>
+      !linkedLegacyWhatsAppTaskIds.has(task.id) && !(task.sourceId && linkedLegacyWhatsAppTaskIds.has(task.sourceId))
+   );
+
+   return {
+      voiceCompletedCalls,
+      legacyWhatsAppCalls,
+      voiceSkipEvents,
+      voiceInvalidSkips,
+      voiceDirectSkips,
+      voiceAttemptCount: voiceCompletedCalls.length + voiceSkipEvents.length,
+      uniqueCompletedWhatsAppTasks,
+      completedWhatsAppCount: legacyWhatsAppCalls.length + uniqueCompletedWhatsAppTasks.length,
+      skippedWhatsAppTasks,
+      reportableWhatsAppTasks: [...uniqueCompletedWhatsAppTasks, ...skippedWhatsAppTasks]
+   };
+};
+
 // --- MAIN COMPONENT ---
 
 const Reports: React.FC<{ user: any }> = ({ user }) => {
@@ -149,9 +194,12 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
    const [drawerProspectId, setDrawerProspectId] = React.useState<string | null>(null);
 
    // Custom Date Range
-   const [dateRange, setDateRange] = React.useState({
-      start: '2010-01-01',
-      end: formatLocalDateInput()
+   const [dateRange, setDateRange] = React.useState(() => {
+      const today = formatLocalDateInput();
+      return {
+         start: today,
+         end: today
+      };
    });
    const [datePreset, setDatePreset] = React.useState<'today' | 'yesterday' | 'last7' | 'month' | 'custom'>('today');
 
@@ -264,77 +312,56 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
          const totalRevenue = validSales.reduce((acc, s) => acc + (s.value || 0), 0);
          const totalSalesCount = validSales.length;
 
-         const uniqueContacts = new Set([
-            ...fetchedCalls.map(c => c.clientId),
-            ...fetchedWa.filter(w => w.status === 'completed').map(w => w.clientId)
-         ]).size;
+         const communicationSnapshot = buildCommunicationSnapshot(fetchedCalls, fetchedWa, fetchedEvents);
+         const voiceSkipAuditDetails = communicationSnapshot.voiceSkipEvents.map(evt => {
+            const relatedTask = fetchedTasks.find(task => task.id === evt.taskId);
+            const relatedCall = fetchedCalls.find(call => call.taskId === evt.taskId);
+            const operatorId = evt.operatorId || relatedTask?.assignedTo || relatedCall?.operatorId;
+            const clientId = relatedTask?.clientId || relatedCall?.clientId;
+            const op = fetchedOps.find(userOption => userOption.id === operatorId);
 
-         // Use OperatorEvents for accurate timing of skips today
-         const skippedEvents = fetchedEvents.filter(e => e.eventType === OperatorEventType.PULAR_ATENDIMENTO);
-
-         const completedTaskIds = new Set([
-            ...fetchedCalls.map(c => c.taskId),
-            ...fetchedWa.filter(w => w.status === 'completed').map(w => w.sourceId || w.id) 
-         ]);
-         
-         let pureSkipCount = 0;
-         const skipAuditDetails: any[] = [];
-         const processedSkipTaskIds = new Set<string>();
-
-         skippedEvents.forEach(evt => {
-            if (evt.taskId && !completedTaskIds.has(evt.taskId) && !processedSkipTaskIds.has(evt.taskId)) {
-               processedSkipTaskIds.add(evt.taskId);
-               
-               // Look up task details
-               const task = fetchedTasks.find(t => t.id === evt.taskId);
-               const waTask = fetchedWa.find(w => w.id === evt.taskId || w.sourceId === evt.taskId);
-               
-               if (task || waTask) {
-                   pureSkipCount++;
-                    const assignedTo = task ? task.assignedTo : (waTask as any)?.assignedTo;
-                    const clientId = task ? task.clientId : waTask?.clientId;
-                    const clientName = task ? (task.clientName || task.clients?.name) : waTask?.clientName;
-                    const note = evt.note || (task ? task.skipReason : (waTask as any)?.skipNote) || 'Sem motivo informado';
-                   const op = fetchedOps.find(o => o.id === assignedTo);
-
-                   skipAuditDetails.push({
-                       id: evt.id,
-                       operatorId: assignedTo,
-                       operatorName: op?.name || 'Desconhecido',
-                       clientId: clientId,
-                       clientName: clientName || 'Desconhecido',
-                       timestamp: evt.timestamp,
-                       note: note
-                   });
-               }
-            }
+            return {
+               id: evt.id,
+               operatorId,
+               operatorName: op?.name || 'Desconhecido',
+               clientId,
+               clientName: relatedTask?.clientName || relatedTask?.clients?.name || relatedCall?.clientName || 'Desconhecido',
+               timestamp: evt.timestamp,
+               note: evt.note || relatedTask?.skipReason || 'Sem motivo informado'
+            };
          });
+         const whatsAppSkipAuditDetails = communicationSnapshot.skippedWhatsAppTasks.map(task => {
+            const op = fetchedOps.find(userOption => userOption.id === task.assignedTo);
 
-         // Also count any WhatsApp specific skip events if they weren't caught by PULAR_ATENDIMENTO
-         const waSkipEvents = fetchedEvents.filter(e => e.eventType === OperatorEventType.WHATSAPP_SKIP);
-         waSkipEvents.forEach(evt => {
-             if (evt.taskId && !completedTaskIds.has(evt.taskId) && !processedSkipTaskIds.has(evt.taskId)) {
-                 processedSkipTaskIds.add(evt.taskId);
-                 const waTask = fetchedWa.find(w => w.id === evt.taskId || w.sourceId === evt.taskId);
-                 if (waTask) {
-                     pureSkipCount++;
-                      const op = fetchedOps.find(o => o.id === (waTask as any).assignedTo);
-                      skipAuditDetails.push({
-                          id: evt.id,
-                          operatorId: (waTask as any).assignedTo,
-                          operatorName: op?.name || 'Desconhecido',
-                          clientId: waTask.clientId,
-                          clientName: waTask.clientName || 'Desconhecido',
-                          timestamp: evt.timestamp,
-                          note: evt.note || (waTask as any).skipNote || 'Sem motivo informado'
-                      });
-                 }
-             }
+            return {
+               id: `wa-skip-${task.id}`,
+               operatorId: task.assignedTo,
+               operatorName: op?.name || 'Desconhecido',
+               clientId: task.clientId,
+               clientName: task.clientName || 'Desconhecido',
+               timestamp: getWhatsAppReportTimestamp(task),
+               note: task.skipNote || task.skipReason || 'Sem motivo informado'
+            };
          });
+         const skipAuditDetails = [...voiceSkipAuditDetails, ...whatsAppSkipAuditDetails]
+            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
 
-         setSkipAuditData(skipAuditDetails.sort((a,b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()));
+         setSkipAuditData(skipAuditDetails);
 
-         const totalInteractions = fetchedCalls.length + fetchedWa.filter(w => w.status === 'completed').length + pureSkipCount;
+         const uniqueContacts = new Set(
+            [
+               ...communicationSnapshot.voiceCompletedCalls.map(call => call.clientId),
+               ...voiceSkipAuditDetails.map(item => item.clientId),
+               ...communicationSnapshot.legacyWhatsAppCalls.map(call => call.clientId),
+               ...communicationSnapshot.uniqueCompletedWhatsAppTasks.map(task => task.clientId),
+               ...communicationSnapshot.skippedWhatsAppTasks.map(task => task.clientId)
+            ].filter(Boolean)
+         ).size;
+
+         const totalInteractions =
+            communicationSnapshot.voiceAttemptCount
+            + communicationSnapshot.completedWhatsAppCount
+            + communicationSnapshot.skippedWhatsAppTasks.length;
 
          // --- CALCULATE SATISFACTION METRICS ---
          let promoters = 0;
@@ -449,7 +476,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
             ticketAverage: totalSalesCount > 0 ? totalRevenue / totalSalesCount : 0,
             totalContacts: totalInteractions,
             totalSales: totalSalesCount,
-            pureSkips: pureSkipCount, // Store to display in subtitle
+            pureSkips: skipAuditDetails.length,
             npsScore,
             npsPromoters: promoters,
             npsDetractors: detractors,
@@ -481,6 +508,11 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
          return EMPTY_MANAGEMENT_REPORT_INSIGHTS;
       }
    }, [calls, whatsappTasks, questions, operators]);
+
+   const communicationSnapshot = React.useMemo(
+      () => buildCommunicationSnapshot(calls, whatsappTasks, events),
+      [calls, whatsappTasks, events]
+   );
 
    const salespersonNameOptions = React.useMemo(() => buildPersonNameOptions(
       sales.map(sale => sale.externalSalesperson).filter(Boolean),
@@ -644,10 +676,14 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
    };
 
    // --- FILTERED AUDIT DATA ---
-   const getFilteredAuditData = () => {
+   const filteredAuditData = React.useMemo(() => {
       let data = [
          ...calls.map(c => ({ ...c, _type: 'call', date: c.startTime })),
-         ...whatsappTasks.map(w => ({ ...w, _type: 'whatsapp', date: w.createdAt }))
+         ...communicationSnapshot.reportableWhatsAppTasks.map(w => ({
+            ...w,
+            _type: 'whatsapp',
+            date: getWhatsAppReportTimestamp(w)
+         }))
       ];
 
       if (filterType !== 'all') {
@@ -659,17 +695,17 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
       }
 
       if (searchTerm) {
-         const lower = searchTerm.toLowerCase();
+         const normalizedSearchTerm = normalizeReportText(searchTerm);
          data = data.filter(d => {
             const client = clients.find(c => c.id === d.clientId) || prospects.find(p => p.id === d.clientId);
-            const clientName = client?.name || (d as any).clientName || '';
-            const clientPhone = client?.phone || (d as any).clientPhone || '';
-            return clientName.toLowerCase().includes(lower) || clientPhone.includes(lower);
+            const clientName = normalizeReportText(client?.name || (d as any).clientName || '');
+            const clientPhone = String(client?.phone || (d as any).clientPhone || '');
+            return clientName.includes(normalizedSearchTerm) || clientPhone.includes(searchTerm);
          });
       }
 
       return data.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-   };
+   }, [calls, communicationSnapshot.reportableWhatsAppTasks, filterType, filterOperator, searchTerm, clients, prospects]);
 
    // --- MODAL RENDERER ---
    const renderInteractionDetails = () => {
@@ -1088,7 +1124,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                            title="Contatos Totais"
                            value={metrics.totalContacts}
                            icon={Phone} color="slate"
-                           subtitle={`Inclui ${metrics.pureSkips || 0} pulos diretos (Ver)`}
+                           subtitle={`Inclui ${metrics.pureSkips || 0} sem contato / pulos (Ver)`}
                            onClick={() => setIsSkipAuditModalOpen(true)}
                         />
                      </div>
@@ -1266,8 +1302,8 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                               <PieChart width={200} height={200}>
                                  <Pie
                                     data={[
-                                       { name: 'Ligações', value: calls.filter(c => c.type !== CallType.WHATSAPP).length },
-                                       { name: 'WhatsApp', value: whatsappTasks.filter(w => w.status === 'completed').length + calls.filter(c => c.type === CallType.WHATSAPP).length }
+                                       { name: 'Ligações', value: communicationSnapshot.voiceAttemptCount },
+                                       { name: 'WhatsApp', value: communicationSnapshot.completedWhatsAppCount }
                                     ]}
                                     innerRadius={60}
                                     outerRadius={80}
@@ -1505,18 +1541,23 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                {activeTab === 'communications' && (
                   <div className="space-y-8">
                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <MetricCard title="Total Ligações" value={calls.filter(c => c.type !== CallType.WHATSAPP).length} icon={Phone} color="blue" />
                         <MetricCard
-                           title="WhatsApp Ativos"
-                           value={whatsappTasks.filter(w => w.status === 'completed').length + calls.filter(c => c.type === CallType.WHATSAPP).length}
+                           title="Total Ligações"
+                           value={communicationSnapshot.voiceAttemptCount}
+                           subtitle={`${communicationSnapshot.voiceCompletedCalls.length} concluídas | ${communicationSnapshot.voiceSkipEvents.length} sem contato`}
+                           icon={Phone}
+                           color="blue"
+                        />
+                        <MetricCard
+                           title="WhatsApp Concluídos"
+                           value={communicationSnapshot.completedWhatsAppCount}
+                           subtitle={`${communicationSnapshot.skippedWhatsAppTasks.length} pulados no período`}
                            icon={MessageSquare} color="emerald"
                         />
                         <MetricCard
                            title="Pulos / Sem Contato"
-                           value={
-                              events.filter(e => e.eventType === OperatorEventType.PULAR_ATENDIMENTO).length +
-                              whatsappTasks.filter(w => w.status === 'skipped').length
-                           }
+                           value={skipAuditData.length}
+                           subtitle={`${communicationSnapshot.voiceSkipEvents.length} voz | ${communicationSnapshot.skippedWhatsAppTasks.length} WhatsApp`}
                            icon={PhoneOff} color="rose"
                         />
                      </div>
@@ -1526,18 +1567,18 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                         <div className="h-[400px]">
                            <ResponsiveContainer width="100%" height="100%">
                               <BarChart data={[
-                                 { name: 'Atendido', value: calls.filter(c => c.type !== CallType.WHATSAPP).length, fill: '#3b82f6' },
+                                 { name: 'Atendido', value: communicationSnapshot.voiceCompletedCalls.length, fill: '#3b82f6' },
                                  {
                                     name: 'Sem Resposta (Pulo)',
-                                    value: events.filter(e => e.eventType === OperatorEventType.PULAR_ATENDIMENTO && (!e.note || !e.note.toLowerCase().includes('inválido'))).length,
+                                    value: communicationSnapshot.voiceDirectSkips.length,
                                     fill: '#f59e0b'
                                  },
                                  {
                                     name: 'Número Inválido',
-                                    value: events.filter(e => e.eventType === OperatorEventType.PULAR_ATENDIMENTO && e.note?.toLowerCase().includes('inválido')).length,
+                                    value: communicationSnapshot.voiceInvalidSkips.length,
                                     fill: '#ef4444'
                                  },
-                                 { name: 'WhatsApp Entregue', value: whatsappTasks.filter(w => w.status === 'completed').length + calls.filter(c => c.type === CallType.WHATSAPP).length, fill: '#10b981' },
+                                 { name: 'WhatsApp Concluído', value: communicationSnapshot.completedWhatsAppCount, fill: '#10b981' },
                               ]}>
                                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                                  <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 12, fontWeight: 700, fill: '#64748b' }} />
@@ -1743,21 +1784,17 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                         </thead>
                         <tbody className="divide-y divide-slate-50">
                            {operators.filter(op => op.role !== 'ADMIN').map(op => {
-                                                            const opEvents = events.filter(e => e.operatorId === op.id);
-                              const isWhatsAppEvent = (e: any) => 
-                                 e.eventType === OperatorEventType.WHATSAPP_COMPLETE || 
-                                 e.eventType === OperatorEventType.WHATSAPP_START || 
-                                 e.eventType === OperatorEventType.WHATSAPP_SKIP || 
-                                 ((e.eventType === OperatorEventType.PULAR_ATENDIMENTO || e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO) && e.note?.toLowerCase().includes('whatsapp'));
-
-                              const opCallsCount = opEvents.filter(e => e.eventType === OperatorEventType.FINALIZAR_ATENDIMENTO && !e.note?.toLowerCase().includes('whatsapp')).length;
-                              const opCalls = opCallsCount;
-                                                            const opWaCount = opEvents.filter(isWhatsAppEvent).length;
+                              const opEvents = events.filter(e => e.operatorId === op.id);
+                              const opCompletedVoiceCalls = communicationSnapshot.voiceCompletedCalls.filter(call => call.operatorId === op.id);
+                              const opVoiceSkips = communicationSnapshot.voiceSkipEvents.filter(event => event.operatorId === op.id);
+                              const opCalls = opCompletedVoiceCalls.length + opVoiceSkips.length;
+                              const opWaCount =
+                                 communicationSnapshot.legacyWhatsAppCalls.filter(call => call.operatorId === op.id).length +
+                                 communicationSnapshot.uniqueCompletedWhatsAppTasks.filter(task => task.assignedTo === op.id).length;
                               const opSales = sales.filter(s => s.operatorId === op.id && s.status === SaleStatus.ENTREGUE);
 
-                              const opCallsRecords = calls.filter(c => c.operatorId === op.id && c.type !== CallType.WHATSAPP);
-                              const totalTime = opCallsRecords.reduce((acc, c) => acc + (c.duration || 0), 0);
-                              const tma = opCallsCount > 0 ? totalTime / opCallsCount : 0;
+                              const totalTime = opCompletedVoiceCalls.reduce((acc, c) => acc + (c.duration || 0), 0);
+                              const tma = opCompletedVoiceCalls.length > 0 ? totalTime / opCompletedVoiceCalls.length : 0;
 
                               // Gap Calculation
                                                             const sortedOpEvents = [...opEvents].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
@@ -1806,7 +1843,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                               const longPausesCount = allGaps.filter(g => g.isLong).length;
 
                               // Simple Score: (Calls + WA) + (Sales * 5) - (Gap > 60s penalties)
-                                                            const score = (opCalls + opWaCount) + (opSales.length * 5) - (medianGap > 60 ? (medianGap - 60) * 0.1 : 0);
+                              const score = (opCalls + opWaCount) + (opSales.length * 5) - (medianGap > 60 ? (medianGap - 60) * 0.1 : 0);
 
                               return (
                                  <tr key={op.id} className="group hover:bg-slate-50 transition-colors">
@@ -1871,7 +1908,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                            </select>
                         </div>
                         <div className="text-sm font-black text-slate-400 uppercase tracking-widest">
-                           {getFilteredAuditData().length} Registros
+                           {filteredAuditData.length} Registros
                         </div>
                      </div>
 
@@ -1889,7 +1926,7 @@ const Reports: React.FC<{ user: any }> = ({ user }) => {
                               </tr>
                            </thead>
                             <tbody className="divide-y divide-slate-50">
-                              {getFilteredAuditData().map((item: any, i) => {
+                              {filteredAuditData.map((item: any, i) => {
                                  const isCall = item._type === 'call';
                                  const isWhatsApp = item.type === CallType.WHATSAPP || item._type === 'whatsapp';
                                  const date = new Date(isCall ? item.startTime : item.createdAt).toLocaleString();

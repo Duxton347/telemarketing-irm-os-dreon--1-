@@ -21,6 +21,15 @@ import {
   getCatalogProductsByCategory
 } from '../utils/portfolioCatalog';
 
+const LEAD_FUNNEL_STAGES = [
+  { id: 'NEW', label: 'Novo Lead', className: 'bg-blue-50 text-blue-700 border-blue-200' },
+  { id: 'CONTACT_ATTEMPT', label: 'Tentativa', className: 'bg-amber-50 text-amber-700 border-amber-200' },
+  { id: 'CONTACT_MADE', label: 'Contato Feito', className: 'bg-orange-50 text-orange-700 border-orange-200' },
+  { id: 'QUALIFIED', label: 'Qualificado', className: 'bg-purple-50 text-purple-700 border-purple-200' },
+  { id: 'PROPOSAL_SENT', label: 'Proposta', className: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
+  { id: 'PHYSICAL_VISIT', label: 'Visita Fisica', className: 'bg-pink-50 text-pink-700 border-pink-200' }
+] as const;
+
 export const CampaignPlanner: React.FC = () => {
   const findMatchingListOption = React.useCallback((rawValue: string, options: string[], mode: 'city' | 'neighborhood') => {
     const trimmed = rawValue.trim();
@@ -80,6 +89,7 @@ export const CampaignPlanner: React.FC = () => {
     operadores: [],
     niveisSatisfacao: [],
     statusCliente: ['CLIENT', 'INATIVO', 'LEAD'],
+    funnelStatus: [],
     tags: [],
     interesses: [],
     perfisCliente: [],
@@ -356,6 +366,9 @@ export const CampaignPlanner: React.FC = () => {
   const selectedLeadCount = selectedClients.filter(client => client.status === 'LEAD').length;
   const estimatedQueueEntries = dispatchPreview?.queue_entries_expected ?? (selectedIds.size * (campCanal === 'ambos' ? 2 : 1));
 
+  const getFunnelStatusMeta = (funnelStatus?: string | null) =>
+    LEAD_FUNNEL_STAGES.find(stage => stage.id === (funnelStatus || 'NEW')) || LEAD_FUNNEL_STAGES[0];
+
   useEffect(() => {
     let cancelled = false;
 
@@ -519,6 +532,30 @@ export const CampaignPlanner: React.FC = () => {
                       </button>
                     ))}
                   </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1">
+                    <Filter size={12} /> Status do Lead
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {LEAD_FUNNEL_STAGES.map(stage => (
+                      <button
+                        key={stage.id}
+                        onClick={() => toggleFilterArray('funnelStatus', stage.id)}
+                        className={`px-3 py-1.5 text-[10px] font-bold rounded-lg uppercase tracking-wider transition-all border ${
+                          filters.funnelStatus?.includes(stage.id)
+                            ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                            : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50 hover:border-slate-300'
+                        }`}
+                      >
+                        {stage.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[11px] font-bold text-slate-500">
+                    Aplicado principalmente aos registros com perfil de lead/prospecto.
+                  </p>
                 </div>
 
                 <div className="space-y-2">
@@ -1111,6 +1148,7 @@ export const CampaignPlanner: React.FC = () => {
                   <tbody className="divide-y divide-slate-100">
                     {filteredClients.map(c => {
                       const satisfactionMeta = getSatisfactionMeta(c);
+                      const funnelStatusMeta = getFunnelStatusMeta(c.funnel_status);
 
                       return (
                       <tr key={c.id} className="hover:bg-blue-50/50 transition-colors group cursor-pointer" onClick={(e) => {
@@ -1132,11 +1170,16 @@ export const CampaignPlanner: React.FC = () => {
                           <div className="flex flex-col gap-1">
                             <span className={`w-fit px-2 py-0.5 text-[9px] font-black uppercase rounded bg-slate-100 tracking-wider ${
                               c.status === 'CLIENT' ? 'text-emerald-700 bg-emerald-50' :
-                              c.status === 'INATIVO' ? 'text-rose-700 bg-rose-50' : 
+                              c.status === 'INATIVO' ? 'text-rose-700 bg-rose-50' :
                               'text-blue-700 bg-blue-50'
                             }`}>
                               {c.status === 'CLIENT' ? 'CLIENTE' : c.status === 'INATIVO' ? 'INATIVO' : 'PROSPECTO'}
                             </span>
+                            {c.status === 'LEAD' && (
+                              <span className={`w-fit px-2 py-0.5 text-[9px] font-black uppercase rounded border tracking-wider ${funnelStatusMeta.className}`}>
+                                {funnelStatusMeta.label}
+                              </span>
+                            )}
                             <div className="font-bold text-slate-800 text-sm mt-1">{c.name}</div>
                             <div className="text-xs text-slate-500 font-medium">{c.phone}</div>
                           </div>

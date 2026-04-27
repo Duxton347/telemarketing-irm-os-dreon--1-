@@ -274,14 +274,14 @@ const getLocalDayBounds = (dateLike: string) => {
 const mapScheduleRequestTypeToDb = (rawType?: string) => {
   const CALL_TYPE_DB_MAP: Record<string, string> = {
     'VENDA': 'VENDA',
-    'PÃ“S-VENDA': 'POS_VENDA',
-    'PÃ“S_VENDA': 'POS_VENDA',
+    'PÓS-VENDA': 'POS_VENDA',
+    'PÓS_VENDA': 'POS_VENDA',
     'POS_VENDA': 'POS_VENDA',
-    'PROSPECÃ‡ÃƒO': 'PROSPECCAO',
+    'PROSPECÇÃO': 'PROSPECCAO',
     'PROSPECCAO': 'PROSPECCAO',
-    'CONFIRMAÃ‡ÃƒO PROTOCOLO': 'CONFIRMACAO_PROTOCOLO',
+    'CONFIRMAÇÃO PROTOCOLO': 'CONFIRMACAO_PROTOCOLO',
     'CONFIRMACAO_PROTOCOLO': 'CONFIRMACAO_PROTOCOLO',
-    'REATIVAÃ‡ÃƒO': 'POS_VENDA',
+    'REATIVAÇÃO': 'POS_VENDA',
     'REATIVACAO': 'POS_VENDA',
     'WHATSAPP': 'WHATSAPP'
   };
@@ -3439,8 +3439,8 @@ export const dataService = {
     const { data, error } = await query.order('scheduled_for', { ascending: true });
     if (error) throw error;
 
-    const users = await dataService.getUsers().catch(() => []);
-    const userMap = new Map(users.map(user => [user.id, user.name]));
+    const users: Pick<User, 'id' | 'name'>[] = await dataService.getUsers().catch(() => []);
+    const userMap = new Map<string, string>(users.map(user => [user.id, user.name] as const));
 
     return (data || []).map(s => ({
       id: s.id,
@@ -3459,8 +3459,8 @@ export const dataService = {
       updatedAt: s.updated_at,
       clientName: Array.isArray(s.clients) ? s.clients[0]?.name : s.clients?.name,
       clientPhone: Array.isArray(s.clients) ? s.clients[0]?.phone : s.clients?.phone,
-      requestedByName: userMap.get(s.requested_by_operator_id),
-      assignedOperatorName: userMap.get(s.assigned_operator_id),
+      requestedByName: userMap.get(s.requested_by_operator_id) || undefined,
+      assignedOperatorName: userMap.get(s.assigned_operator_id) || undefined,
 
       // New fields mapping
       skipReason: s.skip_reason,
@@ -3959,7 +3959,7 @@ export const dataService = {
     task: Partial<Task>,
     options?: { skipRecentCommunicationCheck?: boolean; reassignExistingTask?: boolean }
   ): Promise<{ created: boolean; existingTaskId?: string; reassigned?: boolean }> => {
-    if (!task.clientId) throw new Error('Cliente obrigatorio para criar atendimento.');
+    if (!task.clientId) throw new Error('Cliente obrigatório para criar atendimento.');
 
     const dbType = mapTaskTypeToDb(task.type);
     const status = task.status || 'pending';
@@ -4169,6 +4169,32 @@ export const dataService = {
       
       // Try to delete from call_schedules (in case they are scheduled tasks)
       await supabase.from('call_schedules').delete().in('id', chunk);
+    }
+  },
+
+  reassignMultipleTasks: async (taskIds: string[], operatorId: string): Promise<void> => {
+    if (!taskIds || taskIds.length === 0 || !operatorId) return;
+    const chunkSize = 50;
+
+    for (let i = 0; i < taskIds.length; i += chunkSize) {
+      const chunk = taskIds.slice(i, i + chunkSize);
+      const now = new Date().toISOString();
+
+      const taskResult = await runUpdateWithUpdatedAtFallback(
+        'tasks',
+        { assigned_to: operatorId, updated_at: now },
+        async (safePayload) => await supabase.from('tasks').update(safePayload).in('id', chunk),
+        ['updated_at']
+      );
+      if (taskResult?.error) throw taskResult.error;
+
+      const scheduleResult = await runUpdateWithUpdatedAtFallback(
+        'call_schedules',
+        { assigned_operator_id: operatorId, updated_at: now },
+        async (safePayload) => await supabase.from('call_schedules').update(safePayload).in('id', chunk),
+        ['updated_at']
+      );
+      if (scheduleResult?.error) throw scheduleResult.error;
     }
   },
 
@@ -6672,7 +6698,7 @@ export const dataService = {
       if (approvedScheduleError) throw approvedScheduleError;
 
       if (!approvedSchedule) {
-        throw new Error('Tarefa de ligacao nao encontrada.');
+        throw new Error('Tarefa de ligação não encontrada.');
       }
 
       sourceTask = {
@@ -6753,6 +6779,22 @@ export const dataService = {
     for (let i = 0; i < taskIds.length; i += chunkSize) {
       const chunk = taskIds.slice(i, i + chunkSize);
       await supabase.from('whatsapp_tasks').delete().in('id', chunk);
+    }
+  },
+
+  reassignMultipleWhatsAppTasks: async (taskIds: string[], operatorId: string): Promise<void> => {
+    if (!taskIds || taskIds.length === 0 || !operatorId) return;
+    const chunkSize = 50;
+
+    for (let i = 0; i < taskIds.length; i += chunkSize) {
+      const chunk = taskIds.slice(i, i + chunkSize);
+      const result = await runUpdateWithUpdatedAtFallback(
+        'whatsapp_tasks',
+        { assigned_to: operatorId, updated_at: new Date().toISOString() },
+        async (safePayload) => await supabase.from('whatsapp_tasks').update(safePayload).in('id', chunk),
+        ['updated_at']
+      );
+      if (result?.error) throw result.error;
     }
   },
 
@@ -7443,9 +7485,9 @@ export const dataService = {
 
     const notifications: Array<Partial<UserNotification>> = [];
     const creatorId = params.assignedBy;
-    const recipientIds = Array.from(new Set(
+    const recipientIds = Array.from(new Set<string>(
       (createSharedTask ? resolvedAssignedIds : createdTasks.map(task => task.assignedTo).filter(Boolean))
-        .filter(Boolean)
+        .filter((recipientId): recipientId is string => Boolean(recipientId))
     ));
     const createdForOtherUsers = recipientIds.some(recipientId => recipientId !== creatorId);
     const createdForMultipleRecipients = recipientIds.length > 1;

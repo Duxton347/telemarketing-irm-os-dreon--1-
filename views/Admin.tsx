@@ -89,6 +89,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
   const [taskOperatorFilterId, setTaskOperatorFilterId] = React.useState<string>('');
   const [importOperatorId, setImportOperatorId] = React.useState<string>('');
   const [typeEditOperatorId, setTypeEditOperatorId] = React.useState<string>('');
+  const [bulkReassignOperatorId, setBulkReassignOperatorId] = React.useState<string>('');
   const [selectedCallType, setSelectedCallType] = React.useState<CallType>(CallType.POS_VENDA);
   const assignableUsers = React.useMemo(() => getTaskAssignableUsers(users), [users]);
   const visiblePendingTasks = React.useMemo(() => {
@@ -163,6 +164,10 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
 
       if (typeEditOperatorId && !assignableUserList.some(assignableUser => assignableUser.id === typeEditOperatorId)) {
         setTypeEditOperatorId('');
+      }
+
+      if (bulkReassignOperatorId && !assignableUserList.some(assignableUser => assignableUser.id === bulkReassignOperatorId)) {
+        setBulkReassignOperatorId('');
       }
 
       // Load Metrics if on analytics tab (or initial load?)
@@ -295,7 +300,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
       return alert("Nenhuma tarefa valida encontrada na selecao atual.");
     }
 
-    const destinationLabel = taskFilterChannel === 'VOICE' ? 'WhatsApp' : 'Ligacao';
+    const destinationLabel = taskFilterChannel === 'VOICE' ? 'WhatsApp' : 'Ligação';
     if (!confirm(`Deseja mover ${selectedTasks.length} tarefa(s) selecionada(s) para ${destinationLabel}?`)) return;
 
     setIsProcessing(true);
@@ -317,6 +322,58 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
       console.error(e);
       await refreshData();
       alert(`Erro ao mover tarefas: ${e.message || 'Falha desconhecida.'}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleReassignSelectedTasks = async () => {
+    if (selectedTaskIds.length === 0) return alert("Selecione pelo menos uma tarefa para reatribuir.");
+    if (!bulkReassignOperatorId) return alert("Selecione o operador de destino.");
+
+    const selectedTasks = visiblePendingTasks.filter((task: Task | WhatsAppTask) => selectedTaskIds.includes(task.id));
+    if (selectedTasks.length === 0) {
+      setSelectedTaskIds([]);
+      return alert("Nenhuma tarefa válida encontrada na seleção atual.");
+    }
+
+    const targetOperator = assignableUsers.find(operator => operator.id === bulkReassignOperatorId);
+    const targetOperatorLabel = targetOperator?.name || 'operador selecionado';
+    const tasksToReassign = selectedTasks.filter((task: Task | WhatsAppTask) => task.assignedTo !== bulkReassignOperatorId);
+
+    if (tasksToReassign.length === 0) {
+      return alert(`As tarefas selecionadas já estão com ${targetOperatorLabel}.`);
+    }
+
+    if (!confirm(`Deseja reatribuir ${tasksToReassign.length} tarefa(s) selecionada(s) para ${targetOperatorLabel}?`)) return;
+
+    setIsProcessing(true);
+    try {
+      const taskIds = tasksToReassign.map(task => task.id);
+
+      if (taskFilterChannel === 'WHATSAPP') {
+        setPendingWhatsAppTasks(prev => prev.map(task => (
+          taskIds.includes(task.id)
+            ? { ...task, assignedTo: bulkReassignOperatorId, operator: targetOperator }
+            : task
+        )));
+        await dataService.reassignMultipleWhatsAppTasks(taskIds, bulkReassignOperatorId);
+      } else {
+        setPendingTasks(prev => prev.map(task => (
+          taskIds.includes(task.id)
+            ? { ...task, assignedTo: bulkReassignOperatorId, operator: targetOperator }
+            : task
+        )));
+        await dataService.reassignMultipleTasks(taskIds, bulkReassignOperatorId);
+      }
+
+      setSelectedTaskIds([]);
+      await refreshData();
+      alert(`${tasksToReassign.length} tarefa(s) reatribuída(s) para ${targetOperatorLabel}.`);
+    } catch (e: any) {
+      console.error(e);
+      await refreshData();
+      alert(`Erro ao reatribuir tarefas: ${e.message || 'Falha desconhecida.'}`);
     } finally {
       setIsProcessing(false);
     }
@@ -645,7 +702,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
     setIsProcessing(true);
     try {
       await dataService.updateSystemSetting('GOOGLE_MAPS_KEY', googleMapsKey, 'Chave da API do Google Maps para o Scraper');
-      await dataService.updateSystemSetting('COMMUNICATION_BLOCK_DAYS', String(normalizedBlockDays), 'Janela em dias para bloquear novas comunicaÃ§Ãµes com o mesmo cliente');
+      await dataService.updateSystemSetting('COMMUNICATION_BLOCK_DAYS', String(normalizedBlockDays), 'Janela em dias para bloquear novas comunicações com o mesmo cliente');
       setCommunicationBlockDays(String(normalizedBlockDays));
       alert("Configurações salvas com sucesso!");
     } catch (e: any) {
@@ -763,7 +820,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
           <div className="flex flex-col lg:flex-row justify-between items-start gap-4">
             <div>
               <h3 className="text-2xl font-black text-slate-800 uppercase tracking-tighter">Gerenciar Fila Ativa</h3>
-              <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-2">Remova duplicatas ou limpe a fila inteira de um operador.</p>
+              <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-2">Remova duplicatas, limpe filas ou reatribua tarefas selecionadas.</p>
             </div>
             <div className="flex flex-wrap gap-4">
               <button
@@ -822,7 +879,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
             <div className="p-6 rounded-[28px] border border-slate-100 bg-slate-50 space-y-4">
               <div>
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Times operacionais</p>
-                <h4 className="mt-2 text-lg font-black text-slate-800">Base de atribuicao da Agenda Central</h4>
+                <h4 className="mt-2 text-lg font-black text-slate-800">Base de atribuição da Agenda Central</h4>
               </div>
 
               <form onSubmit={handleCreateTeam} className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -835,7 +892,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                 />
                 <input
                   type="text"
-                  placeholder="Codigo do setor"
+                  placeholder="Código do setor"
                   value={newTeamData.sectorCode}
                   onChange={e => setNewTeamData({ ...newTeamData, sectorCode: e.target.value.toUpperCase() })}
                   className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold uppercase"
@@ -862,7 +919,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                   <p className="mt-2 text-2xl font-black text-slate-800">{teams.filter(team => team.active).length}</p>
                 </div>
                 <div className="p-4 rounded-2xl bg-white border border-slate-100">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Usuarios ativos</p>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Usuários ativos</p>
                   <p className="mt-2 text-2xl font-black text-slate-800">{users.filter(u => u.active).length}</p>
                 </div>
               </div>
@@ -952,7 +1009,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                 ))}
                 {visiblePendingTasks.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="py-20 text-center text-slate-300 font-black uppercase text-xs tracking-widest">A fila de trabalho está vazia.</td>
+                    <td colSpan={5} className="py-20 text-center text-slate-300 font-black uppercase text-xs tracking-widest">A fila de trabalho está vazia.</td>
                   </tr>
                 )}
               </tbody>
@@ -977,7 +1034,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
             <div className="p-6 rounded-[28px] border border-slate-100 bg-slate-50 space-y-4">
               <div>
                 <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Times operacionais</p>
-                <h4 className="mt-2 text-lg font-black text-slate-800">Base de atribuicao da Agenda Central</h4>
+                <h4 className="mt-2 text-lg font-black text-slate-800">Base de atribuição da Agenda Central</h4>
               </div>
 
               <form onSubmit={handleCreateTeam} className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -990,7 +1047,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                 />
                 <input
                   type="text"
-                  placeholder="Codigo do setor"
+                  placeholder="Código do setor"
                   value={newTeamData.sectorCode}
                   onChange={e => setNewTeamData({ ...newTeamData, sectorCode: e.target.value.toUpperCase() })}
                   className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold uppercase"
@@ -1017,7 +1074,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                   <p className="mt-2 text-2xl font-black text-slate-800">{teams.filter(team => team.active).length}</p>
                 </div>
                 <div className="p-4 rounded-2xl bg-white border border-slate-100">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Usuarios ativos</p>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Usuários ativos</p>
                   <p className="mt-2 text-2xl font-black text-slate-800">{users.filter(u => u.active).length}</p>
                 </div>
               </div>
@@ -1029,7 +1086,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
               <thead>
                 <tr className="border-b border-slate-100">
                   <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Colaborador</th>
-                  <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Funcao</th>
+                  <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Função</th>
                   <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Time</th>
                   <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Setor</th>
                   <th className="pb-6 text-[10px] font-black text-slate-400 uppercase tracking-widest px-4">Status</th>
@@ -1067,7 +1124,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                           <option key={team.id} value={team.id}>{team.name}</option>
                         ))}
                       </select>
-                      <p className="mt-2 text-[9px] font-bold text-slate-400 uppercase tracking-widest">{u.teamName || 'Nao vinculado'}</p>
+                      <p className="mt-2 text-[9px] font-bold text-slate-400 uppercase tracking-widest">{u.teamName || 'Não vinculado'}</p>
                     </td>
                     <td className="py-6 px-4">
                       <input
@@ -1433,7 +1490,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">Janela Anti-Spam de ComunicaÃ§Ã£o</label>
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">Janela Anti-Spam de Comunicação</label>
                   <div className="flex gap-2 items-center">
                     <input
                       type="number"
@@ -1443,10 +1500,10 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                       onChange={e => setCommunicationBlockDays(e.target.value)}
                       className="w-32 p-4 bg-white border border-slate-200 rounded-2xl font-bold text-slate-700 outline-none focus:ring-4 focus:ring-blue-500/10 transition-all"
                     />
-                    <span className="text-xs font-bold text-slate-500">dia(s) para bloquear novas ligaÃ§Ãµes e repiques do mesmo cliente</span>
+                    <span className="text-xs font-bold text-slate-500">dia(s) para bloquear novas ligações e repiques do mesmo cliente</span>
                   </div>
                   <p className="text-[9px] text-slate-400 pl-2">
-                    Valor `0` desativa a trava anti-spam. O padrÃ£o recomendado Ã© `3`.
+                    Valor `0` desativa a trava anti-spam. O padrão recomendado é `3`.
                   </p>
                 </div>
               </form>
@@ -1460,7 +1517,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                 <div className="flex-1">
                   <h4 className="text-lg font-black text-slate-800">Limpeza de Agendamentos Duplicados</h4>
                   <p className="text-xs text-slate-500 font-medium mt-1">
-                    Remove agendamentos ativos duplicados do mesmo cliente no mesmo dia e preserva apenas o primeiro registro vÃ¡lido.
+                    Remove agendamentos ativos duplicados do mesmo cliente no mesmo dia e preserva apenas o primeiro registro válido.
                   </p>
                   <button
                     type="button"
@@ -1520,7 +1577,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
                 <option value="">Sem time</option>
                 {teams.filter(team => team.active).map(team => <option key={team.id} value={team.id}>{team.name}</option>)}
               </select>
-              <input type="text" placeholder="Codigo do setor" value={userData.sectorCode} onChange={e => setUserData({ ...userData, sectorCode: e.target.value.toUpperCase() })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold uppercase" />
+              <input type="text" placeholder="Código do setor" value={userData.sectorCode} onChange={e => setUserData({ ...userData, sectorCode: e.target.value.toUpperCase() })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold uppercase" />
               <button type="submit" className="w-full py-6 bg-slate-900 text-white rounded-[32px] font-black uppercase tracking-widest text-[10px]">Criar Usuário</button>
             </form>
           </div>
@@ -1536,7 +1593,7 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
             </div>
             <form onSubmit={handleSaveQuestion} className="p-8 space-y-4">
               <input type="text" placeholder="Texto da Pergunta" required value={questionData.text} onChange={e => setQuestionData({ ...questionData, text: e.target.value })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" />
-              <input type="text" placeholder="Opções (vire vírgula)" required value={questionData.options?.join(',')} onChange={e => setQuestionData({ ...questionData, options: e.target.value.split(',') })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" />
+              <input type="text" placeholder="Opções (separe por vírgula)" required value={questionData.options?.join(',')} onChange={e => setQuestionData({ ...questionData, options: e.target.value.split(',') })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold" />
               <select value={questionData.type} onChange={e => setQuestionData({ ...questionData, type: e.target.value as any })} className="w-full p-4 bg-slate-50 border border-slate-200 rounded-2xl font-black text-[10px] uppercase">
                 {Object.values(CallType)
                   .filter(t => t !== CallType.WHATSAPP)
@@ -1753,21 +1810,45 @@ const Admin: React.FC<AdminProps> = ({ user }) => {
       {/* Bulk Actions Floating Bar */}
       {
         selectedTaskIds.length > 0 && (
-          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-8 py-4 rounded-full shadow-2xl flex items-center gap-6 z-50 animate-in slide-in-from-bottom-10 fade-in data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom-10">
+          <div className="fixed bottom-6 left-1/2 w-[calc(100%-2rem)] max-w-5xl -translate-x-1/2 bg-slate-900 text-white px-6 py-4 rounded-[28px] shadow-2xl flex flex-wrap items-center justify-center gap-4 z-50 animate-in slide-in-from-bottom-10 fade-in data-[state=closed]:animate-out data-[state=closed]:slide-out-to-bottom-10">
             <div className="flex items-center gap-3 border-r border-slate-700 pr-6">
               <span className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center font-black text-xs">{selectedTaskIds.length}</span>
               <span className="font-bold text-sm">Selecionados</span>
             </div>
             <div className="flex items-center gap-3">
               {activeTab === 'tasks' && (
-                <button
-                  onClick={handleTransferSelectedTasks}
-                  disabled={isProcessing}
-                  className="flex items-center gap-2 hover:text-emerald-200 transition-colors font-bold text-sm uppercase tracking-wider disabled:opacity-50"
-                >
-                  {taskFilterChannel === 'VOICE' ? <MessageCircle size={18} /> : <Phone size={18} />}
-                  {taskFilterChannel === 'VOICE' ? 'Mover para WhatsApp' : 'Mover para Ligacao'}
-                </button>
+                <>
+                  <div className="flex items-center gap-2 rounded-full bg-white/10 px-3 py-2">
+                    <UserCheck size={16} className="text-blue-200" />
+                    <select
+                      value={bulkReassignOperatorId}
+                      onChange={e => setBulkReassignOperatorId(e.target.value)}
+                      className="min-w-[210px] bg-transparent text-xs font-black uppercase tracking-widest text-white outline-none"
+                    >
+                      <option className="text-slate-900" value="">Reatribuir para...</option>
+                      {assignableUsers.map(operator => (
+                        <option className="text-slate-900" key={operator.id} value={operator.id}>
+                          {operator.name} (@{operator.username})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    onClick={handleReassignSelectedTasks}
+                    disabled={isProcessing || !bulkReassignOperatorId}
+                    className="flex items-center gap-2 hover:text-blue-200 transition-colors font-bold text-sm uppercase tracking-wider disabled:opacity-50"
+                  >
+                    <UserCheck size={18} /> Reatribuir
+                  </button>
+                  <button
+                    onClick={handleTransferSelectedTasks}
+                    disabled={isProcessing}
+                    className="flex items-center gap-2 hover:text-emerald-200 transition-colors font-bold text-sm uppercase tracking-wider disabled:opacity-50"
+                  >
+                    {taskFilterChannel === 'VOICE' ? <MessageCircle size={18} /> : <Phone size={18} />}
+                    {taskFilterChannel === 'VOICE' ? 'Mover para WhatsApp' : 'Mover para Ligação'}
+                  </button>
+                </>
               )}
               <button
                 onClick={() => setIsRepiqueModalOpen(true)}

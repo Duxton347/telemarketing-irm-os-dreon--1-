@@ -112,13 +112,14 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     () => buildPortfolioCategoryGroups(operatorPriorityPortfolioEntries),
     [operatorPriorityPortfolioEntries]
   );
+  const isProspectionContext = currentTask?.type === CallType.PROSPECCAO || client?.status === 'LEAD';
 
   // Estados para abertura de protocolo no report
   const [needsProtocol, setNeedsProtocol] = React.useState(false);
   const [protoData, setProtoData] = React.useState({
     title: '',
     departmentId: 'atendimento',
-    priority: 'MÃƒÂ©dia' as 'Baixa' | 'MÃƒÂ©dia' | 'Alta'
+    priority: 'Média' as 'Baixa' | 'Média' | 'Alta'
   });
 
   // Scheduling State
@@ -176,7 +177,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setHasRecentCall(false);
     setExpandedPortfolioCategory(null);
     setNeedsProtocol(false);
-    setProtoData({ title: '', departmentId: 'atendimento', priority: 'MÃƒÂ©dia' });
+    setProtoData({ title: '', departmentId: 'atendimento', priority: 'Média' });
     setScheduleData({ isScheduling: false, date: '', time: '', reason: '', type: CallType.POS_VENDA });
     setCrmStatus('');
     setInterestProduct('');
@@ -411,7 +412,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   };
 
   const buildFinalSkipReason = (reason: string) => {
-    const skipTimingStr = isCalling ? '[APÃƒâ€œS INICIAR] ' : '[ANTES DA CHAMADA] ';
+    const skipTimingStr = isCalling ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
     return `${skipTimingStr}${reason}`;
   };
 
@@ -421,7 +422,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     const selectedReason = reason || skipReasonSelected || 'Pulo Direto';
     const finalSkipReason = buildFinalSkipReason(selectedReason);
 
-    if (!confirm("Tem certeza que deseja pular SEM agendar um retorno? O contato poderÃƒÂ¡ ficar perdido.")) {
+    if (!confirm("Tem certeza que deseja pular SEM agendar um retorno? O contato poderá ficar perdido.")) {
       if (reopenModal === 'skip') {
         setIsSkipModalOpen(true);
       } else {
@@ -499,7 +500,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
 
   const handleLogWhatsApp = async () => {
     if (!currentTask || !client) return;
-    if (!confirm("Registrar interaÃƒÂ§ÃƒÂ£o via WhatsApp e finalizar esta tarefa?")) return;
+    if (!confirm("Registrar interação via WhatsApp e finalizar esta tarefa?")) return;
 
     setIsProcessing(true);
     try {
@@ -520,9 +521,9 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       await fetchQueue();
       await dataService.logOperatorEvent(user.id, OperatorEventType.FINALIZAR_ATENDIMENTO, currentTask.id);
       await fetchQueue();
-      await dataService.logOperatorEvent(user.id, OperatorEventType.FINALIZAR_ATENDIMENTO, currentTask.id, 'InteraÃƒÂ§ÃƒÂ£o WhatsApp');
+      await dataService.logOperatorEvent(user.id, OperatorEventType.FINALIZAR_ATENDIMENTO, currentTask.id, 'Interação WhatsApp');
       await fetchQueue();
-      alert("InteraÃƒÂ§ÃƒÂ£o registrada!");
+      alert("Interação registrada!");
     } catch (e) {
       alert("Erro ao registrar WhatsApp.");
     } finally {
@@ -532,7 +533,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
 
   const handleMoveToWhatsApp = async () => {
     if (!currentTask) return;
-    if (!confirm("Mover este atendimento para a fila do WhatsApp? A chamada atual serÃƒÂ¡ encerrada/pulada.")) return;
+    if (!confirm("Mover este atendimento para a fila do WhatsApp? A chamada atual será encerrada/pulada.")) return;
 
     setIsProcessing(true);
     try {
@@ -553,25 +554,25 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setIsSkipModalOpen(false);
 
     // If reason implies a wrong or non-existent number, automatically skip and flag as invalid
-    const isInvalidNumber = reason.toLowerCase().includes('nÃƒÂ£o existe') || reason.toLowerCase().includes('errado') || reason.toLowerCase().includes('invÃƒÂ¡lido');
+    const isInvalidNumber = reason.toLowerCase().includes('não existe') || reason.toLowerCase().includes('errado') || reason.toLowerCase().includes('inválido');
 
     if (isInvalidNumber && client && currentTask) {
         setIsProcessing(true);
         try {
             await dataService.updateClientFields(client.id, { invalid: true });
 
-            const skipTimingStr = isCalling ? '[APÃƒâ€œS INICIAR] ' : '[ANTES DA CHAMADA] ';
+            const skipTimingStr = isCalling ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
             const finalSkipReason = buildFinalSkipReason(reason);
 
             await dataService.updateTask(currentTask.id, { status: 'skipped', skipReason: finalSkipReason });
-            await dataService.logOperatorEvent(user.id, OperatorEventType.PULAR_ATENDIMENTO, currentTask.id, `Marcado como Telefone InvÃƒÂ¡lido: ${finalSkipReason}`);
+            await dataService.logOperatorEvent(user.id, OperatorEventType.PULAR_ATENDIMENTO, currentTask.id, `Marcado como Telefone Inválido: ${finalSkipReason}`);
 
-            alert("Cliente marcado com telefone incorreto. Ele foi removido das filas e enviado para o relatÃƒÂ³rio de revisÃƒÂ£o.");
+            alert("Cliente marcado com telefone incorreto. Ele foi removido das filas e enviado para o relatório de revisão.");
             await fetchQueue();
             resetSkipFlowState();
         } catch (e) {
             console.error(e);
-            alert("Erro ao marcar cliente como invÃƒÂ¡lido.");
+            alert("Erro ao marcar cliente como inválido.");
         } finally {
             setIsProcessing(false);
         }
@@ -593,7 +594,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     setIsProcessing(true);
 
     try {
-      const skipTimingStr = isCalling ? '[APÃƒâ€œS INICIAR] ' : '[ANTES DA CHAMADA] ';
+      const skipTimingStr = isCalling ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
       const finalSkipReason = buildFinalSkipReason(skipReasonSelected);
 
       let date: Date;
@@ -649,7 +650,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
         skipReason: finalSkipReason,
       });
 
-      await dataService.logOperatorEvent(user.id, OperatorEventType.PULAR_ATENDIMENTO, currentTask.id, `${finalSkipReason} (Reagendado para ${date.toLocaleDateString()} - WhatsApp: ${whatsappCheck ? 'Sim' : 'NÃƒÂ£o'})`);
+      await dataService.logOperatorEvent(user.id, OperatorEventType.PULAR_ATENDIMENTO, currentTask.id, `${finalSkipReason} (Reagendado para ${date.toLocaleDateString()} - WhatsApp: ${whatsappCheck ? 'Sim' : 'Não'})`);
       await fetchQueue();
     } catch (e: any) {
       console.error('Erro no repique:', e);
@@ -663,7 +664,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
   const handleWhatsappOnly = async () => {
     if (!currentTask || !client) return;
     if (!whatsappCheck) {
-      alert("Marque a opÃƒÂ§ÃƒÂ£o de WhatsApp para confirmar que houve comunicaÃƒÂ§ÃƒÂ£o.");
+      alert("Marque a opção de WhatsApp para confirmar que houve comunicação.");
       return;
     }
 
@@ -671,7 +672,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
 
     setIsProcessing(true);
     try {
-      const skipTimingStr = isCalling ? '[APÃƒâ€œS INICIAR] ' : '[ANTES DA CHAMADA] ';
+      const skipTimingStr = isCalling ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
       const finalSkipReason = buildFinalSkipReason(skipReasonSelected || 'Pulo com WhatsApp');
 
       // Log WhatsApp
@@ -686,7 +687,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
         reportTime: 0,
         responses: { 
           call_type: CallType.WHATSAPP, 
-          note: `Finalizado via Pulo (SÃƒÂ³ WhatsApp) - ${finalSkipReason}`,
+          note: `Finalizado via Pulo (Só WhatsApp) - ${finalSkipReason}`,
           written_report: `Pulo com WhatsApp (Direto) - Motivo: ${finalSkipReason}`
         },
         type: CallType.WHATSAPP,
@@ -709,7 +710,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
     if (!currentTask || !client) return;
 
     if (needsProtocol && !protoData.title.trim()) {
-      alert("Informe um tÃƒÂ­tulo para o protocolo.");
+      alert("Informe um título para o protocolo.");
       return;
     }
 
@@ -759,7 +760,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
           origin: 'Atendimento',
           departmentId: protoData.departmentId,
           title: protoData.title.trim(),
-          description: callSummary || 'Protocolo aberto via finalizaÃƒÂ§ÃƒÂ£o de chamada.',
+          description: callSummary || 'Protocolo aberto via finalização de chamada.',
           priority: protoData.priority,
           status: ProtocolStatus.ABERTO,
           openedAt: now.toISOString(),
@@ -779,7 +780,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
           originCallId: undefined,
           scheduledFor: scheduleDate,
           callType: scheduleData.type || currentTask.type,
-          scheduleReason: scheduleData.reason || 'Agendado durante finalizaÃƒÂ§ÃƒÂ£o de chamada',
+          scheduleReason: scheduleData.reason || 'Agendado durante finalização de chamada',
           status: 'PENDENTE_APROVACAO',
         });
       }
@@ -865,7 +866,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
       }
     } catch (e) {
       console.error('Erro ao salvar relatorio:', e);
-      alert("Erro ao salvar relatÃƒÂ³rio.");
+      alert("Erro ao salvar relatório.");
     }    finally { setIsProcessing(false); }
   };
 
@@ -877,7 +878,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
           <User size={24} />
         </div>
         <div className="flex-1">
-          <p className="text-[10px] uppercase tracking-widest font-black text-slate-400 mb-1">Visualizar Carga por UsuÃƒÂ¡rio</p>
+          <p className="text-[10px] uppercase tracking-widest font-black text-slate-400 mb-1">Visualizar Carga por Usuário</p>
           <select
             value={effectiveOperatorId}
             onChange={(e) => setEffectiveOperatorId(e.target.value)}
@@ -912,8 +913,8 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
           {upcomingTasks.length > 0 && (
             <div className="bg-orange-50 p-6 rounded-2xl border border-orange-100 flex flex-col items-center gap-2 max-w-md">
               <Clock className="text-orange-500" size={24} />
-              <p className="font-bold text-slate-600 text-center">VocÃƒÂª tem <strong className="text-orange-600">{upcomingTasks.length}</strong> agendamentos futuros na fila.</p>
-              <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Eles aparecerÃƒÂ£o aqui no horÃƒÂ¡rio agendado.</p>
+              <p className="font-bold text-slate-600 text-center">Você tem <strong className="text-orange-600">{upcomingTasks.length}</strong> agendamentos futuros na fila.</p>
+              <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Eles aparecerão aqui no horário agendado.</p>
               <div className="w-full mt-4 space-y-2">
                 {upcomingTasks.slice(0, 3).map(t => (
                   <div key={t.id} className="bg-white p-3 rounded-xl text-xs font-bold text-slate-500 flex justify-between">
@@ -939,7 +940,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
             {hasRecentCall && (
               <div className="absolute top-0 left-0 w-full bg-red-600 text-white py-2 px-4 text-center animate-pulse flex items-center justify-center gap-2">
                 <AlertTriangle size={14} />
-                <span className="text-[9px] font-black uppercase tracking-widest">AtenÃƒÂ§ÃƒÂ£o: comunicaÃƒÂ§ÃƒÂ£o registrada nos ÃƒÂºltimos {recentCallWindowDays} dia(s)</span>
+                <span className="text-[9px] font-black uppercase tracking-widest">Atenção: comunicação registrada nos últimos {recentCallWindowDays} dia(s)</span>
               </div>
             )}
 
@@ -960,7 +961,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                 <div className="font-bold text-slate-400 flex items-center gap-2">
                   <Phone size={18} />
                   <div className="flex flex-col">
-                    <span className="text-[10px] uppercase text-slate-500 tracking-widest leading-none mb-1">PrimÃƒÂ¡rio</span>
+                      <span className="text-[10px] uppercase text-slate-500 tracking-widest leading-none mb-1">Primário</span>
                     <span>{client.phone}</span>
                   </div>
                 </div>
@@ -979,7 +980,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   <div className="font-bold text-slate-400 flex items-center gap-2">
                     <Phone size={18} />
                     <div className="flex flex-col">
-                      <span className="text-[10px] uppercase text-slate-500 tracking-widest leading-none mb-1">SecundÃƒÂ¡rio</span>
+                      <span className="text-[10px] uppercase text-slate-500 tracking-widest leading-none mb-1">Secundário</span>
                       <span>{client.phone_secondary}</span>
                     </div>
                   </div>
@@ -1004,25 +1005,25 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   </div>
                 </div>
               ) : (
-                <p className="font-bold text-slate-400 flex items-start gap-2 mt-4"><MapPin size={18} className="shrink-0" /> {client.address || 'Sem endereÃƒÂ§o'}</p>
+                <p className="font-bold text-slate-400 flex items-start gap-2 mt-4"><MapPin size={18} className="shrink-0" /> {client.address || 'Sem endereço'}</p>
               )}
               {client.last_purchase_date && (
                 <div className="mt-4 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
-                  <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">ÃƒÅ¡ltima Compra</p>
+                  <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-1">Última Compra</p>
                   <p className="font-black text-amber-400 text-sm flex items-center gap-2">
                     <Calendar size={16} /> {client.last_purchase_date}
                   </p>
                 </div>
               )}
-              {(currentTask.type === 'PROSPECÃƒâ€¡ÃƒÆ’O' || client.status === 'LEAD') && client.buyer_name && (
+              {isProspectionContext && client.buyer_name && (
                 <p className="font-bold text-emerald-400 flex items-center gap-2 text-sm mt-2"><User size={16} className="shrink-0" /> Decisor: {client.buyer_name}</p>
               )}
-              {(currentTask.type === 'PROSPECÃƒâ€¡ÃƒÆ’O' || client.status === 'LEAD') && client.responsible_phone && (
+              {isProspectionContext && client.responsible_phone && (
                 <div className="flex items-center justify-between mt-2 pt-2 border-t border-slate-800/50">
                   <div className="font-bold text-blue-400 flex items-center gap-2 text-sm">
                     <Phone size={16} className="shrink-0" />
                     <div className="flex flex-col">
-                      <span className="text-[10px] uppercase text-slate-500 tracking-widest leading-none mb-1">Responsavel</span>
+                      <span className="text-[10px] uppercase text-slate-500 tracking-widest leading-none mb-1">Responsável</span>
                       <span>{client.responsible_phone}</span>
                     </div>
                   </div>
@@ -1036,7 +1037,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   </div>
                 </div>
               )}
-              {(currentTask.type === 'PROSPECÃƒâ€¡ÃƒÆ’O' || client.status === 'LEAD') && client.email && (
+              {isProspectionContext && client.email && (
                 <p className="font-bold text-amber-400 flex items-center gap-2 text-sm mt-1"><Mail size={16} className="shrink-0 text-amber-400" /> {client.email}</p>
               )}
               {client.website && (
@@ -1068,7 +1069,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
               )}
             </div>
 
-            {(currentTask.type === 'PROSPECÃƒâ€¡ÃƒÆ’O' || client.status === 'LEAD') && (
+            {isProspectionContext && (
               <div className="pt-6 border-t border-slate-800">
                 <div className="flex gap-4">
                   <div className="flex-1">
@@ -1085,7 +1086,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                     const STATUS_LABELS: Record<string, string> = {
                       'NEW': 'Novo Lead', 'CONTACT_ATTEMPT': 'Tentativa de Contato',
                       'CONTACT_MADE': 'Contato Feito', 'QUALIFIED': 'Qualificado',
-                      'PROPOSAL_SENT': 'Proposta Enviada', 'PHYSICAL_VISIT': 'Visita FÃƒÂ­sica'
+                      'PROPOSAL_SENT': 'Proposta Enviada', 'PHYSICAL_VISIT': 'Visita Física'
                     };
                     return (
                       <div className="flex-1">
@@ -1099,7 +1100,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
             )}
 
             <div className="pt-6 border-t border-slate-800">
-              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-3">Perfil e Base TÃƒÂ©cnica do Cliente</p>
+              <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest mb-3">Perfil e Base Técnica do Cliente</p>
               <div className="space-y-4">
                 <div className="flex flex-wrap gap-2">
                   {clientPortfolioMetadata.customer_profiles.map((profile, profileIndex) => (
@@ -1123,9 +1124,9 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
               </div>
             </div>
 
-            {/* HISTÃƒâ€œRICO DE INTERAÃƒâ€¡Ãƒâ€¢ES */}
+            {/* HISTÓRICO DE INTERAÇÕES */}
             <div className="pt-6 border-t border-slate-800">
-              <h5 className="text-[9px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2 mb-4"><FileText size={14} className="text-slate-400" /> HistÃƒÂ³rico de Contatos Recentes</h5>
+              <h5 className="text-[9px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-2 mb-4"><FileText size={14} className="text-slate-400" /> Histórico de Contatos Recentes</h5>
               {!historyLoading && (
                 <div className="space-y-4 mb-4">
                   <div className="grid grid-cols-3 gap-2">
@@ -1197,7 +1198,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                           {call.offerProduct && <span className="px-2 py-0.5 bg-emerald-950/30 text-emerald-300 rounded text-[8px] font-black uppercase border border-emerald-900/50">{call.offerProduct}</span>}
                         </div>
                       )}
-                      <p className="text-[10px] font-bold text-slate-300 italic">"{call.responses?.written_report || call.responses?.questionnaire_text_summary || call.responses?.justificativa || call.responses?.note || 'Sem anotaÃƒÂ§ÃƒÂµes.'}"</p>
+                      <p className="text-[10px] font-bold text-slate-300 italic">"{call.responses?.written_report || call.responses?.questionnaire_text_summary || call.responses?.justificativa || call.responses?.note || 'Sem anotações.'}"</p>
                       {call.responses?.questionnaire_text_summary && call.responses?.questionnaire_text_summary !== call.responses?.written_report && (
                         <div className="rounded-lg border border-slate-700 bg-slate-900/40 p-2">
                           <p className="text-[8px] font-black uppercase tracking-widest text-slate-500">Respostas de escrita</p>
@@ -1209,7 +1210,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                 </div>
               ) : (
                 <div className="bg-slate-800/20 p-4 rounded-xl border border-slate-800 text-center">
-                  <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Op. InÃƒÂ©dita - Primeiro Contato</p>
+                  <p className="text-[9px] font-black uppercase text-slate-500 tracking-widest">Op. Inédita - Primeiro Contato</p>
                 </div>
               )}
             </div>
@@ -1235,7 +1236,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   <div className="w-12 h-12 rounded-2xl bg-blue-600 flex items-center justify-center animate-pulse"><Phone size={20} /></div>
                   <div>
                     <h4 className="font-black uppercase tracking-widest text-[10px] text-slate-400">Status Atendimento</h4>
-                    <p className="text-xl font-black">{isFillingReport ? 'Preenchendo RelatÃƒÂ³rio' : 'LigaÃƒÂ§ÃƒÂ£o em Curso'}</p>
+                    <p className="text-xl font-black">{isFillingReport ? 'Preenchendo Relatório' : 'Ligação em Curso'}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-4">
@@ -1270,12 +1271,12 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                     <div className="flex flex-wrap gap-3">
                       {currentTask.campaignMode === 'RELATIONSHIP' && (
                         <span className="px-4 py-2 bg-violet-100 text-violet-700 rounded-2xl text-[10px] font-black uppercase border border-violet-200">
-                          Campanha relacional sem oferta especÃƒÂ­fica
+                          Campanha relacional sem oferta específica
                         </span>
                       )}
                       {currentTask.proposito && (
                         <span className="px-4 py-2 bg-blue-100 text-blue-700 rounded-2xl text-[10px] font-black uppercase border border-blue-200">
-                          PropÃƒÂ³sito: {currentTask.proposito}
+                          Propósito: {currentTask.proposito}
                         </span>
                       )}
                       {currentTask.targetProduct && (
@@ -1296,14 +1297,14 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
                     <FileText size={18} className="text-blue-600" /> Resumo da Conversa
                   </h5>
-                  <textarea value={callSummary} onChange={e => setCallSummary(e.target.value)} className="w-full p-8 bg-slate-50 rounded-[40px] border border-slate-100 font-bold text-slate-800 h-48 outline-none resize-none focus:ring-8 focus:ring-blue-500/5 transition-all" placeholder="O que foi conversado? Anote detalhes importantes para o prÃƒÂ³ximo contato." />
+                  <textarea value={callSummary} onChange={e => setCallSummary(e.target.value)} className="w-full p-8 bg-slate-50 rounded-[40px] border border-slate-100 font-bold text-slate-800 h-48 outline-none resize-none focus:ring-8 focus:ring-blue-500/5 transition-all" placeholder="O que foi conversado? Anote detalhes importantes para o próximo contato." />
                 </section>
 
-                {/* PRODUTO DE INTERESSE E FUNIL (CRM) - Somente para ligaÃƒÂ§ÃƒÂµes de prospecÃƒÂ§ÃƒÂ£o */}
-                {isFillingReport && (currentTask.type === 'PROSPECÃƒâ€¡ÃƒÆ’O' || client.status === 'LEAD') && (
+                {/* Produto de interesse e funil (CRM) - somente para ligações de prospecção */}
+                {isFillingReport && isProspectionContext && (
                   <section className="space-y-6 pt-6 border-t border-slate-100">
                     <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
-                      <User size={18} className="text-emerald-500" /> Atualizar InformaÃƒÂ§ÃƒÂµes do Lead (CRM)
+                      <User size={18} className="text-emerald-500" /> Atualizar Informações do Lead (CRM)
                     </h5>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-emerald-50/30 p-8 rounded-[40px] border border-emerald-100/50">
                       <div className="space-y-2">
@@ -1318,7 +1319,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                           <option value="CONTACT_MADE">Contato Feito</option>
                           <option value="QUALIFIED">Qualificado</option>
                           <option value="PROPOSAL_SENT">Proposta Enviada</option>
-                          <option value="PHYSICAL_VISIT">Visita FÃƒÂ­sica</option>
+                          <option value="PHYSICAL_VISIT">Visita Física</option>
                         </select>
                       </div>
                       <div className="space-y-2">
@@ -1332,13 +1333,13 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                           <option value="Fotovoltaico">Fotovoltaico</option>
                           <option value="Bomba">Bomba</option>
                           <option value="Pressurizadora">Pressurizadora</option>
-                          <option value="QuÃƒÂ­micos">QuÃƒÂ­micos</option>
+                          <option value="Químicos">Químicos</option>
                           <option value="Gerador de Cloro">Gerador de Cloro</option>
                           <option value="Aquecedor de Piscina">Aquecedor de Piscina</option>
-                          <option value="Aquecedor a GÃƒÂ¡s">Aquecedor a GÃƒÂ¡s</option>
+                          <option value="Aquecedor a Gás">Aquecedor a Gás</option>
                           <option value="Boiler">Boiler</option>
                           <option value="Placa Solar">Placa Solar</option>
-                          <option value="ManutenÃƒÂ§ÃƒÂ£o">ManutenÃƒÂ§ÃƒÂ£o</option>
+                          <option value="Manutenção">Manutenção</option>
                           <option value="Outros">Outros</option>
                         </select>
                       </div>
@@ -1349,26 +1350,26 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                 {isFillingReport && (currentTask.targetProduct || currentTask.offerProduct) && (
                   <section className="space-y-6 pt-6 border-t border-slate-100">
                     <h5 className="text-[11px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-3">
-                      <ClipboardList size={18} className="text-cyan-500" /> MÃƒÂ©tricas da Oferta e da Linha
+                      <ClipboardList size={18} className="text-cyan-500" /> Métricas da Oferta e da Linha
                     </h5>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-cyan-50/40 p-8 rounded-[40px] border border-cyan-100/70">
                       {currentTask.targetProduct && (
                         <div className="space-y-2">
-                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Escopo do retorno no pÃƒÂ³s-venda</label>
+                          <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Escopo do retorno no pós-venda</label>
                           <select
                             className="w-full p-4 bg-white rounded-2xl outline-none font-bold text-slate-700 text-sm border border-slate-200 focus:border-cyan-500 transition-all cursor-pointer"
                             value={campaignFeedback.portfolioScope}
                             onChange={e => setCampaignFeedback(prev => ({ ...prev, portfolioScope: e.target.value }))}
                           >
                             <option value="">Selecione...</option>
-                            <option value="somente_linha_alvo">Somente a linha da ligaÃƒÂ§ÃƒÂ£o</option>
+                            <option value="somente_linha_alvo">Somente a linha da ligação</option>
                             <option value="mais_de_uma_linha">Mais de uma linha do cliente</option>
                             <option value="todas_as_linhas">Refere-se a todas as linhas</option>
                           </select>
                         </div>
                       )}
                       <div className="space-y-2">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">NÃƒÂ­vel de receptividade</label>
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Nível de receptividade</label>
                         <select
                           className="w-full p-4 bg-white rounded-2xl outline-none font-bold text-slate-700 text-sm border border-slate-200 focus:border-cyan-500 transition-all cursor-pointer"
                           value={campaignFeedback.offerInterestLevel}
@@ -1376,19 +1377,19 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                         >
                           <option value="">Selecione...</option>
                           <option value="ALTO">Alto</option>
-                          <option value="MEDIO">MÃƒÂ©dio</option>
+                          <option value="MEDIO">Médio</option>
                           <option value="BAIXO">Baixo</option>
                           <option value="SEM_INTERESSE">Sem interesse</option>
                         </select>
                       </div>
                       <div className="space-y-2 md:col-span-2">
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Principal impeditivo para compra/adesÃƒÂ£o</label>
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Principal impeditivo para compra/adesão</label>
                         <input
                           type="text"
                           value={campaignFeedback.offerBlockerReason}
                           onChange={e => setCampaignFeedback(prev => ({ ...prev, offerBlockerReason: e.target.value }))}
                           className="w-full p-4 bg-white rounded-2xl outline-none font-bold text-slate-700 text-sm border border-slate-200 focus:border-cyan-500 transition-all"
-                          placeholder="Ex: PreÃƒÂ§o, prazo, sem urgÃƒÂªncia, jÃƒÂ¡ possui estoque..."
+                          placeholder="Ex: Preço, prazo, sem urgência, já possui estoque..."
                         />
                       </div>
                     </div>
@@ -1413,17 +1414,17 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                     {needsProtocol && (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in slide-in-from-top-4">
                         <div className="space-y-2 col-span-2">
-                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">TÃƒÂ­tulo do Protocolo</label>
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Título do Protocolo</label>
                           <input
                             type="text"
                             value={protoData.title}
                             onChange={e => setProtoData({ ...protoData, title: e.target.value })}
                             className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-bold outline-none focus:border-blue-500"
-                            placeholder="Ex: ReclamaÃƒÂ§ÃƒÂ£o de atraso na bomba..."
+                            placeholder="Ex: Reclamação de atraso na bomba..."
                           />
                         </div>
                         <div className="space-y-2">
-                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Setor ResponsÃƒÂ¡vel</label>
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Setor Responsável</label>
                           <select
                             value={protoData.departmentId}
                             onChange={e => setProtoData({ ...protoData, departmentId: e.target.value })}
@@ -1440,7 +1441,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                             className="w-full p-4 bg-white border border-slate-200 rounded-2xl font-black text-[10px] uppercase outline-none"
                           >
                             <option value="Baixa">Baixa</option>
-                            <option value="MÃƒÂ©dia">MÃƒÂ©dia</option>
+                            <option value="Média">Média</option>
                             <option value="Alta">Alta</option>
                           </select>
                         </div>
@@ -1466,7 +1467,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                     {scheduleData.isScheduling && (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in slide-in-from-top-4">
                         <div className="space-y-2 col-span-2">
-                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">Agendamento RÃƒÂ¡pido</label>
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-2">Agendamento Rápido</label>
                           <div className="flex gap-2">
                             <button
                               onClick={() => {
@@ -1496,7 +1497,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                               }}
                               className="flex-1 py-3 bg-white border border-slate-200 rounded-xl text-[10px] font-black uppercase text-slate-600 hover:bg-slate-50 hover:border-orange-300 transition-all active:scale-95"
                             >
-                              +1 MÃƒÂªs
+                              +1 Mês
                             </button>
                           </div>
                         </div>
@@ -1511,7 +1512,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                           />
                         </div>
                         <div className="space-y-2">
-                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">HorÃƒÂ¡rio</label>
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Horário</label>
                           <input
                             type="time"
                             value={scheduleData.time}
@@ -1520,7 +1521,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                           />
                         </div>
                         <div className="space-y-2">
-                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">GÃƒÂªnero da LigaÃƒÂ§ÃƒÂ£o</label>
+                          <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Gênero da Ligação</label>
                           <select
                             value={scheduleData.type}
                             onChange={e => setScheduleData({ ...scheduleData, type: e.target.value as CallType })}
@@ -1550,7 +1551,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
               {isFillingReport && (
                 <footer className="p-8 bg-slate-50 border-t border-slate-100 flex justify-end shrink-0">
                   <button onClick={handleSubmitReport} disabled={isProcessing} className="px-12 py-5 bg-slate-900 text-white rounded-[28px] font-black uppercase tracking-widest text-[11px] shadow-2xl flex items-center gap-3 active:scale-95 transition-all disabled:opacity-50">
-                    {isProcessing ? <Loader2 className="animate-spin" /> : <Save size={18} />} Salvar e PrÃƒÂ³ximo
+                    {isProcessing ? <Loader2 className="animate-spin" /> : <Save size={18} />} Salvar e Próximo
                   </button>
                 </footer>
               )}
@@ -1558,7 +1559,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
           ) : (
             <div className="h-full bg-slate-50 border-4 border-dashed border-slate-100 rounded-[56px] flex flex-col items-center justify-center p-20 text-center gap-6 opacity-30">
               <Phone size={64} className="text-slate-300" />
-              <p className="text-sm font-black uppercase text-slate-400 tracking-widest">Aguardando inÃƒÂ­cio do atendimento</p>
+              <p className="text-sm font-black uppercase text-slate-400 tracking-widest">Aguardando início do atendimento</p>
             </div>
           )}
         </div>
@@ -1592,8 +1593,8 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   </div>
                   <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 pb-2">
                     {skipFlowMode === 'direct'
-                      ? 'Ao escolher o motivo, o atendimento serÃƒÂ¡ pulado sem criar repique.'
-                      : 'Ao escolher o motivo, vamos abrir as opÃƒÂ§ÃƒÂµes de repique.'}
+                      ? 'Ao escolher o motivo, o atendimento será pulado sem criar repique.'
+                      : 'Ao escolher o motivo, vamos abrir as opções de repique.'}
                   </p>
                   {SKIP_REASONS.map(reason => (
                     <button
@@ -1613,21 +1614,21 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                     Mover para WhatsApp
                     <MessageCircle size={14} className="text-green-300 group-hover:text-green-600 transition-all" />
                   </button>
-                  <button onClick={() => setIsSkipModalOpen(false)} className="w-full py-4 mt-2 text-[9px] font-black uppercase text-slate-300 tracking-widest hover:text-red-500 transition-colors">Cancelar OperaÃƒÂ§ÃƒÂ£o</button>
+                  <button onClick={() => setIsSkipModalOpen(false)} className="w-full py-4 mt-2 text-[9px] font-black uppercase text-slate-300 tracking-widest hover:text-red-500 transition-colors">Cancelar Operação</button>
                 </div>
               </div>
             </div>
           )
         }
 
-        {/* MODAL DE REAGENDAMENTO OBRIGATÃƒâ€œRIO (REPIQUE) */}
+        {/* MODAL DE REAGENDAMENTO OBRIGATÓRIO (REPIQUE) */}
         {isRescheduleModalOpen && (
           <div className="fixed inset-0 z-[160] bg-slate-900/80 backdrop-blur-md flex items-center justify-center p-4">
             <div className="bg-white w-full max-w-lg rounded-[48px] shadow-2xl overflow-hidden animate-in zoom-in duration-300">
               <div className="bg-orange-600 p-8 text-white text-center">
                 <Clock size={48} className="mx-auto mb-4 text-orange-200" />
                 <h3 className="text-2xl font-black uppercase tracking-tighter">Agendar Repique</h3>
-                <p className="text-orange-100 font-bold mt-2">Defina o prÃƒÂ³ximo passo para este atendimento</p>
+                <p className="text-orange-100 font-bold mt-2">Defina o próximo passo para este atendimento</p>
               </div>
 
               <div className="px-10 pt-8 pb-4">
@@ -1647,25 +1648,25 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
               <div className="p-10 grid grid-cols-2 gap-4">
                 <button onClick={() => confirmRescheduleSkip('1d')} className="p-6 bg-slate-50 border-2 border-slate-100 rounded-[32px] hover:border-orange-500 hover:bg-orange-50 transition-all group">
                   <span className="block text-xl font-black text-slate-800 group-hover:text-orange-600 mb-1">1 Dia</span>
-                  <span className="text-[9px] font-bold uppercase text-slate-400">AmanhÃƒÂ£</span>
+                  <span className="text-[9px] font-bold uppercase text-slate-400">Amanhã</span>
                 </button>
                 <button onClick={() => confirmRescheduleSkip('2d')} className="p-6 bg-slate-50 border-2 border-slate-100 rounded-[32px] hover:border-orange-500 hover:bg-orange-50 transition-all group">
                   <span className="block text-xl font-black text-slate-800 group-hover:text-orange-600 mb-1">2 Dias</span>
-                  <span className="text-[9px] font-bold uppercase text-slate-400">Depois de amanhÃƒÂ£</span>
+                  <span className="text-[9px] font-bold uppercase text-slate-400">Depois de amanhã</span>
                 </button>
                 <button onClick={() => confirmRescheduleSkip('1w')} className="p-6 bg-slate-50 border-2 border-slate-100 rounded-[32px] hover:border-orange-500 hover:bg-orange-50 transition-all group">
                   <span className="block text-xl font-black text-slate-800 group-hover:text-orange-600 mb-1">1 Semana</span>
-                  <span className="text-[9px] font-bold uppercase text-slate-400">PrÃƒÂ³xima semana</span>
+                  <span className="text-[9px] font-bold uppercase text-slate-400">Próxima semana</span>
                 </button>
                 <button onClick={() => confirmRescheduleSkip('1m')} className="p-6 bg-slate-50 border-2 border-slate-100 rounded-[32px] hover:border-orange-500 hover:bg-orange-50 transition-all group">
-                  <span className="block text-xl font-black text-slate-800 group-hover:text-orange-600 mb-1">1 MÃƒÂªs</span>
-                  <span className="text-[9px] font-bold uppercase text-slate-400">PrÃƒÂ³ximo mÃƒÂªs</span>
+                  <span className="block text-xl font-black text-slate-800 group-hover:text-orange-600 mb-1">1 Mês</span>
+                  <span className="text-[9px] font-bold uppercase text-slate-400">Próximo mês</span>
                 </button>
               </div>
 
               {/* Manual Date/Time Picker */}
               <div className="px-10 pb-6 space-y-4">
-                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Ou escolha uma data especÃƒÂ­fica:</p>
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Ou escolha uma data específica:</p>
                 <div className="flex gap-3">
                   <input
                     type="date"
@@ -1699,10 +1700,10 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                     if (whatsappCheck) {
                       await handleWhatsappOnly();
                     } else {
-                      if (!confirm("Tem certeza que deseja pular SEM agendar um retorno? O contato poderÃƒÂ¡ ficar perdido.")) return;
+                      if (!confirm("Tem certeza que deseja pular SEM agendar um retorno? O contato poderá ficar perdido.")) return;
                       setIsProcessing(true);
                       try {
-                        const skipTimingStr = isCalling ? '[APÃƒâ€œS INICIAR] ' : '[ANTES DA CHAMADA] ';
+                        const skipTimingStr = isCalling ? '[APÓS INICIAR] ' : '[ANTES DA CHAMADA] ';
                         const finalSkipReason = skipReasonSelected ? `${skipTimingStr}${skipReasonSelected}` : `${skipTimingStr}Pulo Direto`;
                         await dataService.updateTask(currentTask.id, { status: 'skipped', skipReason: finalSkipReason });
                         await dataService.logOperatorEvent(user.id, OperatorEventType.PULAR_ATENDIMENTO, currentTask.id, `Pulo (Sem Repique) - Motivo: ${finalSkipReason}`);
@@ -1713,7 +1714,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   }}
                   className={`w-full py-4 text-white rounded-2xl font-black uppercase text-[10px] tracking-widest shadow-lg active:scale-95 transition-all ${whatsappCheck ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-red-500 hover:bg-red-400'}`}
                 >
-                  {whatsappCheck ? 'Encerrar sem Agendar (SÃƒÂ³ WhatsApp)' : 'Pular Definitivamente (Sem Retorno)'}
+                  {whatsappCheck ? 'Encerrar sem Agendar (Só WhatsApp)' : 'Pular Definitivamente (Sem Retorno)'}
                 </button>
 
                 <button onClick={() => setIsRescheduleModalOpen(false)} className="w-full text-center text-slate-400 font-bold text-xs hover:text-red-500 uppercase tracking-widest">
@@ -1731,9 +1732,9 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                 <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6">
                   <CheckCircle2 size={40} />
                 </div>
-                <h3 className="text-3xl font-black text-slate-800 uppercase tracking-tighter">RelatÃƒÂ³rio Salvo com Sucesso!</h3>
+                <h3 className="text-3xl font-black text-slate-800 uppercase tracking-tighter">Relatório Salvo com Sucesso!</h3>
                 <p className="text-slate-500 font-bold max-w-md mx-auto">
-                  Detectamos as seguintes intenÃƒÂ§ÃƒÂµes (tags) durante a conversa. 
+                  Detectamos as seguintes intenções (tags) durante a conversa. 
                   <strong className="text-blue-600"> Confirme as corretas</strong> para ajudar a IA a aprender.
                 </p>
               </div>
@@ -1762,7 +1763,7 @@ const Queue: React.FC<QueueProps> = ({ user }) => {
                   }}
                   className="px-12 py-5 bg-slate-900 text-white rounded-2xl font-black uppercase text-xs tracking-widest shadow-xl hover:scale-105 active:scale-95 transition-all flex items-center gap-3"
                 >
-                  PrÃƒÂ³xima Chamada <ChevronRight size={18} />
+                  Próxima Chamada <ChevronRight size={18} />
                 </button>
               </div>
             </div>

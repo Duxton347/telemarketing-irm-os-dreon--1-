@@ -26,6 +26,7 @@ export interface CampaignPlannerFilters {
   operadores?: string[];
   niveisSatisfacao?: string[];
   statusCliente?: string[];
+  funnelStatus?: string[];
   tags?: string[];
   interesses?: string[];
   perfisCliente?: string[];
@@ -394,6 +395,25 @@ const normalizeCampaignClientStatus = (value?: unknown): Client['status'] => {
   if (normalized === 'LEAD') return 'LEAD';
   if (normalized === 'INATIVO') return 'INATIVO';
   return 'CLIENT';
+};
+
+const normalizeCampaignFunnelStatus = (value?: unknown): NonNullable<Client['funnel_status']> => {
+  const normalized = String(value || '').trim().toUpperCase();
+
+  switch (normalized) {
+    case 'CONTACT_ATTEMPT':
+      return 'CONTACT_ATTEMPT';
+    case 'CONTACT_MADE':
+      return 'CONTACT_MADE';
+    case 'QUALIFIED':
+      return 'QUALIFIED';
+    case 'PROPOSAL_SENT':
+      return 'PROPOSAL_SENT';
+    case 'PHYSICAL_VISIT':
+      return 'PHYSICAL_VISIT';
+    default:
+      return 'NEW';
+  }
 };
 
 const collectIdSet = async (
@@ -937,6 +957,7 @@ export const CampaignPlannerService = {
           return {
             ...client,
             status: normalizeCampaignClientStatus(client.status),
+            funnel_status: normalizeCampaignFunnelStatus(client.funnel_status),
             city: resolvedLocation.city || client.city,
             neighborhood: resolvedLocation.neighborhood || client.neighborhood,
             interest_product: normalizedInterestProduct,
@@ -971,6 +992,9 @@ export const CampaignPlannerService = {
             ? client.call_logs_filtradas.length === 0
             : (!temFiltroLigacao || client.call_logs_filtradas.length > 0);
           const matchesStatus = !filters.statusCliente?.length || filters.statusCliente.includes(client.status || 'CLIENT');
+          const matchesFunnelStatus =
+            !filters.funnelStatus?.length ||
+            filters.funnelStatus.includes(client.funnel_status || 'NEW');
 
           const matchesProfiles = matchesPortfolioFilter(client.customer_profiles, filters.perfisCliente, 'profile');
           const matchesCategories = matchesPortfolioFilter(client.product_categories, filters.categoriasProduto);
@@ -989,6 +1013,7 @@ export const CampaignPlannerService = {
 
           return !isLeadAlreadyClient &&
             matchesStatus &&
+            matchesFunnelStatus &&
             matchesHistory &&
             matchesProfiles &&
             matchesCategories &&

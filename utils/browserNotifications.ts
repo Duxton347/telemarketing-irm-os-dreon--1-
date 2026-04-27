@@ -123,7 +123,7 @@ export const showBrowserNotification = async (notification: UserNotification): P
   const title = notification.title || 'Atualizacao operacional';
   const body = notification.body || 'Atualizacao operacional disponivel no sistema.';
   const tag = `dreon-user-notification:${notification.id}`;
-  const options: NotificationOptions & { requireInteraction?: boolean } = {
+  const options: NotificationOptions & { requireInteraction?: boolean; renotify?: boolean } = {
     body,
     tag,
     renotify: false,
